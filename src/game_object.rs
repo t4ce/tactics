@@ -214,6 +214,128 @@ impl UnitAction {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct AsepriteAnimationRef {
+    pub tag_index: usize,
+    pub tag_name: &'static str,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum LancerAnimation {
+    Idle,
+    Run,
+    Up,
+    UpDefense,
+    UpAttack,
+    UpRight,
+    UpRightDefense,
+    UpRightAttack,
+    Right,
+    RightDefense,
+    RightAttack,
+    DownRight,
+    DownRightDefense,
+    DownRightAttack,
+    Down,
+    DownDefense,
+    DownAttack,
+}
+
+impl LancerAnimation {
+    pub const ALL: [Self; 17] = [
+        Self::Idle,
+        Self::Run,
+        Self::Up,
+        Self::UpDefense,
+        Self::UpAttack,
+        Self::UpRight,
+        Self::UpRightDefense,
+        Self::UpRightAttack,
+        Self::Right,
+        Self::RightDefense,
+        Self::RightAttack,
+        Self::DownRight,
+        Self::DownRightDefense,
+        Self::DownRightAttack,
+        Self::Down,
+        Self::DownDefense,
+        Self::DownAttack,
+    ];
+
+    pub fn aseprite_ref(self) -> AsepriteAnimationRef {
+        match self {
+            Self::Idle => AsepriteAnimationRef {
+                tag_index: 0,
+                tag_name: "Idle",
+            },
+            Self::Run => AsepriteAnimationRef {
+                tag_index: 1,
+                tag_name: "Run",
+            },
+            Self::Up => AsepriteAnimationRef {
+                tag_index: 2,
+                tag_name: "Up",
+            },
+            Self::UpDefense => AsepriteAnimationRef {
+                tag_index: 3,
+                tag_name: "Defense",
+            },
+            Self::UpAttack => AsepriteAnimationRef {
+                tag_index: 4,
+                tag_name: "Attack",
+            },
+            Self::UpRight => AsepriteAnimationRef {
+                tag_index: 5,
+                tag_name: "Up Right",
+            },
+            Self::UpRightDefense => AsepriteAnimationRef {
+                tag_index: 6,
+                tag_name: "Defense",
+            },
+            Self::UpRightAttack => AsepriteAnimationRef {
+                tag_index: 7,
+                tag_name: "Attack",
+            },
+            Self::Right => AsepriteAnimationRef {
+                tag_index: 8,
+                tag_name: "Right",
+            },
+            Self::RightDefense => AsepriteAnimationRef {
+                tag_index: 9,
+                tag_name: "Defense",
+            },
+            Self::RightAttack => AsepriteAnimationRef {
+                tag_index: 10,
+                tag_name: "Attack",
+            },
+            Self::DownRight => AsepriteAnimationRef {
+                tag_index: 11,
+                tag_name: "Down Right",
+            },
+            Self::DownRightDefense => AsepriteAnimationRef {
+                tag_index: 12,
+                tag_name: "Defense",
+            },
+            Self::DownRightAttack => AsepriteAnimationRef {
+                tag_index: 13,
+                tag_name: "Attack",
+            },
+            Self::Down => AsepriteAnimationRef {
+                tag_index: 14,
+                tag_name: "Down",
+            },
+            Self::DownDefense => AsepriteAnimationRef {
+                tag_index: 15,
+                tag_name: "Defense",
+            },
+            Self::DownAttack => AsepriteAnimationRef {
+                tag_index: 16,
+                tag_name: "Attack",
+            },
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -244,6 +366,29 @@ mod tests {
             }
             .aseprite_tag(),
             "Interact Axe"
+        );
+    }
+
+    #[test]
+    fn lancer_animation_data_keeps_every_aseprite_tag_slot() {
+        assert_eq!(LancerAnimation::ALL.len(), 17);
+        for (index, animation) in LancerAnimation::ALL.iter().enumerate() {
+            assert_eq!(animation.aseprite_ref().tag_index, index);
+        }
+
+        assert_eq!(
+            LancerAnimation::UpRightAttack.aseprite_ref(),
+            AsepriteAnimationRef {
+                tag_index: 7,
+                tag_name: "Attack",
+            }
+        );
+        assert_eq!(
+            LancerAnimation::DownDefense.aseprite_ref(),
+            AsepriteAnimationRef {
+                tag_index: 15,
+                tag_name: "Defense",
+            }
         );
     }
 }

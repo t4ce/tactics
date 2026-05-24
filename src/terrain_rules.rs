@@ -1,6 +1,6 @@
 #![allow(dead_code)]
 
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, serde::Deserialize, serde::Serialize)]
 pub struct AtlasTile {
     pub col: u32,
     pub row: u32,

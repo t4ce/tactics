@@ -16,6 +16,7 @@ const RIBBON_ROWS: usize = 5;
 const RIBBON_ROW_PX: f32 = 128.0;
 const RIBBON_CAP_PX: f32 = 64.0;
 const BIG_RIBBON_W: f32 = 448.0;
+#[allow(dead_code)]
 const SMALL_RIBBON_W: f32 = 320.0;
 const RIBBON_H: f32 = 640.0;
 
@@ -126,6 +127,7 @@ impl UiBatch {
         self.ribbon(BIG_RIBBON_W, row, x, y, w, h, color);
     }
 
+    #[allow(dead_code)]
     pub fn small_ribbon(&mut self, row: usize, x: f32, y: f32, w: f32, h: f32, color: Rgba8) {
         self.ribbon(SMALL_RIBBON_W, row, x, y, w, h, color);
     }
