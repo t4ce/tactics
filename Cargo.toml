@@ -1,0 +1,13 @@
+[package]
+name = "tactics"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+adapterlibgfx = { path = "adapterlibgfx" }
+asefile = "0.3.8"
+image = { version = "0.25.8", default-features = false, features = ["png"] }
+
+[profile.dev.package.asefile]
+opt-level = 2
