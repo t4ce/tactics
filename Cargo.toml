@@ -4,6 +4,10 @@ version = "0.1.0"
 edition = "2024"
 publish = false
 
+[features]
+default = []
+shaderson = ["adapterlibgfx/shaderson"]
+
 [dependencies]
 adapterlibgfx = { path = "adapterlibgfx" }
 asefile = "0.3.8"

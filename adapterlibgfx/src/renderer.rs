@@ -13,7 +13,7 @@ use crate::command::{
 use crate::texture::{TextureImage, TextureRegistry};
 use crate::vertex::{GpuRgbVertex, GpuTexVertex, RgbVertex, TexVertex};
 
-const SHADER: &str = r#"
+const SHADER_COMMON: &str = r#"
 struct RgbIn {
     @location(0) position: vec2<f32>,
     @location(1) color: vec4<f32>,
@@ -60,10 +60,58 @@ fn tex_vs(in: TexIn) -> TexOut {
     out.color = in.color;
     return out;
 }
+"#;
 
+#[cfg(not(feature = "shaderson"))]
+const SHADER_TEX_FRAGMENT: &str = r#"
 @fragment
 fn tex_fs(in: TexOut) -> @location(0) vec4<f32> {
     return textureSample(tex_image, tex_sampler, in.uv) * in.color;
+}
+"#;
+
+#[cfg(feature = "shaderson")]
+const SHADER_TEX_FRAGMENT: &str = r#"
+fn tex_alpha(uv: vec2<f32>) -> f32 {
+    return textureSample(tex_image, tex_sampler, uv).a;
+}
+
+@fragment
+fn tex_fs(in: TexOut) -> @location(0) vec4<f32> {
+    let base = textureSample(tex_image, tex_sampler, in.uv) * in.color;
+    let dims = max(vec2<f32>(textureDimensions(tex_image, 0u)), vec2<f32>(1.0, 1.0));
+    let texel = 1.0 / dims;
+
+    let left = tex_alpha(in.uv - vec2<f32>(texel.x, 0.0));
+    let right = tex_alpha(in.uv + vec2<f32>(texel.x, 0.0));
+    let up = tex_alpha(in.uv - vec2<f32>(0.0, texel.y));
+    let down = tex_alpha(in.uv + vec2<f32>(0.0, texel.y));
+    let neighbor_max = max(max(left, right), max(up, down));
+
+    if base.a < 0.02 {
+        if neighbor_max > 0.20 {
+            return vec4<f32>(0.015, 0.018, 0.026, neighbor_max * in.color.a * 0.34);
+        }
+        return base;
+    }
+
+    let coverage = smoothstep(0.02, 0.20, base.a);
+    let highlight_edge = max(0.0, 1.0 - min(left, up)) * coverage;
+    let shadow_edge = max(0.0, 1.0 - min(right, down)) * coverage;
+
+    let luma = dot(base.rgb, vec3<f32>(0.299, 0.587, 0.114));
+    let gray = vec3<f32>(luma);
+    var rgb = gray + (base.rgb - gray) * 1.14;
+    rgb = (rgb - vec3<f32>(0.5, 0.5, 0.5)) * 1.08 + vec3<f32>(0.5, 0.5, 0.5);
+    rgb += vec3<f32>(1.0, 0.90, 0.56) * highlight_edge * 0.13;
+    rgb -= vec3<f32>(0.035, 0.045, 0.075) * shadow_edge * 0.38;
+
+    let pixel = floor(in.position.xy);
+    let hash = fract(sin(dot(pixel, vec2<f32>(12.9898, 78.233))) * 43758.5453);
+    let checker = step(0.5, fract((pixel.x + pixel.y) * 0.5)) * 0.024 - 0.012;
+    rgb *= 0.988 + (hash - 0.5) * 0.030 + checker;
+
+    return vec4<f32>(clamp(rgb, vec3<f32>(0.0), vec3<f32>(1.0)), base.a);
 }
 "#;
 
@@ -151,9 +199,10 @@ impl WgpuRenderer {
         config.usage = wgpu::TextureUsages::RENDER_ATTACHMENT;
         surface.configure(&device, &config);
 
+        let shader_source = [SHADER_COMMON, SHADER_TEX_FRAGMENT].concat();
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("adapterlibgfx-shader"),
-            source: wgpu::ShaderSource::Wgsl(SHADER.into()),
+            source: wgpu::ShaderSource::Wgsl(shader_source.into()),
         });
         let texture_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("adapterlibgfx-texture-layout"),

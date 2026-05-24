@@ -834,7 +834,7 @@
     "Grass",
     "Grass",
     "Grass",
-    "Grass",
+    "Water",
     "Grass",
     "Grass",
     "Water",
@@ -873,7 +873,6 @@
     "Water",
     "Water",
     "Water",
-    "Grass",
     "Grass",
     "Grass",
     "Grass",
@@ -892,6 +891,7 @@
     "Grass",
     "Water",
     "Water",
+    "Water",
     "Grass",
     "Water",
     "Water",
@@ -928,8 +928,7 @@
     "Water",
     "Water",
     "Water",
-    "Grass",
-    "Grass",
+    "Water",
     "Grass",
     "Grass",
     "Grass",
@@ -956,6 +955,7 @@
     "Water",
     "Water",
     "Water",
+    "Water",
     "Grass",
     "Grass",
     "Grass",
@@ -983,8 +983,7 @@
     "Water",
     "Water",
     "Water",
-    "Grass",
-    "Grass",
+    "Water",
     "Grass",
     "Grass",
     "Grass",
@@ -1000,6 +999,7 @@
     "Grass",
     "Grass",
     "Grass",
+    "Water",
     "Water",
     "Water",
     "Water",
@@ -1038,8 +1038,7 @@
     "Water",
     "Water",
     "Water",
-    "Grass",
-    "Grass",
+    "Water",
     "Grass",
     "Grass",
     "Grass",
@@ -1064,6 +1063,7 @@
     "Water",
     "Water",
     "Water",
+    "Water",
     "Grass",
     "Grass",
     "Grass",
@@ -1093,8 +1093,7 @@
     "Water",
     "Water",
     "Water",
-    "Grass",
-    "Grass",
+    "Water",
     "Grass",
     "Grass",
     "Grass",
@@ -1118,6 +1117,7 @@
     "Water",
     "Water",
     "Water",
+    "Water",
     "Grass",
     "Grass",
     "Grass",
@@ -1148,8 +1148,7 @@
     "Water",
     "Water",
     "Water",
-    "Grass",
-    "Grass",
+    "Water",
     "Grass",
     "Grass",
     "Grass",
@@ -1165,6 +1164,7 @@
     "Grass",
     "Grass",
     "Grass",
+    "Water",
     "Water",
     "Water",
     "Water",
@@ -1219,7 +1219,7 @@
     "Grass",
     "Grass",
     "Grass",
-    "Grass",
+    "Water",
     "Water",
     "Water",
     "Water",
@@ -1274,7 +1274,6 @@
     "Grass",
     "Grass",
     "Grass",
-    "Grass",
     "Water",
     "Water",
     "Water",
@@ -1300,7 +1299,7 @@
     "Water",
     "Water",
     "Water",
-    "Grass",
+    "Water",
     "Grass",
     "Grass",
     "Grass",
@@ -1330,6 +1329,7 @@
     "Grass",
     "Grass",
     "Grass",
+    "Water",
     "Grass",
     "Water",
     "Water",
@@ -1463,18 +1463,6 @@
     "Water",
     "Water",
     "Water",
-    "Grass",
-    "Grass",
-    "Grass",
-    "Grass",
-    "Grass",
-    "Grass",
-    "Grass",
-    "Grass",
-    "Grass",
-    "Grass",
-    "Grass",
-    "Grass",
     "Grass",
     "Grass",
     "Grass",
@@ -1519,7 +1507,19 @@
     "Grass",
     "Grass",
     "Grass",
-    "Grass",
+    "Water",
+    "Water",
+    "Water",
+    "Water",
+    "Water",
+    "Water",
+    "Water",
+    "Water",
+    "Water",
+    "Water",
+    "Water",
+    "Water",
+    "Water",
     "Grass",
     "Grass",
     "Grass",
@@ -3328,7 +3328,7 @@
     "Nothing",
     "Nothing",
     "Nothing",
-    "Nothing",
+    "Stone4",
     "Nothing",
     "Nothing",
     "Nothing",
@@ -4316,51 +4316,18 @@
     null,
     null,
     null,
-    {
-      "col": 1,
-      "row": 0
-    },
-    {
-      "col": 1,
-      "row": 0
-    },
-    {
-      "col": 1,
-      "row": 3
-    },
-    {
-      "col": 1,
-      "row": 3
-    },
-    {
-      "col": 1,
-      "row": 3
-    },
-    {
-      "col": 1,
-      "row": 0
-    },
-    {
-      "col": 1,
-      "row": 3
-    },
-    {
-      "col": 1,
-      "row": 3
-    },
-    {
-      "col": 2,
-      "row": 3
-    },
     null,
-    {
-      "col": 0,
-      "row": 3
-    },
-    {
-      "col": 1,
-      "row": 3
-    },
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
     null,
     null,
     null,
@@ -4370,10 +4337,7 @@
       "col": 0,
       "row": 4
     },
-    {
-      "col": 5,
-      "row": 1
-    },
+    null,
     null,
     null,
     null,
@@ -4525,10 +4489,7 @@
       "col": 0,
       "row": 4
     },
-    {
-      "col": 5,
-      "row": 1
-    },
+    null,
     null,
     null,
     null,
@@ -4874,7 +4835,10 @@
     null,
     null,
     null,
-    null,
+    {
+      "col": 2,
+      "row": 1
+    },
     {
       "col": 0,
       "row": 2
@@ -4962,7 +4926,10 @@
     null,
     null,
     null,
-    null,
+    {
+      "col": 2,
+      "row": 1
+    },
     null,
     null,
     {
@@ -5034,6 +5001,10 @@
     null,
     null,
     null,
+    {
+      "col": 0,
+      "row": 1
+    },
     null,
     null,
     null,
@@ -5049,8 +5020,10 @@
     null,
     null,
     null,
-    null,
-    null,
+    {
+      "col": 2,
+      "row": 1
+    },
     null,
     null,
     null,
@@ -5119,6 +5092,10 @@
       "col": 3,
       "row": 3
     },
+    {
+      "col": 0,
+      "row": 1
+    },
     null,
     null,
     null,
@@ -5134,8 +5111,10 @@
     null,
     null,
     null,
-    null,
-    null,
+    {
+      "col": 2,
+      "row": 1
+    },
     null,
     null,
     null,
@@ -5195,6 +5174,10 @@
       "row": 3
     },
     null,
+    {
+      "col": 0,
+      "row": 1
+    },
     null,
     null,
     null,
@@ -5210,8 +5193,10 @@
     null,
     null,
     null,
-    null,
-    null,
+    {
+      "col": 2,
+      "row": 1
+    },
     null,
     null,
     null,
@@ -5268,6 +5253,10 @@
     null,
     null,
     null,
+    {
+      "col": 0,
+      "row": 1
+    },
     null,
     null,
     null,
@@ -5283,8 +5272,10 @@
     null,
     null,
     null,
-    null,
-    null,
+    {
+      "col": 2,
+      "row": 1
+    },
     null,
     null,
     null,
@@ -5350,6 +5341,10 @@
     null,
     null,
     null,
+    {
+      "col": 0,
+      "row": 1
+    },
     null,
     null,
     null,
@@ -5365,8 +5360,10 @@
     null,
     null,
     null,
-    null,
-    null,
+    {
+      "col": 2,
+      "row": 1
+    },
     null,
     null,
     null,
@@ -5448,7 +5445,10 @@
     null,
     null,
     null,
-    null,
+    {
+      "col": 2,
+      "row": 1
+    },
     null,
     null,
     null,
@@ -5524,7 +5524,10 @@
     null,
     null,
     null,
-    null,
+    {
+      "col": 2,
+      "row": 1
+    },
     null,
     null,
     null,
@@ -5609,7 +5612,10 @@
     null,
     null,
     null,
-    null,
+    {
+      "col": 2,
+      "row": 1
+    },
     {
       "col": 3,
       "row": 0
@@ -5838,19 +5844,58 @@
     null,
     null,
     null,
-    null,
-    null,
-    null,
-    null,
-    null,
-    null,
-    null,
-    null,
-    null,
-    null,
-    null,
-    null,
-    null,
+    {
+      "col": 1,
+      "row": 0
+    },
+    {
+      "col": 1,
+      "row": 0
+    },
+    {
+      "col": 1,
+      "row": 0
+    },
+    {
+      "col": 1,
+      "row": 0
+    },
+    {
+      "col": 1,
+      "row": 0
+    },
+    {
+      "col": 1,
+      "row": 0
+    },
+    {
+      "col": 1,
+      "row": 0
+    },
+    {
+      "col": 1,
+      "row": 0
+    },
+    {
+      "col": 1,
+      "row": 0
+    },
+    {
+      "col": 1,
+      "row": 0
+    },
+    {
+      "col": 1,
+      "row": 0
+    },
+    {
+      "col": 1,
+      "row": 0
+    },
+    {
+      "col": 1,
+      "row": 0
+    },
     null,
     null,
     null,
@@ -6263,6 +6308,160 @@
   "props": [
     {
       "kind": {
+        "Plant": "Bush4"
+      },
+      "x2": 68,
+      "y2": 16
+    },
+    {
+      "kind": {
+        "Plant": "Bush4"
+      },
+      "x2": 71,
+      "y2": 16
+    },
+    {
+      "kind": {
+        "Plant": "Tree3"
+      },
+      "x2": 20,
+      "y2": 17
+    },
+    {
+      "kind": {
+        "Plant": "Tree3"
+      },
+      "x2": 16,
+      "y2": 18
+    },
+    {
+      "kind": {
+        "Plant": "Tree3"
+      },
+      "x2": 18,
+      "y2": 18
+    },
+    {
+      "kind": {
+        "Plant": "Tree3"
+      },
+      "x2": 24,
+      "y2": 18
+    },
+    {
+      "kind": {
+        "Plant": "Bush1"
+      },
+      "x2": 27,
+      "y2": 18
+    },
+    {
+      "kind": {
+        "Plant": "Bush2"
+      },
+      "x2": 50,
+      "y2": 18
+    },
+    {
+      "kind": {
+        "Plant": "Tree4"
+      },
+      "x2": 22,
+      "y2": 19
+    },
+    {
+      "kind": {
+        "Plant": "Bush4"
+      },
+      "x2": 83,
+      "y2": 19
+    },
+    {
+      "kind": {
+        "Plant": "Tree2"
+      },
+      "x2": 90,
+      "y2": 19
+    },
+    {
+      "kind": {
+        "Plant": "Tree4"
+      },
+      "x2": 16,
+      "y2": 20
+    },
+    {
+      "kind": {
+        "Plant": "Tree3"
+      },
+      "x2": 18,
+      "y2": 20
+    },
+    {
+      "kind": {
+        "Plant": "Tree3"
+      },
+      "x2": 20,
+      "y2": 20
+    },
+    {
+      "kind": {
+        "Plant": "Bush2"
+      },
+      "x2": 21,
+      "y2": 21
+    },
+    {
+      "kind": {
+        "Plant": "Bush1"
+      },
+      "x2": 25,
+      "y2": 21
+    },
+    {
+      "kind": {
+        "Plant": "Tree3"
+      },
+      "x2": 17,
+      "y2": 22
+    },
+    {
+      "kind": {
+        "Plant": "Tree3"
+      },
+      "x2": 19,
+      "y2": 22
+    },
+    {
+      "kind": {
+        "Plant": "Tree1"
+      },
+      "x2": 80,
+      "y2": 22
+    },
+    {
+      "kind": {
+        "Plant": "Tree4"
+      },
+      "x2": 23,
+      "y2": 23
+    },
+    {
+      "kind": {
+        "Plant": "Tree4"
+      },
+      "x2": 19,
+      "y2": 24
+    },
+    {
+      "kind": {
+        "Plant": "Bush2"
+      },
+      "x2": 21,
+      "y2": 24
+    },
+    {
+      "kind": {
         "Pillar": {
           "col": 5,
           "row": 4
@@ -6313,12 +6512,96 @@
     },
     {
       "kind": {
+        "Plant": "Tree3"
+      },
+      "x2": 16,
+      "y2": 25
+    },
+    {
+      "kind": {
+        "Plant": "Bush2"
+      },
+      "x2": 68,
+      "y2": 25
+    },
+    {
+      "kind": {
+        "Plant": "Bush2"
+      },
+      "x2": 70,
+      "y2": 25
+    },
+    {
+      "kind": {
+        "Plant": "Bush4"
+      },
+      "x2": 77,
+      "y2": 25
+    },
+    {
+      "kind": {
+        "Plant": "Bush1"
+      },
+      "x2": 18,
+      "y2": 26
+    },
+    {
+      "kind": {
+        "Plant": "Bush2"
+      },
+      "x2": 30,
+      "y2": 26
+    },
+    {
+      "kind": {
+        "Plant": "Bush2"
+      },
+      "x2": 68,
+      "y2": 26
+    },
+    {
+      "kind": {
+        "Plant": "Bush2"
+      },
+      "x2": 70,
+      "y2": 26
+    },
+    {
+      "kind": {
         "Pillar": {
-          "col": 6,
+          "col": 5,
           "row": 4
         }
       },
-      "x2": 84,
+      "x2": 80,
+      "y2": 26
+    },
+    {
+      "kind": {
+        "Plant": "Bush2"
+      },
+      "x2": 49,
+      "y2": 27
+    },
+    {
+      "kind": {
+        "Plant": "Bush4"
+      },
+      "x2": 88,
+      "y2": 27
+    },
+    {
+      "kind": {
+        "Plant": "Tree3"
+      },
+      "x2": 24,
+      "y2": 28
+    },
+    {
+      "kind": {
+        "Plant": "Bush4"
+      },
+      "x2": 80,
       "y2": 28
     },
     {
@@ -6334,89 +6617,40 @@
     {
       "kind": {
         "Pillar": {
-          "col": 5,
+          "col": 6,
           "row": 4
         }
       },
+      "x2": 84,
+      "y2": 28
+    },
+    {
+      "kind": {
+        "Plant": "Bush4"
+      },
       "x2": 80,
-      "y2": 26
+      "y2": 30
     },
     {
       "kind": {
         "Plant": "Bush2"
       },
-      "x2": 68,
-      "y2": 25
+      "x2": 41,
+      "y2": 35
     },
     {
       "kind": {
         "Plant": "Bush2"
       },
-      "x2": 68,
-      "y2": 26
+      "x2": 37,
+      "y2": 36
     },
     {
       "kind": {
         "Plant": "Bush2"
       },
-      "x2": 70,
-      "y2": 26
-    },
-    {
-      "kind": {
-        "Plant": "Bush2"
-      },
-      "x2": 70,
-      "y2": 25
-    },
-    {
-      "kind": {
-        "Plant": "Tree4"
-      },
-      "x2": 51,
-      "y2": 44
-    },
-    {
-      "kind": {
-        "Plant": "Tree4"
-      },
-      "x2": 49,
-      "y2": 43
-    },
-    {
-      "kind": {
-        "Plant": "Tree3"
-      },
-      "x2": 47,
-      "y2": 44
-    },
-    {
-      "kind": {
-        "Plant": "Tree3"
-      },
-      "x2": 51,
-      "y2": 41
-    },
-    {
-      "kind": {
-        "Plant": "Tree3"
-      },
-      "x2": 49,
-      "y2": 40
-    },
-    {
-      "kind": {
-        "Plant": "Tree4"
-      },
-      "x2": 45,
-      "y2": 44
-    },
-    {
-      "kind": {
-        "Plant": "Tree4"
-      },
-      "x2": 46,
-      "y2": 42
+      "x2": 35,
+      "y2": 38
     },
     {
       "kind": {
@@ -6427,199 +6661,31 @@
     },
     {
       "kind": {
-        "Plant": "Tree1"
+        "Plant": "Bush2"
       },
-      "x2": 68,
-      "y2": 52
-    },
-    {
-      "kind": {
-        "Plant": "Tree1"
-      },
-      "x2": 69,
-      "y2": 50
-    },
-    {
-      "kind": {
-        "Plant": "Tree1"
-      },
-      "x2": 67,
-      "y2": 49
-    },
-    {
-      "kind": {
-        "Plant": "Tree1"
-      },
-      "x2": 70,
-      "y2": 47
-    },
-    {
-      "kind": {
-        "Plant": "Tree1"
-      },
-      "x2": 68,
-      "y2": 45
-    },
-    {
-      "kind": {
-        "Plant": "Tree2"
-      },
-      "x2": 71,
-      "y2": 52
-    },
-    {
-      "kind": {
-        "Plant": "Tree2"
-      },
-      "x2": 72,
-      "y2": 50
-    },
-    {
-      "kind": {
-        "Plant": "Tree2"
-      },
-      "x2": 73,
-      "y2": 52
-    },
-    {
-      "kind": {
-        "Plant": "Tree2"
-      },
-      "x2": 70,
-      "y2": 44
-    },
-    {
-      "kind": {
-        "Plant": "Tree2"
-      },
-      "x2": 63,
-      "y2": 52
-    },
-    {
-      "kind": {
-        "Plant": "Tree2"
-      },
-      "x2": 65,
-      "y2": 50
-    },
-    {
-      "kind": {
-        "Plant": "Tree2"
-      },
-      "x2": 72,
-      "y2": 46
-    },
-    {
-      "kind": {
-        "Plant": "Tree2"
-      },
-      "x2": 90,
-      "y2": 19
-    },
-    {
-      "kind": {
-        "Plant": "Tree1"
-      },
-      "x2": 80,
-      "y2": 22
+      "x2": 45,
+      "y2": 40
     },
     {
       "kind": {
         "Plant": "Tree3"
       },
-      "x2": 18,
-      "y2": 20
+      "x2": 49,
+      "y2": 40
+    },
+    {
+      "kind": {
+        "Plant": "Bush2"
+      },
+      "x2": 44,
+      "y2": 41
     },
     {
       "kind": {
         "Plant": "Tree3"
       },
-      "x2": 18,
-      "y2": 18
-    },
-    {
-      "kind": {
-        "Plant": "Tree3"
-      },
-      "x2": 16,
-      "y2": 18
-    },
-    {
-      "kind": {
-        "Plant": "Tree3"
-      },
-      "x2": 20,
-      "y2": 17
-    },
-    {
-      "kind": {
-        "Plant": "Tree3"
-      },
-      "x2": 20,
-      "y2": 20
-    },
-    {
-      "kind": {
-        "Plant": "Tree3"
-      },
-      "x2": 19,
-      "y2": 22
-    },
-    {
-      "kind": {
-        "Plant": "Tree3"
-      },
-      "x2": 17,
-      "y2": 22
-    },
-    {
-      "kind": {
-        "Plant": "Tree4"
-      },
-      "x2": 19,
-      "y2": 24
-    },
-    {
-      "kind": {
-        "Plant": "Tree4"
-      },
-      "x2": 16,
-      "y2": 20
-    },
-    {
-      "kind": {
-        "Plant": "Tree4"
-      },
-      "x2": 22,
-      "y2": 19
-    },
-    {
-      "kind": {
-        "Plant": "Tree4"
-      },
-      "x2": 23,
-      "y2": 23
-    },
-    {
-      "kind": {
-        "Plant": "Tree3"
-      },
-      "x2": 24,
-      "y2": 18
-    },
-    {
-      "kind": {
-        "Plant": "Tree3"
-      },
-      "x2": 16,
-      "y2": 25
-    },
-    {
-      "kind": {
-        "Plant": "Tree3"
-      },
-      "x2": 24,
-      "y2": 28
+      "x2": 51,
+      "y2": 41
     },
     {
       "kind": {
@@ -6639,64 +6705,22 @@
       "kind": {
         "Plant": "Bush2"
       },
-      "x2": 35,
-      "y2": 38
-    },
-    {
-      "kind": {
-        "Plant": "Bush2"
-      },
-      "x2": 37,
-      "y2": 36
-    },
-    {
-      "kind": {
-        "Plant": "Bush2"
-      },
-      "x2": 41,
-      "y2": 35
-    },
-    {
-      "kind": {
-        "Plant": "Bush2"
-      },
-      "x2": 42,
-      "y2": 43
-    },
-    {
-      "kind": {
-        "Plant": "Bush2"
-      },
       "x2": 42,
       "y2": 42
     },
     {
       "kind": {
-        "Plant": "Bush2"
+        "Plant": "Tree4"
       },
-      "x2": 45,
-      "y2": 40
-    },
-    {
-      "kind": {
-        "Plant": "Bush2"
-      },
-      "x2": 44,
-      "y2": 41
+      "x2": 46,
+      "y2": 42
     },
     {
       "kind": {
         "Plant": "Bush4"
       },
-      "x2": 87,
-      "y2": 44
-    },
-    {
-      "kind": {
-        "Plant": "Bush4"
-      },
-      "x2": 83,
-      "y2": 43
+      "x2": 85,
+      "y2": 42
     },
     {
       "kind": {
@@ -6707,17 +6731,31 @@
     },
     {
       "kind": {
-        "Plant": "Bush4"
+        "Plant": "Bush2"
       },
-      "x2": 90,
-      "y2": 44
+      "x2": 42,
+      "y2": 43
+    },
+    {
+      "kind": {
+        "Plant": "Tree4"
+      },
+      "x2": 49,
+      "y2": 43
     },
     {
       "kind": {
         "Plant": "Bush4"
       },
-      "x2": 90,
-      "y2": 46
+      "x2": 83,
+      "y2": 43
+    },
+    {
+      "kind": {
+        "Plant": "Bush4"
+      },
+      "x2": 88,
+      "y2": 43
     },
     {
       "kind": {
@@ -6725,6 +6763,55 @@
       },
       "x2": 90,
       "y2": 43
+    },
+    {
+      "kind": {
+        "Plant": "Tree4"
+      },
+      "x2": 45,
+      "y2": 44
+    },
+    {
+      "kind": {
+        "Plant": "Tree3"
+      },
+      "x2": 47,
+      "y2": 44
+    },
+    {
+      "kind": {
+        "Plant": "Tree4"
+      },
+      "x2": 51,
+      "y2": 44
+    },
+    {
+      "kind": {
+        "Plant": "Tree2"
+      },
+      "x2": 70,
+      "y2": 44
+    },
+    {
+      "kind": {
+        "Plant": "Bush4"
+      },
+      "x2": 87,
+      "y2": 44
+    },
+    {
+      "kind": {
+        "Plant": "Bush4"
+      },
+      "x2": 90,
+      "y2": 44
+    },
+    {
+      "kind": {
+        "Plant": "Tree1"
+      },
+      "x2": 68,
+      "y2": 45
     },
     {
       "kind": {
@@ -6735,17 +6822,24 @@
     },
     {
       "kind": {
-        "Plant": "Bush4"
+        "Plant": "Tree2"
       },
-      "x2": 88,
-      "y2": 43
+      "x2": 72,
+      "y2": 46
     },
     {
       "kind": {
         "Plant": "Bush4"
       },
-      "x2": 85,
-      "y2": 42
+      "x2": 90,
+      "y2": 46
+    },
+    {
+      "kind": {
+        "Plant": "Tree1"
+      },
+      "x2": 70,
+      "y2": 47
     },
     {
       "kind": {
@@ -6766,7 +6860,35 @@
         "Plant": "Bush4"
       },
       "x2": 88,
-      "y2": 51
+      "y2": 48
+    },
+    {
+      "kind": {
+        "Plant": "Tree1"
+      },
+      "x2": 67,
+      "y2": 49
+    },
+    {
+      "kind": {
+        "Plant": "Tree2"
+      },
+      "x2": 65,
+      "y2": 50
+    },
+    {
+      "kind": {
+        "Plant": "Tree1"
+      },
+      "x2": 69,
+      "y2": 50
+    },
+    {
+      "kind": {
+        "Plant": "Tree2"
+      },
+      "x2": 72,
+      "y2": 50
     },
     {
       "kind": {
@@ -6780,112 +6902,35 @@
         "Plant": "Bush4"
       },
       "x2": 88,
-      "y2": 48
+      "y2": 51
     },
     {
       "kind": {
-        "Plant": "Bush4"
+        "Plant": "Tree2"
       },
-      "x2": 83,
-      "y2": 19
+      "x2": 63,
+      "y2": 52
     },
     {
       "kind": {
-        "Plant": "Bush4"
-      },
-      "x2": 88,
-      "y2": 27
-    },
-    {
-      "kind": {
-        "Plant": "Bush4"
-      },
-      "x2": 80,
-      "y2": 30
-    },
-    {
-      "kind": {
-        "Plant": "Bush4"
-      },
-      "x2": 80,
-      "y2": 28
-    },
-    {
-      "kind": {
-        "Plant": "Bush4"
-      },
-      "x2": 77,
-      "y2": 25
-    },
-    {
-      "kind": {
-        "Plant": "Bush4"
-      },
-      "x2": 71,
-      "y2": 16
-    },
-    {
-      "kind": {
-        "Plant": "Bush4"
+        "Plant": "Tree1"
       },
       "x2": 68,
-      "y2": 16
+      "y2": 52
     },
     {
       "kind": {
-        "Plant": "Bush1"
+        "Plant": "Tree2"
       },
-      "x2": 25,
-      "y2": 21
+      "x2": 71,
+      "y2": 52
     },
     {
       "kind": {
-        "Plant": "Bush1"
+        "Plant": "Tree2"
       },
-      "x2": 27,
-      "y2": 18
-    },
-    {
-      "kind": {
-        "Plant": "Bush1"
-      },
-      "x2": 18,
-      "y2": 26
-    },
-    {
-      "kind": {
-        "Plant": "Bush2"
-      },
-      "x2": 21,
-      "y2": 24
-    },
-    {
-      "kind": {
-        "Plant": "Bush2"
-      },
-      "x2": 21,
-      "y2": 21
-    },
-    {
-      "kind": {
-        "Plant": "Bush2"
-      },
-      "x2": 30,
-      "y2": 26
-    },
-    {
-      "kind": {
-        "Plant": "Bush2"
-      },
-      "x2": 50,
-      "y2": 18
-    },
-    {
-      "kind": {
-        "Plant": "Bush2"
-      },
-      "x2": 49,
-      "y2": 27
+      "x2": 73,
+      "y2": 52
     }
   ],
   "fog": [

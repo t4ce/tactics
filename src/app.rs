@@ -4,19 +4,28 @@ use adapterlibgfx::api::{Adapter, AdapterConfig};
 use adapterlibgfx::command::ScissorRect;
 use adapterlibgfx::vertex::{Rgba8, TexVertex};
 use adapterlibgfx::window::{
-    FrameProducer, InputButtonState, InputEvent, InputKey, InputMouseButton, WgpuFourWindowApp,
+    FrameProducer, InputButtonState, InputEvent, InputKey, InputMouseButton, WgpuFiveWindowApp,
 };
 use std::collections::{BTreeMap, HashSet};
 use std::fs;
 use std::path::Path;
 use std::time::Instant;
 
+#[path = "wldgenerator.rs"]
+mod wldgenerator;
+
 const WINDOW_WIDTH: u32 = 1280;
 const WINDOW_HEIGHT: u32 = 800;
+#[cfg(test)]
 const EXPLORER_WIDTH: u32 = 640;
+#[cfg(test)]
 const EXPLORER_HEIGHT: u32 = 520;
 const UNIT_VIEWER_WIDTH: u32 = 640;
 const UNIT_VIEWER_HEIGHT: u32 = 520;
+const ICON_VIEWER_WIDTH: u32 = 360;
+const ICON_VIEWER_HEIGHT: u32 = 240;
+const EVENT_EDITOR_WIDTH: u32 = 760;
+const EVENT_EDITOR_HEIGHT: u32 = 520;
 const TERRAIN_TEXTURE: u32 = 1;
 const CURSOR_DEFAULT_TEXTURE: u32 = 2;
 const CURSOR_HOVER_TEXTURE: u32 = 3;
@@ -41,8 +50,11 @@ const PLANT_PROP_TEXTURE_BASE: u32 = 600;
 const PLANT_PROP_TEXTURE_STRIDE: u32 = 64;
 const GOLD_PROP_TEXTURE_BASE: u32 = 1400;
 const GOLD_PROP_TEXTURE_STRIDE: u32 = 64;
+const ROCK_PROP_TEXTURE_BASE: u32 = 1900;
+#[cfg(test)]
 const ASE_EXPLORER_TEXTURE_BASE: u32 = 1000;
 const UNIT_VIEWER_TEXTURE_BASE: u32 = 5000;
+const ICON_VIEWER_TEXTURE_BASE: u32 = 7000;
 const TERRAIN_TILE_PX: u32 = 64;
 const TERRAIN_BYTES: &[u8] = include_bytes!("../ts_freepack/Terrain/Tileset/Tilemap_color2.png");
 const CURSOR_DEFAULT_BYTES: &[u8] =
@@ -67,9 +79,20 @@ const RED_MONASTERY_BYTES: &[u8] =
 const RED_TOWER_BYTES: &[u8] = include_bytes!("../ts_freepack/Buildings/Red Buildings/Tower.png");
 const WOOD_TABLE_BYTES: &[u8] =
     include_bytes!("../ts_freepack/UI Elements/UI Elements/Wood Table/WoodTable.png");
+const ROCK1_BYTES: &[u8] = include_bytes!("../ts_freepack/Rocks/Rock1.png");
+const ROCK2_BYTES: &[u8] = include_bytes!("../ts_freepack/Rocks/Rock2.png");
+const ROCK3_BYTES: &[u8] = include_bytes!("../ts_freepack/Rocks/Rock3.png");
+const ROCK4_BYTES: &[u8] = include_bytes!("../ts_freepack/Rocks/Rock4.png");
+const TOOL1_BYTES: &[u8] = include_bytes!("../ts_freepack/Terrain/Tools/Tool_01.png");
+const TOOL2_BYTES: &[u8] = include_bytes!("../ts_freepack/Terrain/Tools/Tool_02.png");
+const TOOL3_BYTES: &[u8] = include_bytes!("../ts_freepack/Terrain/Tools/Tool_03.png");
+const TOOL4_BYTES: &[u8] = include_bytes!("../ts_freepack/Terrain/Tools/Tool_04.png");
+const MEAT_RESOURCE_BYTES: &[u8] = include_bytes!("../ts_freepack/Terrain/Tools/Meat Resource.png");
+const WOOD_RESOURCE_BYTES: &[u8] = include_bytes!("../ts_freepack/Terrain/Tools/Wood Resource.png");
 const CLOUDS_ASEPRITE_PATH: &str = "ts_freepack/Clouds.aseprite";
 const TREES_ASEPRITE_PATH: &str = "ts_freepack/Trees.aseprite";
 const BUSHES_ASEPRITE_PATH: &str = "ts_freepack/Bushes.aseprite";
+const ARCHER_ASEPRITE_PATH: &str = "ts_freepack/Archer.aseprite";
 const RUBBER_DUCK_ASEPRITE_PATH: &str = "ts_freepack/Rubber Duck.aseprite";
 const WATER_FOAM_ASEPRITE_PATH: &str = "ts_freepack/Water Foam.aseprite";
 const WORLD_SAVE_PATH: &str = "world.json";
@@ -142,22 +165,24 @@ const TILE_SIZE: f32 = 64.0;
 const BUILDING_GRID_DIVISIONS: usize = 2;
 const WORLD_COLS: usize = 38;
 const WORLD_ROWS: usize = 19;
-const GENERATED_RAMP_COUNT: usize = 8;
 const BUILDING_SCALE: f32 = TILE_SIZE / TERRAIN_TILE_PX as f32;
 const BUILDING_COUNT: usize = 8;
 const PLANT_PROP_COUNT: usize = 12;
 const GOLD_PROP_COUNT: usize = 7;
 const GOLD_PALETTE_COUNT: usize = 1;
+const ROCK_PROP_COUNT: usize = 4;
+const ROCK_PALETTE_COUNT: usize = 1;
 const MIN_CLOUDS: usize = 4;
 const MAX_CLOUDS: usize = 6;
 
-const PALETTE_X: f32 = 46.0;
+const PALETTE_X: f32 = 0.0;
 const PALETTE_TILE: f32 = 48.0;
-const PALETTE_GAP: f32 = 3.0;
+const PALETTE_GAP: f32 = 0.0;
 
 const EDGE_SCROLL_ZONE: f32 = 72.0;
 const EDGE_SCROLL_SPEED: f32 = 560.0;
 const DEFAULT_SEED: u64 = 0x5EED_2026;
+#[cfg(test)]
 const ASE_EXPLORER_TINTS: [Rgba8; 5] = [
     Rgba8::WHITE,
     Rgba8::new(255, 214, 214, 255),
@@ -165,6 +190,7 @@ const ASE_EXPLORER_TINTS: [Rgba8; 5] = [
     Rgba8::new(214, 235, 255, 255),
     Rgba8::new(255, 243, 188, 255),
 ];
+#[cfg(test)]
 const ASEPRITE_STASH: [&str; 18] = [
     "ts_freepack/Archer.aseprite",
     "ts_freepack/Bushes.aseprite",
@@ -185,6 +211,7 @@ const ASEPRITE_STASH: [&str; 18] = [
     "ts_freepack/Water Rocks_03.aseprite",
     "ts_freepack/Water Rocks_04.aseprite",
 ];
+#[cfg(test)]
 const GOLD_EXPLORER_PATHS: [&str; 2] = [
     "ts_freepack/Gold Stones.aseprite",
     "ts_freepack/Gold Resource.aseprite",
@@ -217,20 +244,13 @@ const UNIT_WALK_SPECS: [UnitWalkSpec; 14] = [
 ];
 
 pub(crate) fn run() {
-    let seed = seed_from_args(std::env::args().skip(1));
-    WgpuFourWindowApp::new(
-        format!("tactics world editor - seed {seed}"),
+    WgpuFiveWindowApp::new(
+        "tactics world editor",
         AdapterConfig {
             width: WINDOW_WIDTH,
             height: WINDOW_HEIGHT,
         },
-        Game::new(seed),
-        "tactics aseprite explorer",
-        AdapterConfig {
-            width: EXPLORER_WIDTH,
-            height: EXPLORER_HEIGHT,
-        },
-        AsepriteExplorer::new(),
+        Game::new(),
         "tactics unit walk viewer",
         AdapterConfig {
             width: UNIT_VIEWER_WIDTH,
@@ -243,6 +263,18 @@ pub(crate) fn run() {
             height: WINDOW_HEIGHT,
         },
         LoadScreen::new(),
+        "tactics icon viewer",
+        AdapterConfig {
+            width: ICON_VIEWER_WIDTH,
+            height: ICON_VIEWER_HEIGHT,
+        },
+        IconViewer::new(),
+        "tactics event editor",
+        AdapterConfig {
+            width: EVENT_EDITOR_WIDTH,
+            height: EVENT_EDITOR_HEIGHT,
+        },
+        EventEditor::new(),
     )
     .run()
     .expect("window loop failed");
@@ -346,6 +378,7 @@ enum Brush {
     Foreground(AtlasTile),
     Prop(PropKind),
     GoldResource,
+    RockResource,
     Building(BuildingKind),
     Ramp(Ramp),
     FogRect,
@@ -361,7 +394,9 @@ impl Brush {
             Self::Background(BackgroundTile::Water)
             | Self::Prop(PropKind::Plant(_))
             | Self::Prop(PropKind::Gold(_))
+            | Self::Prop(PropKind::Rock(_))
             | Self::GoldResource
+            | Self::RockResource
             | Self::Building(_)
             | Self::Ramp(_)
             | Self::FogRect
@@ -380,6 +415,7 @@ impl Brush {
             | Self::Foreground(_)
             | Self::Prop(_)
             | Self::GoldResource
+            | Self::RockResource
             | Self::FogRect
             | Self::ClearForeground => (1, 1),
         }
@@ -395,6 +431,7 @@ impl Brush {
             | Self::Foreground(_)
             | Self::Prop(_)
             | Self::GoldResource
+            | Self::RockResource
             | Self::Ramp(_)
             | Self::FogRect
             | Self::ClearForeground => (0, 0),
@@ -413,6 +450,7 @@ enum PropKind {
     Pillar(AtlasTile),
     Plant(PlantKind),
     Gold(GoldKind),
+    Rock(RockKind),
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
@@ -482,6 +520,54 @@ impl GoldKind {
             Self::Stone5 => Some(Self::Stone6),
             Self::Stone6 => Some(Self::Nugget),
             Self::Nugget => None,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+enum RockKind {
+    Rock1,
+    Rock2,
+    Rock3,
+    Rock4,
+}
+
+impl RockKind {
+    const ALL: [Self; ROCK_PROP_COUNT] = [Self::Rock1, Self::Rock2, Self::Rock3, Self::Rock4];
+
+    fn index(self) -> usize {
+        match self {
+            Self::Rock1 => 0,
+            Self::Rock2 => 1,
+            Self::Rock3 => 2,
+            Self::Rock4 => 3,
+        }
+    }
+
+    fn tag(self) -> &'static str {
+        match self {
+            Self::Rock1 => "Rock 1",
+            Self::Rock2 => "Rock 2",
+            Self::Rock3 => "Rock 3",
+            Self::Rock4 => "Rock 4",
+        }
+    }
+
+    fn bytes(self) -> &'static [u8] {
+        match self {
+            Self::Rock1 => ROCK1_BYTES,
+            Self::Rock2 => ROCK2_BYTES,
+            Self::Rock3 => ROCK3_BYTES,
+            Self::Rock4 => ROCK4_BYTES,
+        }
+    }
+
+    fn next(self) -> Option<Self> {
+        match self {
+            Self::Rock1 => Some(Self::Rock2),
+            Self::Rock2 => Some(Self::Rock3),
+            Self::Rock3 => Some(Self::Rock4),
+            Self::Rock4 => None,
         }
     }
 }
@@ -773,6 +859,7 @@ struct Game {
     water_visuals: WaterVisualAssets,
     plant_props: [SpriteAnimation; PLANT_PROP_COUNT],
     gold_props: [SpriteAnimation; GOLD_PROP_COUNT],
+    rock_props: [ImageAsset; ROCK_PROP_COUNT],
     clouds: Vec<ImageAsset>,
     cloud_instances: Vec<CloudInstance>,
     foreground_tiles: Vec<AtlasTile>,
@@ -791,12 +878,15 @@ struct Game {
     environment_rng: SeededRng,
     water_animations: Vec<ActiveWaterAnimation>,
     plant_animations: Vec<ActivePlantAnimation>,
+    gold_animations: Vec<ActiveGoldAnimation>,
     water_animation_timer: f32,
     plant_animation_timer: f32,
+    gold_animation_timer: f32,
     started_at: Instant,
     last_frame: Instant,
 }
 
+#[cfg(test)]
 struct AsepriteExplorer {
     files: Vec<ExplorerFile>,
     selected: usize,
@@ -821,6 +911,150 @@ struct LoadScreen {
     window_height: u32,
 }
 
+struct IconViewer {
+    icons: Vec<IconTile>,
+    uploaded: bool,
+    window_width: u32,
+    window_height: u32,
+}
+
+struct IconTile {
+    label: String,
+    image: ImageAsset,
+}
+
+struct EventEditor {
+    rules: Vec<ScenarioRule>,
+    next_rule_id: u32,
+    draft_trigger: ScenarioTrigger,
+    draft_condition: ScenarioCondition,
+    draft_action: ScenarioAction,
+    mouse: Point,
+    window_width: u32,
+    window_height: u32,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+struct ScenarioRule {
+    id: u32,
+    enabled: bool,
+    trigger: ScenarioTrigger,
+    condition: ScenarioCondition,
+    action: ScenarioAction,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+enum ScenarioTrigger {
+    EveryThirtySeconds,
+    OnceAfterOneMinute,
+    UnitDeath,
+    ResourceCollected,
+    EnterRegion,
+    DamageTaken,
+}
+
+impl ScenarioTrigger {
+    const ALL: [Self; 6] = [
+        Self::EveryThirtySeconds,
+        Self::OnceAfterOneMinute,
+        Self::UnitDeath,
+        Self::ResourceCollected,
+        Self::EnterRegion,
+        Self::DamageTaken,
+    ];
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::EveryThirtySeconds => "TIMER 30S",
+            Self::OnceAfterOneMinute => "ONCE 60S",
+            Self::UnitDeath => "UNIT DEATH",
+            Self::ResourceCollected => "RESOURCE",
+            Self::EnterRegion => "ENTER AREA",
+            Self::DamageTaken => "DMG TAKEN",
+        }
+    }
+
+    fn next(self) -> Self {
+        cycle_enum(Self::ALL, self)
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+enum ScenarioCondition {
+    Always,
+    PlayerHasWood,
+    PlayerHasMeat,
+    UnitCountAtLeast,
+    FlagIsSet,
+    RegionHasEnemy,
+}
+
+impl ScenarioCondition {
+    const ALL: [Self; 6] = [
+        Self::Always,
+        Self::PlayerHasWood,
+        Self::PlayerHasMeat,
+        Self::UnitCountAtLeast,
+        Self::FlagIsSet,
+        Self::RegionHasEnemy,
+    ];
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::Always => "ALWAYS",
+            Self::PlayerHasWood => "WOOD >= 100",
+            Self::PlayerHasMeat => "MEAT >= 100",
+            Self::UnitCountAtLeast => "UNITS >= 3",
+            Self::FlagIsSet => "FLAG SET",
+            Self::RegionHasEnemy => "ENEMY IN AREA",
+        }
+    }
+
+    fn next(self) -> Self {
+        cycle_enum(Self::ALL, self)
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+enum ScenarioAction {
+    GiveWood,
+    GiveMeat,
+    SpawnPawn,
+    SpawnEnemy,
+    DamageArea,
+    PlayAnimation,
+    SetFlag,
+}
+
+impl ScenarioAction {
+    const ALL: [Self; 7] = [
+        Self::GiveWood,
+        Self::GiveMeat,
+        Self::SpawnPawn,
+        Self::SpawnEnemy,
+        Self::DamageArea,
+        Self::PlayAnimation,
+        Self::SetFlag,
+    ];
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::GiveWood => "GIVE WOOD",
+            Self::GiveMeat => "GIVE MEAT",
+            Self::SpawnPawn => "SPAWN PAWN",
+            Self::SpawnEnemy => "SPAWN ENEMY",
+            Self::DamageArea => "DAMAGE AREA",
+            Self::PlayAnimation => "PLAY ANIM",
+            Self::SetFlag => "SET FLAG",
+        }
+    }
+
+    fn next(self) -> Self {
+        cycle_enum(Self::ALL, self)
+    }
+}
+
+#[cfg(test)]
 struct ExplorerFile {
     frames: Vec<ExplorerFrame>,
     clips: Vec<ExplorerClip>,
@@ -835,6 +1069,7 @@ struct ExplorerFrame {
     duration_ms: u32,
 }
 
+#[cfg(test)]
 struct ExplorerClip {
     name: String,
     frame_indices: Vec<usize>,
@@ -945,6 +1180,14 @@ struct ActivePlantAnimation {
     started_ms: u32,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct ActiveGoldAnimation {
+    x2: usize,
+    y2: usize,
+    kind: GoldKind,
+    started_ms: u32,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct CloudInstance {
     asset_index: usize,
@@ -1012,14 +1255,37 @@ impl TerrainDrawCache {
     }
 }
 
+fn initial_editor_world() -> TileWorld {
+    #[cfg(test)]
+    {
+        TileWorld::new(WORLD_COLS, WORLD_ROWS)
+    }
+
+    #[cfg(not(test))]
+    {
+        match TileWorld::load_from_path(WORLD_SAVE_PATH) {
+            Ok(world) => {
+                eprintln!("loaded world from {WORLD_SAVE_PATH}");
+                world
+            }
+            Err(error) => {
+                eprintln!("using empty grass world: failed to load {WORLD_SAVE_PATH}: {error}");
+                TileWorld::new(WORLD_COLS, WORLD_ROWS)
+            }
+        }
+    }
+}
+
 impl Game {
-    fn new(seed: u64) -> Self {
+    fn new() -> Self {
         let terrain = TextureAtlas::from_png_bytes(TERRAIN_TEXTURE, TERRAIN_BYTES, TERRAIN_TILE_PX);
         let water_visuals = load_water_visual_assets();
         let plant_props = load_plant_prop_assets();
         let gold_props = load_gold_prop_assets();
+        let rock_props = load_rock_prop_assets();
         let clouds = load_cloud_assets();
-        let cloud_instances = generate_clouds(seed, &clouds, WORLD_COLS, WORLD_ROWS);
+        let world = initial_editor_world();
+        let cloud_instances = generate_clouds(DEFAULT_SEED, &clouds, world.cols, world.rows);
         let foreground_tiles = terrain
             .non_empty_tiles()
             .into_iter()
@@ -1060,10 +1326,11 @@ impl Game {
             water_visuals,
             plant_props,
             gold_props,
+            rock_props,
             clouds,
             cloud_instances,
             foreground_tiles,
-            world: TileWorld::seeded(WORLD_COLS, WORLD_ROWS, seed),
+            world,
             terrain_cache: TerrainDrawCache::new(),
             selected: None,
             fog_drag_start: None,
@@ -1075,11 +1342,13 @@ impl Game {
             uploaded: false,
             window_width: WINDOW_WIDTH,
             window_height: WINDOW_HEIGHT,
-            environment_rng: SeededRng::new(seed ^ 0xA11E_5747_EC05_2026),
+            environment_rng: SeededRng::new(DEFAULT_SEED ^ 0xA11E_5747_EC05_2026),
             water_animations: Vec::new(),
             plant_animations: Vec::new(),
+            gold_animations: Vec::new(),
             water_animation_timer: 0.2,
             plant_animation_timer: 0.4,
+            gold_animation_timer: 0.6,
             started_at: now,
             last_frame: now,
         }
@@ -1116,7 +1385,7 @@ impl Game {
     }
 
     fn palette_y(&self) -> f32 {
-        self.panel_y() + 26.0
+        self.panel_y()
     }
 
     fn upload_assets(&mut self, adapter: &mut Adapter) {
@@ -1191,6 +1460,7 @@ impl Game {
                     .iter()
                     .flat_map(|animation| animation.frames.iter()),
             )
+            .chain(self.rock_props.iter())
         {
             let rc = adapter.upload_texture_rgba_image(
                 image.texture_id,
@@ -1257,6 +1527,7 @@ impl Game {
     fn update_environment(&mut self, dt: f32) {
         let elapsed_ms = self.started_at.elapsed().as_millis() as u32;
         self.update_plant_environment(dt, elapsed_ms);
+        self.update_gold_environment(dt, elapsed_ms);
         self.update_water_environment(dt, elapsed_ms);
     }
 
@@ -1308,6 +1579,49 @@ impl Game {
                 row,
                 kind,
                 instance,
+                started_ms: elapsed_ms,
+            });
+        }
+    }
+
+    fn update_gold_environment(&mut self, dt: f32, elapsed_ms: u32) {
+        let gold_durations =
+            GoldKind::ALL.map(|kind| (kind, self.gold_props[kind.index()].total_duration_ms));
+        self.gold_animations.retain(|animation| {
+            let duration = gold_durations
+                .iter()
+                .find_map(|&(kind, duration)| (kind == animation.kind).then_some(duration))
+                .unwrap_or(0);
+            elapsed_ms.saturating_sub(animation.started_ms) < duration
+        });
+
+        self.gold_animation_timer -= dt;
+        if self.gold_animation_timer > 0.0 {
+            return;
+        }
+        self.gold_animation_timer = self.environment_rng.range_f32(0.45, 1.1);
+
+        let mut candidates = Vec::new();
+        for prop in &self.world.props {
+            let PropKind::Gold(kind) = prop.kind else {
+                continue;
+            };
+            if self.gold_animations.iter().any(|animation| {
+                animation.x2 == prop.x2 && animation.y2 == prop.y2 && animation.kind == kind
+            }) {
+                continue;
+            }
+            candidates.push((prop.x2, prop.y2, kind));
+        }
+
+        let trigger_count = self.environment_rng.range_usize(1, 3).min(candidates.len());
+        for _ in 0..trigger_count {
+            let index = self.environment_rng.range_usize(0, candidates.len());
+            let (x2, y2, kind) = candidates.swap_remove(index);
+            self.gold_animations.push(ActiveGoldAnimation {
+                x2,
+                y2,
+                kind,
                 started_ms: elapsed_ms,
             });
         }
@@ -1469,6 +1783,7 @@ impl Game {
 
         self.water_animations.clear();
         self.plant_animations.clear();
+        self.gold_animations.clear();
         self.fog_drag_start = None;
         self.terrain_cache.mark_dirty();
         self.clamp_camera();
@@ -1571,13 +1886,6 @@ impl Game {
             self.window_w(),
             panel_h,
             Rgba8::new(39, 91, 93, 215),
-        );
-        solid.rect(
-            10.0,
-            panel_y + 10.0,
-            self.window_w() - 20.0,
-            panel_h - 20.0,
-            Rgba8::new(30, 74, 77, 225),
         );
         let _ = adapter.draw_rgb_triangles_no_present(&solid.bytes);
 
@@ -1847,9 +2155,22 @@ impl Game {
                     }
                 }
                 PropKind::Gold(kind) => {
-                    let Some(image) = self.gold_props[kind.index()].first_frame() else {
+                    let Some(image) = self.gold_frame(kind, prop.x2, prop.y2) else {
                         continue;
                     };
+                    self.push_bottom_aligned_image_half(
+                        &mut image_batches,
+                        image,
+                        prop.x2,
+                        prop.y2,
+                        0.0,
+                        0.0,
+                        1.0,
+                        Rgba8::WHITE,
+                    );
+                }
+                PropKind::Rock(kind) => {
+                    let image = &self.rock_props[kind.index()];
                     self.push_bottom_aligned_image_half(
                         &mut image_batches,
                         image,
@@ -1940,6 +2261,26 @@ impl Game {
                     tint,
                 );
             }
+            Brush::RockResource => {
+                let Some((col, row)) = self.world_cell_at(self.mouse.x, self.mouse.y) else {
+                    return;
+                };
+                let tint = if self.world.can_cycle_rock(col, row) {
+                    Rgba8::new(255, 255, 255, 145)
+                } else {
+                    Rgba8::new(255, 96, 96, 155)
+                };
+                self.draw_bottom_aligned_image_half(
+                    adapter,
+                    &self.rock_props[RockKind::Rock1.index()],
+                    col * BUILDING_GRID_DIVISIONS,
+                    row * BUILDING_GRID_DIVISIONS,
+                    0.0,
+                    0.0,
+                    1.0,
+                    tint,
+                );
+            }
             _ => {}
         }
     }
@@ -1961,6 +2302,26 @@ impl Game {
                 && active.kind == kind
                 && active.instance == instance
         });
+        active
+            .and_then(|active| {
+                animation.frame_once(
+                    self.started_at
+                        .elapsed()
+                        .as_millis()
+                        .try_into()
+                        .unwrap_or(u32::MAX)
+                        .saturating_sub(active.started_ms),
+                )
+            })
+            .or_else(|| animation.first_frame())
+    }
+
+    fn gold_frame(&self, kind: GoldKind, x2: usize, y2: usize) -> Option<&ImageAsset> {
+        let animation = &self.gold_props[kind.index()];
+        let active = self
+            .gold_animations
+            .iter()
+            .find(|active| active.x2 == x2 && active.y2 == y2 && active.kind == kind);
         active
             .and_then(|active| {
                 animation.frame_once(
@@ -2239,6 +2600,7 @@ impl Game {
                             Brush::Ramp(_) => Some(self.world.can_place_ramp(col, row)),
                             Brush::Prop(kind) => Some(self.world.can_place_prop(kind, col, row)),
                             Brush::GoldResource => Some(self.world.can_cycle_gold(col, row)),
+                            Brush::RockResource => Some(self.world.can_cycle_rock(col, row)),
                             _ => None,
                         },
                     ),
@@ -2424,9 +2786,8 @@ impl Game {
         }
 
         if let Some(image) = self.gold_props[GoldKind::Nugget.index()].first_frame() {
-            let (x, y) = self.palette_slot_rect(
-                6 + BUILDING_COUNT + PILLAR_TILES.len() + PLANT_PROP_COUNT,
-            );
+            let (x, y) =
+                self.palette_slot_rect(6 + BUILDING_COUNT + PILLAR_TILES.len() + PLANT_PROP_COUNT);
             let scale = (PALETTE_TILE / image.width as f32)
                 .min(PALETTE_TILE / image.height as f32)
                 .min(1.0);
@@ -2443,15 +2804,36 @@ impl Game {
             let _ = adapter.draw_tex_triangles_no_present(image.texture_id, &gold.bytes);
         }
 
+        {
+            let image = &self.rock_props[RockKind::Rock1.index()];
+            let (x, y) = self.palette_slot_rect(
+                6 + BUILDING_COUNT + PILLAR_TILES.len() + PLANT_PROP_COUNT + GOLD_PALETTE_COUNT,
+            );
+            let scale = (PALETTE_TILE / image.width as f32)
+                .min(PALETTE_TILE / image.height as f32)
+                .min(1.0);
+            let w = image.width as f32 * scale;
+            let h = image.height as f32 * scale;
+            let mut rock = SpriteBatch::new(self.window_width, self.window_height);
+            rock.image(
+                x + (PALETTE_TILE - w) * 0.5,
+                y + PALETTE_TILE - h,
+                w,
+                h,
+                Rgba8::WHITE,
+            );
+            let _ = adapter.draw_tex_triangles_no_present(image.texture_id, &rock.bytes);
+        }
+
         let mut sprites = SpriteBatch::new(self.window_width, self.window_height);
         for (slot, &tile) in self.foreground_tiles.iter().enumerate() {
             let (x, y) = self.palette_slot_rect(
-                slot
-                    + 6
+                slot + 6
                     + BUILDING_COUNT
                     + PILLAR_TILES.len()
                     + PLANT_PROP_COUNT
-                    + GOLD_PALETTE_COUNT,
+                    + GOLD_PALETTE_COUNT
+                    + ROCK_PALETTE_COUNT,
             );
             sprites.sprite(
                 &self.terrain,
@@ -2476,15 +2858,7 @@ impl Game {
             } else {
                 Rgba8::new(99, 120, 121, 140)
             };
-            outline_rect(
-                &mut overlay,
-                x - 2.0,
-                y - 2.0,
-                PALETTE_TILE + 4.0,
-                PALETTE_TILE + 4.0,
-                2.0,
-                color,
-            );
+            outline_rect(&mut overlay, x, y, PALETTE_TILE, PALETTE_TILE, 2.0, color);
         }
 
         let _ = adapter.draw_rgb_triangles_no_present(&overlay.bytes);
@@ -2497,6 +2871,7 @@ impl Game {
             + PILLAR_TILES.len()
             + PLANT_PROP_COUNT
             + GOLD_PALETTE_COUNT
+            + ROCK_PALETTE_COUNT
     }
 
     fn palette_slots_per_row(&self) -> usize {
@@ -2532,9 +2907,21 @@ impl Game {
                 PropKind::Plant(PlantKind::ALL[slot - 6 - BUILDING_COUNT - PILLAR_TILES.len()]),
             ),
             _ if slot
-                < 6 + BUILDING_COUNT + PILLAR_TILES.len() + PLANT_PROP_COUNT + GOLD_PALETTE_COUNT =>
+                < 6 + BUILDING_COUNT
+                    + PILLAR_TILES.len()
+                    + PLANT_PROP_COUNT
+                    + GOLD_PALETTE_COUNT =>
             {
                 Brush::GoldResource
+            }
+            _ if slot
+                < 6 + BUILDING_COUNT
+                    + PILLAR_TILES.len()
+                    + PLANT_PROP_COUNT
+                    + GOLD_PALETTE_COUNT
+                    + ROCK_PALETTE_COUNT =>
+            {
+                Brush::RockResource
             }
             _ => Brush::Foreground(
                 self.foreground_tiles[slot
@@ -2542,7 +2929,8 @@ impl Game {
                     - BUILDING_COUNT
                     - PILLAR_TILES.len()
                     - PLANT_PROP_COUNT
-                    - GOLD_PALETTE_COUNT],
+                    - GOLD_PALETTE_COUNT
+                    - ROCK_PALETTE_COUNT],
             ),
         }
     }
@@ -2632,6 +3020,7 @@ impl Game {
                 self.right_down = false;
                 self.water_animations.clear();
                 self.plant_animations.clear();
+                self.gold_animations.clear();
                 self.terrain_cache.mark_dirty();
                 self.clamp_camera();
                 eprintln!("loaded world from {WORLD_SAVE_PATH}");
@@ -2714,6 +3103,7 @@ impl FrameProducer for Game {
     }
 }
 
+#[cfg(test)]
 impl AsepriteExplorer {
     fn new() -> Self {
         let mut next_texture_id = ASE_EXPLORER_TEXTURE_BASE;
@@ -2900,6 +3290,141 @@ impl LoadScreen {
     }
 }
 
+impl IconViewer {
+    fn new() -> Self {
+        Self {
+            icons: load_icon_viewer_icons(),
+            uploaded: false,
+            window_width: ICON_VIEWER_WIDTH,
+            window_height: ICON_VIEWER_HEIGHT,
+        }
+    }
+
+    fn resize_view(&mut self, width: u32, height: u32) {
+        self.window_width = width.max(1);
+        self.window_height = height.max(1);
+    }
+
+    fn upload_assets(&mut self, adapter: &mut Adapter) {
+        if self.uploaded {
+            return;
+        }
+
+        for image in [
+            ImageAsset::from_png_bytes(ts_ui::BANNER_TEXTURE, ts_ui::BANNER_BYTES),
+            ImageAsset::from_png_bytes(ts_ui::BIG_RIBBONS_TEXTURE, ts_ui::BIG_RIBBONS_BYTES),
+        ] {
+            let rc = adapter.upload_texture_rgba_image(
+                image.texture_id,
+                image.width,
+                image.height,
+                &image.rgba,
+            );
+            assert_eq!(
+                rc, 0,
+                "failed to upload icon viewer ui texture {}",
+                image.texture_id
+            );
+        }
+
+        for icon in &self.icons {
+            let rc = adapter.upload_texture_rgba_image(
+                icon.image.texture_id,
+                icon.image.width,
+                icon.image.height,
+                &icon.image.rgba,
+            );
+            assert_eq!(
+                rc, 0,
+                "failed to upload icon viewer texture {}",
+                icon.image.texture_id
+            );
+        }
+
+        self.uploaded = true;
+    }
+}
+
+impl EventEditor {
+    fn new() -> Self {
+        Self {
+            rules: vec![ScenarioRule {
+                id: 1,
+                enabled: true,
+                trigger: ScenarioTrigger::EveryThirtySeconds,
+                condition: ScenarioCondition::Always,
+                action: ScenarioAction::SpawnPawn,
+            }],
+            next_rule_id: 2,
+            draft_trigger: ScenarioTrigger::EveryThirtySeconds,
+            draft_condition: ScenarioCondition::Always,
+            draft_action: ScenarioAction::SpawnPawn,
+            mouse: Point::default(),
+            window_width: EVENT_EDITOR_WIDTH,
+            window_height: EVENT_EDITOR_HEIGHT,
+        }
+    }
+
+    fn resize_view(&mut self, width: u32, height: u32) {
+        self.window_width = width.max(1);
+        self.window_height = height.max(1);
+    }
+
+    fn handle_left_click(&mut self) {
+        if inside_rect(self.mouse.x, self.mouse.y, 24.0, 78.0, 218.0, 54.0) {
+            self.draft_trigger = self.draft_trigger.next();
+            return;
+        }
+        if inside_rect(self.mouse.x, self.mouse.y, 258.0, 78.0, 218.0, 54.0) {
+            self.draft_condition = self.draft_condition.next();
+            return;
+        }
+        if inside_rect(self.mouse.x, self.mouse.y, 492.0, 78.0, 218.0, 54.0) {
+            self.draft_action = self.draft_action.next();
+            return;
+        }
+        if inside_rect(self.mouse.x, self.mouse.y, 24.0, 142.0, 130.0, 34.0) {
+            self.add_rule();
+            return;
+        }
+
+        let table_y = 214.0;
+        let row_h = 42.0;
+        for index in 0..self.rules.len() {
+            let y = table_y + index as f32 * row_h;
+            if y > self.window_height as f32 - row_h {
+                break;
+            }
+            if inside_rect(self.mouse.x, self.mouse.y, 28.0, y + 7.0, 58.0, 28.0) {
+                self.rules[index].enabled = !self.rules[index].enabled;
+                return;
+            }
+            if inside_rect(
+                self.mouse.x,
+                self.mouse.y,
+                self.window_width as f32 - 86.0,
+                y + 7.0,
+                58.0,
+                28.0,
+            ) {
+                self.rules.remove(index);
+                return;
+            }
+        }
+    }
+
+    fn add_rule(&mut self) {
+        self.rules.push(ScenarioRule {
+            id: self.next_rule_id,
+            enabled: true,
+            trigger: self.draft_trigger,
+            condition: self.draft_condition,
+            action: self.draft_action,
+        });
+        self.next_rule_id += 1;
+    }
+}
+
 fn load_unit_walk_clip(spec: UnitWalkSpec, next_texture_id: &mut u32) -> Option<UnitWalkClip> {
     let set = ase_assets::load_tinted_aseprite_set(
         spec.path,
@@ -3051,6 +3576,84 @@ fn ui_text_width(text: &str, scale: f32) -> f32 {
     text.chars().count() as f32 * 6.0 * scale
 }
 
+fn event_editor_selector(
+    solid: &mut SolidBatch,
+    text: &mut ts_ui::UiBatch,
+    mouse: Point,
+    label: &str,
+    value: &str,
+    x: f32,
+    y: f32,
+    w: f32,
+) {
+    let hover = inside_rect(mouse.x, mouse.y, x, y, w, 54.0);
+    let fill = if hover {
+        Rgba8::new(97, 134, 132, 255)
+    } else {
+        Rgba8::new(77, 111, 111, 255)
+    };
+    solid.rect(x, y, w, 54.0, fill);
+    outline_rect(solid, x, y, w, 54.0, 2.0, Rgba8::new(124, 164, 160, 255));
+    text.text(
+        label,
+        x + 12.0,
+        y + 8.0,
+        1.0,
+        Rgba8::new(183, 205, 197, 255),
+    );
+    text.text(
+        value,
+        x + 12.0,
+        y + 29.0,
+        1.0,
+        Rgba8::new(232, 245, 239, 255),
+    );
+    text.text(
+        ">",
+        x + w - 22.0,
+        y + 29.0,
+        1.0,
+        Rgba8::new(232, 245, 239, 255),
+    );
+}
+
+fn event_editor_button(
+    solid: &mut SolidBatch,
+    text: &mut ts_ui::UiBatch,
+    mouse: Point,
+    label: &str,
+    x: f32,
+    y: f32,
+    w: f32,
+    h: f32,
+) {
+    let hover = inside_rect(mouse.x, mouse.y, x, y, w, h);
+    let fill = if hover {
+        Rgba8::new(130, 164, 143, 255)
+    } else {
+        Rgba8::new(92, 128, 119, 255)
+    };
+    solid.rect(x, y, w, h, fill);
+    outline_rect(solid, x, y, w, h, 2.0, Rgba8::new(153, 190, 175, 255));
+    let label_w = ui_text_width(label, 1.0);
+    text.text(
+        label,
+        x + (w - label_w) * 0.5,
+        y + (h - 8.0) * 0.5,
+        1.0,
+        Rgba8::new(238, 247, 241, 255),
+    );
+}
+
+fn cycle_enum<T: Copy + PartialEq, const N: usize>(items: [T; N], current: T) -> T {
+    let index = items
+        .iter()
+        .position(|item| *item == current)
+        .map(|index| (index + 1) % N)
+        .unwrap_or(0);
+    items[index]
+}
+
 fn brush_developer_name(brush: Brush) -> String {
     match brush {
         Brush::Background(BackgroundTile::Water) => "BG WATER".to_string(),
@@ -3063,7 +3666,9 @@ fn brush_developer_name(brush: Brush) -> String {
             .unwrap_or_else(|| atlas_tile_developer_name(tile)),
         Brush::Prop(PropKind::Plant(kind)) => kind.tag().to_ascii_uppercase(),
         Brush::Prop(PropKind::Gold(kind)) => kind.tag().to_ascii_uppercase(),
+        Brush::Prop(PropKind::Rock(kind)) => kind.tag().to_ascii_uppercase(),
         Brush::GoldResource => "GOLD RESOURCE".to_string(),
+        Brush::RockResource => "ROCK RESOURCE".to_string(),
         Brush::Building(kind) => format!("BUILDING {}", kind.developer_name()),
         Brush::Ramp(ramp) if ramp == RAMP_A => "RAMP A".to_string(),
         Brush::Ramp(ramp) if ramp == RAMP_B => "RAMP B".to_string(),
@@ -3111,6 +3716,7 @@ fn unit_viewer_label(unit: &UnitWalkClip) -> String {
     }
 }
 
+#[cfg(test)]
 fn load_explorer_file(path: &str, next_texture_id: &mut u32) -> Option<ExplorerFile> {
     let set = ase_assets::load_tinted_aseprite_set(
         path,
@@ -3145,6 +3751,7 @@ fn load_explorer_file(path: &str, next_texture_id: &mut u32) -> Option<ExplorerF
     })
 }
 
+#[cfg(test)]
 fn load_explorer_file_group(paths: &[&str], next_texture_id: &mut u32) -> Option<ExplorerFile> {
     let mut frames = Vec::new();
     let mut clips = Vec::new();
@@ -3168,6 +3775,7 @@ fn load_explorer_file_group(paths: &[&str], next_texture_id: &mut u32) -> Option
     })
 }
 
+#[cfg(test)]
 fn explorer_clips_from_tags(
     path: &str,
     tags: &[ase_assets::AsepriteTag],
@@ -3228,10 +3836,12 @@ fn explorer_clips_from_tags(
         .collect()
 }
 
+#[cfg(test)]
 fn is_explorer_helper_tag(name: &str) -> bool {
     matches!(name, "Still" | "Highlight")
 }
 
+#[cfg(test)]
 fn should_group_untagged_as_single_animation(path: &str, frames: &[ExplorerFrame]) -> bool {
     frames.len() > 1
         && (path.contains("Rubber Duck")
@@ -3239,6 +3849,7 @@ fn should_group_untagged_as_single_animation(path: &str, frames: &[ExplorerFrame
             || path.contains("Gold Resource"))
 }
 
+#[cfg(test)]
 fn explorer_clip_frame<'a>(
     clip: &ExplorerClip,
     frames: &'a [ExplorerFrame],
@@ -3456,6 +4067,80 @@ fn load_gold_prop_assets() -> [SpriteAnimation; GOLD_PROP_COUNT] {
     })
 }
 
+fn load_rock_prop_assets() -> [ImageAsset; ROCK_PROP_COUNT] {
+    std::array::from_fn(|index| {
+        let kind = RockKind::ALL[index];
+        ImageAsset::from_png_bytes_cropped(ROCK_PROP_TEXTURE_BASE + index as u32, kind.bytes())
+    })
+}
+
+fn load_icon_viewer_icons() -> Vec<IconTile> {
+    let mut icons = vec![
+        IconTile {
+            label: "Tool 01".to_string(),
+            image: ImageAsset::from_png_bytes_cropped(ICON_VIEWER_TEXTURE_BASE, TOOL1_BYTES),
+        },
+        IconTile {
+            label: "Tool 02".to_string(),
+            image: ImageAsset::from_png_bytes_cropped(ICON_VIEWER_TEXTURE_BASE + 1, TOOL2_BYTES),
+        },
+        IconTile {
+            label: "Tool 03".to_string(),
+            image: ImageAsset::from_png_bytes_cropped(ICON_VIEWER_TEXTURE_BASE + 2, TOOL3_BYTES),
+        },
+        IconTile {
+            label: "Tool 04".to_string(),
+            image: ImageAsset::from_png_bytes_cropped(ICON_VIEWER_TEXTURE_BASE + 3, TOOL4_BYTES),
+        },
+        IconTile {
+            label: "Meat".to_string(),
+            image: ImageAsset::from_png_bytes_cropped(
+                ICON_VIEWER_TEXTURE_BASE + 4,
+                MEAT_RESOURCE_BYTES,
+            ),
+        },
+        IconTile {
+            label: "Wood".to_string(),
+            image: ImageAsset::from_png_bytes_cropped(
+                ICON_VIEWER_TEXTURE_BASE + 5,
+                WOOD_RESOURCE_BYTES,
+            ),
+        },
+    ];
+
+    if let Some(image) = load_archer_arrow_icon(ICON_VIEWER_TEXTURE_BASE + 6) {
+        icons.push(IconTile {
+            label: "Arrow".to_string(),
+            image,
+        });
+    }
+
+    icons
+}
+
+fn load_archer_arrow_icon(texture_id: u32) -> Option<ImageAsset> {
+    let set = ase_assets::load_tinted_aseprite_set(
+        ARCHER_ASEPRITE_PATH,
+        [255, 255, 255, 255],
+        ase_assets::TintMode::Multiply,
+    )
+    .ok()?;
+
+    for frame in set.frames_for_tag("Arrow")? {
+        let asset = ImageAsset::from_rgba_cropped(
+            texture_id,
+            frame.width,
+            frame.height,
+            frame.rgba.clone(),
+        );
+        if asset.rgba.chunks_exact(4).any(|pixel| pixel[3] != 0) {
+            return Some(asset);
+        }
+    }
+
+    None
+}
+
 fn generate_clouds(
     seed: u64,
     assets: &[ImageAsset],
@@ -3487,6 +4172,7 @@ fn generate_clouds(
         .collect()
 }
 
+#[cfg(test)]
 impl FrameProducer for AsepriteExplorer {
     fn resize(&mut self, width: u32, height: u32) {
         self.resize_view(width, height);
@@ -3758,6 +4444,222 @@ impl FrameProducer for LoadScreen {
     }
 }
 
+impl FrameProducer for IconViewer {
+    fn resize(&mut self, width: u32, height: u32) {
+        self.resize_view(width, height);
+    }
+
+    fn build_frame(&mut self, adapter: &mut Adapter) {
+        self.upload_assets(adapter);
+
+        let _ = adapter.begin_frame(0x243C40);
+        let _ = adapter.set_sampler_raw(0, 0, 0, 0);
+        let _ = adapter.set_blend_raw(1, 0x0302, 0x0303);
+
+        let viewer_w = self.window_width as f32;
+        let viewer_h = self.window_height as f32;
+        let mut title = ts_ui::UiBatch::new(self.window_width, self.window_height);
+        title.big_ribbon(
+            0,
+            16.0,
+            14.0,
+            viewer_w - 32.0,
+            44.0,
+            Rgba8::new(255, 255, 255, 235),
+        );
+        title.text("ICONS", 34.0, 27.0, 2.0, Rgba8::new(32, 56, 60, 255));
+        let _ =
+            adapter.draw_tex_triangles_no_present(ts_ui::BIG_RIBBONS_TEXTURE, &title.texture_bytes);
+        let _ = adapter.draw_rgb_triangles_no_present(&title.solid_bytes);
+
+        let grid_x = 28.0;
+        let grid_y = 78.0;
+        let cell_w = 74.0;
+        let cell_h = 74.0;
+        let cols = ((viewer_w - grid_x * 2.0) / cell_w).floor().max(1.0) as usize;
+        for (index, icon) in self.icons.iter().enumerate() {
+            let col = index % cols;
+            let row = index / cols;
+            let cell_x = grid_x + col as f32 * cell_w;
+            let cell_y = grid_y + row as f32 * cell_h;
+            if cell_y > viewer_h - 34.0 {
+                break;
+            }
+            let scale = (48.0 / icon.image.width as f32)
+                .min(48.0 / icon.image.height as f32)
+                .min(1.0);
+            let w = icon.image.width as f32 * scale;
+            let h = icon.image.height as f32 * scale;
+            let mut sprite = SpriteBatch::new(self.window_width, self.window_height);
+            sprite.image(
+                (cell_x + (48.0 - w) * 0.5).floor(),
+                (cell_y + 2.0 + (48.0 - h) * 0.5).floor(),
+                w.max(1.0),
+                h.max(1.0),
+                Rgba8::WHITE,
+            );
+            let _ = adapter.draw_tex_triangles_no_present(icon.image.texture_id, &sprite.bytes);
+
+            let mut label = ts_ui::UiBatch::new(self.window_width, self.window_height);
+            let label_w = ui_text_width(&icon.label.to_uppercase(), 1.0);
+            label.text(
+                &icon.label.to_uppercase(),
+                cell_x + (48.0 - label_w) * 0.5,
+                cell_y + 54.0,
+                1.0,
+                Rgba8::new(220, 238, 232, 255),
+            );
+            let _ = adapter.draw_rgb_triangles_no_present(&label.solid_bytes);
+        }
+
+        let _ = adapter.end_frame();
+    }
+}
+
+impl FrameProducer for EventEditor {
+    fn resize(&mut self, width: u32, height: u32) {
+        self.resize_view(width, height);
+    }
+
+    fn handle_input(&mut self, event: InputEvent) {
+        match event {
+            InputEvent::CursorMoved { x, y } => {
+                self.mouse = Point { x, y };
+            }
+            InputEvent::MouseButton {
+                button: InputMouseButton::Left,
+                state: InputButtonState::Pressed,
+            } => self.handle_left_click(),
+            _ => {}
+        }
+    }
+
+    fn build_frame(&mut self, adapter: &mut Adapter) {
+        let _ = adapter.begin_frame(0x243C40);
+
+        let w = self.window_width as f32;
+        let h = self.window_height as f32;
+        let mut solid = SolidBatch::new(self.window_width, self.window_height);
+        let mut text = ts_ui::UiBatch::new(self.window_width, self.window_height);
+
+        solid.rect(14.0, 14.0, w - 28.0, 50.0, Rgba8::new(86, 120, 119, 255));
+        text.text(
+            "EVENT EDITOR",
+            28.0,
+            29.0,
+            2.0,
+            Rgba8::new(232, 245, 239, 255),
+        );
+
+        event_editor_selector(
+            &mut solid,
+            &mut text,
+            self.mouse,
+            "TRIGGER",
+            self.draft_trigger.label(),
+            24.0,
+            78.0,
+            218.0,
+        );
+        event_editor_selector(
+            &mut solid,
+            &mut text,
+            self.mouse,
+            "CONDITION",
+            self.draft_condition.label(),
+            258.0,
+            78.0,
+            218.0,
+        );
+        event_editor_selector(
+            &mut solid,
+            &mut text,
+            self.mouse,
+            "ACTION",
+            self.draft_action.label(),
+            492.0,
+            78.0,
+            218.0,
+        );
+
+        event_editor_button(
+            &mut solid, &mut text, self.mouse, "ADD RULE", 24.0, 142.0, 130.0, 34.0,
+        );
+
+        solid.rect(24.0, 196.0, w - 48.0, 2.0, Rgba8::new(113, 151, 148, 255));
+        text.text("EN", 42.0, 202.0, 1.0, Rgba8::new(183, 205, 197, 255));
+        text.text("TRIGGER", 104.0, 202.0, 1.0, Rgba8::new(183, 205, 197, 255));
+        text.text(
+            "CONDITION",
+            286.0,
+            202.0,
+            1.0,
+            Rgba8::new(183, 205, 197, 255),
+        );
+        text.text("ACTION", 482.0, 202.0, 1.0, Rgba8::new(183, 205, 197, 255));
+
+        let table_y = 214.0;
+        let row_h = 42.0;
+        for (index, rule) in self.rules.iter().enumerate() {
+            let y = table_y + index as f32 * row_h;
+            if y > h - row_h {
+                break;
+            }
+            let row_color = if index % 2 == 0 {
+                Rgba8::new(72, 103, 103, 190)
+            } else {
+                Rgba8::new(62, 92, 93, 190)
+            };
+            solid.rect(24.0, y, w - 48.0, row_h - 4.0, row_color);
+            event_editor_button(
+                &mut solid,
+                &mut text,
+                self.mouse,
+                if rule.enabled { "ON" } else { "OFF" },
+                28.0,
+                y + 7.0,
+                58.0,
+                28.0,
+            );
+            text.text(
+                rule.trigger.label(),
+                104.0,
+                y + 13.0,
+                1.0,
+                Rgba8::new(232, 245, 239, 255),
+            );
+            text.text(
+                rule.condition.label(),
+                286.0,
+                y + 13.0,
+                1.0,
+                Rgba8::new(232, 245, 239, 255),
+            );
+            text.text(
+                rule.action.label(),
+                482.0,
+                y + 13.0,
+                1.0,
+                Rgba8::new(232, 245, 239, 255),
+            );
+            event_editor_button(
+                &mut solid,
+                &mut text,
+                self.mouse,
+                "DEL",
+                w - 86.0,
+                y + 7.0,
+                58.0,
+                28.0,
+            );
+        }
+
+        let _ = adapter.draw_rgb_triangles_no_present(&solid.bytes);
+        let _ = adapter.draw_rgb_triangles_no_present(&text.solid_bytes);
+        let _ = adapter.end_frame();
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, serde::Deserialize, serde::Serialize)]
 struct TileWorld {
     cols: usize,
@@ -3941,35 +4843,6 @@ impl TileWorld {
         self.props.sort_by_key(|prop| (prop.y2, prop.x2));
     }
 
-    fn seeded(cols: usize, rows: usize, seed: u64) -> Self {
-        let mut world = Self::new(cols, rows);
-        let mut rng = SeededRng::new(seed);
-        let blob_count = 5 + rng.range_usize(0, 5);
-
-        for _ in 0..blob_count {
-            let center_col = rng.range_f32(4.0, cols as f32 - 4.0);
-            let center_row = rng.range_f32(4.0, rows as f32 - 4.0);
-            let radius_x = rng.range_f32(3.5, 10.0);
-            let radius_y = rng.range_f32(2.5, 7.0);
-            let wobble = rng.range_f32(-0.16, 0.08);
-
-            for row in 0..rows {
-                for col in 0..cols {
-                    let dx = (col as f32 + 0.5 - center_col) / radius_x;
-                    let dy = (row as f32 + 0.5 - center_row) / radius_y;
-                    let noise = seeded_cell_noise(seed, col, row) * 0.28;
-                    if dx * dx + dy * dy + noise + wobble < 1.0 {
-                        world.set_background(col, row, BackgroundTile::Water);
-                    }
-                }
-            }
-        }
-
-        world.collapse_shorelines();
-        world.scatter_ramps(&mut rng, GENERATED_RAMP_COUNT);
-        world
-    }
-
     fn save_to_path(&self, path: impl AsRef<Path>) -> Result<(), String> {
         let json = serde_json::to_string_pretty(self)
             .map_err(|error| format!("world json encode failed: {error}"))?;
@@ -4089,6 +4962,7 @@ impl TileWorld {
             }
             Brush::Prop(kind) => self.paint_prop(kind, col, row),
             Brush::GoldResource => self.cycle_gold(col, row),
+            Brush::RockResource => self.cycle_rock(col, row),
             Brush::Building(kind) => {
                 self.paint_building(
                     kind,
@@ -4164,9 +5038,39 @@ impl TileWorld {
     fn can_cycle_gold(&self, col: usize, row: usize) -> bool {
         let x2 = col * BUILDING_GRID_DIVISIONS;
         let y2 = row * BUILDING_GRID_DIVISIONS;
-        self.props.iter().any(|prop| {
-            prop.x2 == x2 && prop.y2 == y2 && matches!(prop.kind, PropKind::Gold(_))
-        }) || self.can_place_prop_half(PropKind::Gold(GoldKind::Stone1), x2, y2)
+        self.props
+            .iter()
+            .any(|prop| prop.x2 == x2 && prop.y2 == y2 && matches!(prop.kind, PropKind::Gold(_)))
+            || self.can_place_prop_half(PropKind::Gold(GoldKind::Stone1), x2, y2)
+    }
+
+    fn cycle_rock(&mut self, col: usize, row: usize) {
+        let x2 = col * BUILDING_GRID_DIVISIONS;
+        let y2 = row * BUILDING_GRID_DIVISIONS;
+        if let Some(index) = self.props.iter().position(|prop| {
+            prop.x2 == x2 && prop.y2 == y2 && matches!(prop.kind, PropKind::Rock(_))
+        }) {
+            let PropKind::Rock(kind) = self.props[index].kind else {
+                return;
+            };
+            if let Some(next) = kind.next() {
+                self.props[index].kind = PropKind::Rock(next);
+            } else {
+                self.props.remove(index);
+            }
+            return;
+        }
+
+        self.paint_prop_half(PropKind::Rock(RockKind::Rock1), x2, y2);
+    }
+
+    fn can_cycle_rock(&self, col: usize, row: usize) -> bool {
+        let x2 = col * BUILDING_GRID_DIVISIONS;
+        let y2 = row * BUILDING_GRID_DIVISIONS;
+        self.props
+            .iter()
+            .any(|prop| prop.x2 == x2 && prop.y2 == y2 && matches!(prop.kind, PropKind::Rock(_)))
+            || self.can_place_prop_half(PropKind::Rock(RockKind::Rock1), x2, y2)
     }
 
     fn add_fog_rect(&mut self, start: (usize, usize), end: (usize, usize)) {
@@ -4181,35 +5085,6 @@ impl TileWorld {
                 self.fog[index] = true;
             }
         }
-    }
-
-    fn scatter_ramps(&mut self, rng: &mut SeededRng, count: usize) {
-        let mut placed = 0;
-        let max_attempts = count * 80;
-
-        for _ in 0..max_attempts {
-            if placed >= count || self.cols == 0 || self.rows < 2 {
-                break;
-            }
-
-            let col = rng.range_usize(0, self.cols);
-            let row = rng.range_usize(0, self.rows - 1);
-            if !self.can_place_generated_ramp(col, row) {
-                continue;
-            }
-
-            let ramp = if rng.next_u64() & 1 == 0 {
-                RAMP_A
-            } else {
-                RAMP_B
-            };
-            self.paint(col, row, Brush::Ramp(ramp));
-            placed += 1;
-        }
-    }
-
-    fn can_place_generated_ramp(&self, col: usize, row: usize) -> bool {
-        self.can_place_ramp(col, row)
     }
 
     fn can_place_ramp(&self, col: usize, row: usize) -> bool {
@@ -4287,7 +5162,10 @@ impl TileWorld {
             return false;
         }
 
-        if matches!(kind, PropKind::Plant(_) | PropKind::Gold(_)) {
+        if matches!(
+            kind,
+            PropKind::Plant(_) | PropKind::Gold(_) | PropKind::Rock(_)
+        ) {
             let foundation = half_rect_to_tile_rect(footprint);
             for row in foundation.1..foundation.1 + foundation.3 {
                 for col in foundation.0..foundation.0 + foundation.2 {
@@ -4300,8 +5178,10 @@ impl TileWorld {
             }
         }
 
-        if matches!(kind, PropKind::Pillar(_) | PropKind::Gold(_))
-            && (x2 % BUILDING_GRID_DIVISIONS != 0 || y2 % BUILDING_GRID_DIVISIONS != 0)
+        if matches!(
+            kind,
+            PropKind::Pillar(_) | PropKind::Gold(_) | PropKind::Rock(_)
+        ) && (x2 % BUILDING_GRID_DIVISIONS != 0 || y2 % BUILDING_GRID_DIVISIONS != 0)
         {
             return false;
         }
@@ -5094,7 +5974,7 @@ fn prop_kind_footprint_rect2(kind: PropKind, x2: usize, y2: usize) -> (isize, is
         PropKind::Plant(plant) if plant.uses_half_height_footprint() => {
             (x2 as isize, y2 as isize + 1, BUILDING_GRID_DIVISIONS, 1)
         }
-        PropKind::Plant(_) | PropKind::Pillar(_) | PropKind::Gold(_) => (
+        PropKind::Plant(_) | PropKind::Pillar(_) | PropKind::Gold(_) | PropKind::Rock(_) => (
             x2 as isize,
             y2 as isize,
             BUILDING_GRID_DIVISIONS,
@@ -5229,40 +6109,6 @@ fn alpha_bounds(image: &image::RgbaImage) -> Option<(u32, u32, u32, u32)> {
     found.then_some((min_x, min_y, max_x, max_y))
 }
 
-fn seed_from_args(args: impl IntoIterator<Item = String>) -> u64 {
-    let mut args = args.into_iter();
-    while let Some(arg) = args.next() {
-        if let Some(seed) = arg.strip_prefix("--seed=") {
-            return parse_seed(seed).unwrap_or(DEFAULT_SEED);
-        }
-
-        if arg == "--seed" {
-            return args
-                .next()
-                .and_then(|seed| parse_seed(&seed))
-                .unwrap_or(DEFAULT_SEED);
-        }
-    }
-
-    DEFAULT_SEED
-}
-
-fn parse_seed(seed: &str) -> Option<u64> {
-    if let Some(hex) = seed.strip_prefix("0x").or_else(|| seed.strip_prefix("0X")) {
-        u64::from_str_radix(hex, 16).ok()
-    } else {
-        seed.parse().ok()
-    }
-}
-
-fn seeded_cell_noise(seed: u64, col: usize, row: usize) -> f32 {
-    let mut rng = SeededRng::new(
-        seed ^ ((col as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15))
-            ^ ((row as u64).wrapping_mul(0xBF58_476D_1CE4_E5B9)),
-    );
-    rng.range_f32(-1.0, 1.0)
-}
-
 fn plant_visual_roll(kind: PlantKind, col: usize, row: usize) -> u8 {
     let mut rng = SeededRng::new(
         0xB05C_A11D_EC05_2026
@@ -5358,9 +6204,8 @@ mod tests {
         world.add_fog_rect((2, 2), (3, 3));
 
         let path = std::env::temp_dir().join(format!(
-            "tactics_world_roundtrip_{}_{}.json",
-            std::process::id(),
-            seeded_cell_noise(17, 3, 9).to_bits()
+            "tactics_world_roundtrip_{}.json",
+            std::process::id()
         ));
 
         world.save_to_path(&path).expect("world should save");
@@ -5402,7 +6247,7 @@ mod tests {
 
     #[test]
     fn full_grass_tile_is_a_background_tool_not_a_foreground_palette_tile() {
-        let game = Game::new(DEFAULT_SEED);
+        let game = Game::new();
 
         assert_eq!(
             game.palette_brush(1),
@@ -5434,6 +6279,12 @@ mod tests {
             game.palette_brush(6 + BUILDING_COUNT + PILLAR_TILES.len() + PLANT_PROP_COUNT),
             Brush::GoldResource
         );
+        assert_eq!(
+            game.palette_brush(
+                6 + BUILDING_COUNT + PILLAR_TILES.len() + PLANT_PROP_COUNT + GOLD_PALETTE_COUNT
+            ),
+            Brush::RockResource
+        );
     }
 
     #[test]
@@ -5455,10 +6306,8 @@ mod tests {
             brush_developer_name(Brush::Prop(PropKind::Plant(PlantKind::Bush2))),
             "BUSH 2"
         );
-        assert_eq!(
-            brush_developer_name(Brush::GoldResource),
-            "GOLD RESOURCE"
-        );
+        assert_eq!(brush_developer_name(Brush::GoldResource), "GOLD RESOURCE");
+        assert_eq!(brush_developer_name(Brush::RockResource), "ROCK RESOURCE");
         assert_eq!(
             brush_developer_name(Brush::Foreground(SHORE_SINGLE_IN_GRASS)),
             "SHORE SINGLE IN GRASS"
@@ -5467,7 +6316,7 @@ mod tests {
 
     #[test]
     fn building_specs_use_foundation_footprints_independent_from_art_size() {
-        let game = Game::new(DEFAULT_SEED);
+        let game = Game::new();
 
         assert_eq!(game.buildings.len(), BUILDING_COUNT);
         for (image, spec) in game.buildings.iter().zip(BUILDING_SPECS) {
@@ -5664,6 +6513,49 @@ mod tests {
         assert_eq!(
             world.props.last().map(|prop| prop.kind),
             Some(PropKind::Gold(GoldKind::Stone1))
+        );
+    }
+
+    #[test]
+    fn rock_resource_brush_cycles_static_rock_props_on_empty_grass() {
+        let mut world = TileWorld::new(2, 2);
+
+        for expected in RockKind::ALL {
+            world.paint(0, 0, Brush::RockResource);
+            assert_eq!(
+                world.props,
+                vec![PlacedProp {
+                    kind: PropKind::Rock(expected),
+                    x2: 0,
+                    y2: 0
+                }]
+            );
+        }
+
+        world.paint(0, 0, Brush::RockResource);
+        assert!(world.props.is_empty());
+    }
+
+    #[test]
+    fn rock_resource_brush_requires_unoccupied_grass() {
+        let mut world = TileWorld::new(4, 4);
+
+        world.paint(0, 0, Brush::Background(BackgroundTile::Water));
+        world.paint(0, 0, Brush::RockResource);
+        assert!(world.props.is_empty());
+
+        world.paint(1, 0, Brush::Prop(PropKind::Pillar(PILLAR_TILES[0])));
+        world.paint(1, 0, Brush::RockResource);
+        assert_eq!(world.props.len(), 1);
+
+        world.paint(2, 0, Brush::Building(BuildingKind::House1));
+        world.paint(2, 1, Brush::RockResource);
+        assert_eq!(world.props.len(), 1);
+
+        world.paint(0, 1, Brush::RockResource);
+        assert_eq!(
+            world.props.last().map(|prop| prop.kind),
+            Some(PropKind::Rock(RockKind::Rock1))
         );
     }
 
@@ -5908,7 +6800,7 @@ mod tests {
 
     #[test]
     fn building_brush_anchor_centers_hitbox_on_cursor_cell() {
-        let game = Game::new(DEFAULT_SEED);
+        let game = Game::new();
 
         assert_eq!(
             game.building_anchor_half_cell(BuildingKind::House1, 6, 6),
@@ -5966,7 +6858,7 @@ mod tests {
 
     #[test]
     fn editor_building_anchor_can_place_foundations_on_top_world_row() {
-        let game = Game::new(DEFAULT_SEED);
+        let game = Game::new();
         let mut world = TileWorld::new(6, 5);
         let anchor = game.building_anchor_half_cell(BuildingKind::House1, 2, 2);
 
@@ -6087,14 +6979,14 @@ mod tests {
 
     #[test]
     fn fog_tool_is_a_palette_brush() {
-        let game = Game::new(DEFAULT_SEED);
+        let game = Game::new();
 
         assert_eq!(game.palette_brush(5), Brush::FogRect);
     }
 
     #[test]
     fn palette_hit_testing_uses_the_same_slots_as_palette_drawing() {
-        let game = Game::new(DEFAULT_SEED);
+        let game = Game::new();
 
         for slot in [
             6,
@@ -6116,7 +7008,7 @@ mod tests {
 
     #[test]
     fn fog_tool_keeps_the_regular_cursor() {
-        let mut game = Game::new(DEFAULT_SEED);
+        let mut game = Game::new();
         game.selected = Some(Brush::FogRect);
         game.mouse = Point {
             x: VIEW_X + TILE_SIZE,
@@ -6140,7 +7032,7 @@ mod tests {
             assert!(cropped.height < full.height);
         }
 
-        let game = Game::new(DEFAULT_SEED);
+        let game = Game::new();
         let cursor_select = ImageAsset::from_png_bytes(CURSOR_SELECT_TEXTURE, CURSOR_SELECT_BYTES);
         assert_eq!(game.cursor_select.width, cursor_select.width);
         assert_eq!(game.cursor_select.height, cursor_select.height);
@@ -6149,7 +7041,7 @@ mod tests {
     #[test]
     fn fog_shadow_png_is_cropped_before_stretching_to_tiles() {
         let full = ImageAsset::from_png_bytes(FOG_TEXTURE, FOG_BYTES);
-        let game = Game::new(DEFAULT_SEED);
+        let game = Game::new();
 
         assert!(game.fog.width < full.width);
         assert!(game.fog.height < full.height);
@@ -6256,18 +7148,8 @@ mod tests {
     }
 
     #[test]
-    fn parses_seed_from_cli_args() {
-        assert_eq!(seed_from_args(Vec::<String>::new()), DEFAULT_SEED);
-        assert_eq!(seed_from_args(["--seed=42".to_string()]), 42);
-        assert_eq!(
-            seed_from_args(["--seed".to_string(), "0x2A".to_string()]),
-            42
-        );
-    }
-
-    #[test]
     fn resize_expands_visible_world_without_scaling_layout_space() {
-        let mut game = Game::new(DEFAULT_SEED);
+        let mut game = Game::new();
         let windowed_view_h = game.view_h();
         let windowed_slots = game.palette_slots_per_row();
 
@@ -6530,7 +7412,7 @@ mod tests {
 
     #[test]
     fn environment_animator_triggers_stone_and_wave_water_states_but_not_ducks() {
-        let mut game = Game::new(DEFAULT_SEED);
+        let mut game = Game::new();
         game.world = TileWorld::new(2, 1);
         game.world
             .paint(0, 0, Brush::Background(BackgroundTile::Water));
@@ -6551,19 +7433,21 @@ mod tests {
 
     #[test]
     fn environment_animation_timers_are_fast_enough_for_visible_feedback() {
-        let mut game = Game::new(DEFAULT_SEED);
+        let mut game = Game::new();
         game.plant_animation_timer = 0.0;
         game.water_animation_timer = 0.0;
+        game.gold_animation_timer = 0.0;
 
         game.update_environment(1.0);
 
         assert!(game.plant_animation_timer <= 1.0);
         assert!(game.water_animation_timer <= 0.85);
+        assert!(game.gold_animation_timer <= 1.1);
     }
 
     #[test]
     fn environment_animator_triggers_trees_and_bushes_but_not_stumps() {
-        let mut game = Game::new(DEFAULT_SEED);
+        let mut game = Game::new();
         game.world = TileWorld::new(3, 3);
         game.world
             .paint(0, 0, Brush::Prop(PropKind::Plant(PlantKind::Tree1)));
@@ -6582,6 +7466,44 @@ mod tests {
                 .iter()
                 .all(|animation| animation.kind == PlantKind::Tree1
                     || animation.kind == PlantKind::Bush1)
+        );
+    }
+
+    #[test]
+    fn environment_animator_triggers_gold_props_as_one_shot_animations() {
+        let mut game = Game::new();
+        game.world = TileWorld::new(3, 1);
+        game.world.paint(0, 0, Brush::GoldResource);
+        game.world.paint(1, 0, Brush::GoldResource);
+        game.world.paint(1, 0, Brush::GoldResource);
+        game.gold_animation_timer = 0.0;
+
+        game.update_environment(1.0);
+
+        assert!(!game.gold_animations.is_empty());
+        assert!(game.gold_animations.len() <= 2);
+        assert!(
+            game.gold_animations
+                .iter()
+                .all(|animation| matches!(animation.kind, GoldKind::Stone1 | GoldKind::Stone2))
+        );
+
+        let active = game.gold_animations[0];
+        let first = game.gold_props[active.kind.index()]
+            .first_frame()
+            .unwrap()
+            .texture_id;
+        let duration = game.gold_props[active.kind.index()]
+            .durations_ms
+            .first()
+            .copied()
+            .unwrap_or(1);
+        assert_ne!(
+            game.gold_props[active.kind.index()]
+                .frame_once(duration)
+                .unwrap()
+                .texture_id,
+            first
         );
     }
 
@@ -6633,7 +7555,7 @@ mod tests {
             gold.iter()
                 .all(|animation| !animation.frames.is_empty() && animation.total_duration_ms > 0)
         );
-        assert_eq!(gold[GoldKind::Stone1.index()].frames.len(), 6);
+        assert_eq!(gold[GoldKind::Stone1.index()].frames.len(), 7);
         assert_eq!(gold[GoldKind::Nugget.index()].frames.len(), 7);
     }
 
@@ -6649,6 +7571,80 @@ mod tests {
                 frame.texture_id
             );
         }
+    }
+
+    #[test]
+    fn rock_prop_assets_load_as_static_grass_props() {
+        let rocks = load_rock_prop_assets();
+
+        assert_eq!(rocks.len(), ROCK_PROP_COUNT);
+        assert!(rocks.iter().all(|rock| {
+            rock.width <= 64
+                && rock.height <= 64
+                && rock.rgba.chunks_exact(4).any(|pixel| pixel[3] != 0)
+        }));
+    }
+
+    #[test]
+    fn icon_viewer_loads_tool_resource_and_arrow_icons() {
+        let viewer = IconViewer::new();
+        let labels = viewer
+            .icons
+            .iter()
+            .map(|icon| icon.label.as_str())
+            .collect::<Vec<_>>();
+
+        for expected in ["Tool 01", "Tool 02", "Tool 03", "Tool 04", "Meat", "Wood"] {
+            assert!(labels.contains(&expected));
+        }
+        assert!(labels.contains(&"Arrow"));
+    }
+
+    #[test]
+    fn event_editor_cycles_draft_selectors_and_adds_rules() {
+        let mut editor = EventEditor::new();
+        assert_eq!(editor.rules.len(), 1);
+
+        editor.mouse = Point { x: 32.0, y: 86.0 };
+        editor.handle_left_click();
+        assert_eq!(editor.draft_trigger, ScenarioTrigger::OnceAfterOneMinute);
+
+        editor.mouse = Point { x: 266.0, y: 86.0 };
+        editor.handle_left_click();
+        assert_eq!(editor.draft_condition, ScenarioCondition::PlayerHasWood);
+
+        editor.mouse = Point { x: 500.0, y: 86.0 };
+        editor.handle_left_click();
+        assert_eq!(editor.draft_action, ScenarioAction::SpawnEnemy);
+
+        editor.mouse = Point { x: 32.0, y: 150.0 };
+        editor.handle_left_click();
+
+        assert_eq!(editor.rules.len(), 2);
+        assert_eq!(editor.rules[1].trigger, ScenarioTrigger::OnceAfterOneMinute);
+        assert_eq!(editor.rules[1].condition, ScenarioCondition::PlayerHasWood);
+        assert_eq!(editor.rules[1].action, ScenarioAction::SpawnEnemy);
+    }
+
+    #[test]
+    fn event_editor_table_buttons_toggle_and_delete_rules() {
+        let mut editor = EventEditor::new();
+        editor.add_rule();
+        assert_eq!(editor.rules.len(), 2);
+        assert!(editor.rules[0].enabled);
+
+        editor.mouse = Point { x: 36.0, y: 224.0 };
+        editor.handle_left_click();
+        assert!(!editor.rules[0].enabled);
+
+        editor.mouse = Point {
+            x: EVENT_EDITOR_WIDTH as f32 - 56.0,
+            y: 224.0,
+        };
+        editor.handle_left_click();
+
+        assert_eq!(editor.rules.len(), 1);
+        assert_eq!(editor.rules[0].id, 2);
     }
 
     #[test]
@@ -6725,7 +7721,7 @@ mod tests {
 
     #[test]
     fn doubled_palette_panel_contains_all_slots_at_default_size() {
-        let game = Game::new(DEFAULT_SEED);
+        let game = Game::new();
         let last_slot = game.palette_len() - 1;
         let (_, y) = game.palette_slot_rect(last_slot);
 
@@ -6735,9 +7731,9 @@ mod tests {
 
     #[test]
     fn seeded_world_generation_is_deterministic() {
-        let a = TileWorld::seeded(20, 20, 123);
-        let b = TileWorld::seeded(20, 20, 123);
-        let c = TileWorld::seeded(20, 20, 124);
+        let a = wldgenerator::generate_world(20, 20, 123);
+        let b = wldgenerator::generate_world(20, 20, 123);
+        let c = wldgenerator::generate_world(20, 20, 124);
 
         assert_eq!(a.backgrounds, b.backgrounds);
         assert_ne!(a.backgrounds, c.backgrounds);
@@ -6752,7 +7748,7 @@ mod tests {
                 .iter()
                 .filter(|&&tile| tile == Some(RAMP_A.top) || tile == Some(RAMP_B.top))
                 .count(),
-            GENERATED_RAMP_COUNT
+            wldgenerator::GENERATED_RAMP_COUNT
         );
         assert!(a.buildings.is_empty());
         assert!(b.buildings.is_empty());
@@ -6768,7 +7764,7 @@ mod tests {
 
     #[test]
     fn seeded_editor_world_keeps_asset_layers_empty() {
-        let world = TileWorld::seeded(WORLD_COLS, WORLD_ROWS, DEFAULT_SEED);
+        let world = wldgenerator::generate_world(WORLD_COLS, WORLD_ROWS, DEFAULT_SEED);
 
         assert!(world.buildings.is_empty());
         assert!(world.props.is_empty());
