@@ -74,6 +74,12 @@ pub unsafe extern "C" fn trueos_cabi_gfx_set_sampler(
 
 #[cfg(feature = "ffi")]
 #[unsafe(no_mangle)]
+pub unsafe extern "C" fn trueos_cabi_gfx_set_texture_effect(effect: u32) -> i32 {
+    ADAPTER.lock().set_texture_effect_raw(effect)
+}
+
+#[cfg(feature = "ffi")]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn trueos_cabi_gfx_set_scissor(
     x: u32,
     y: u32,

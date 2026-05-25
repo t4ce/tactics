@@ -1,4 +1,4 @@
-use crate::command::{BlendState, Frame, FrameCommand, SamplerState};
+use crate::command::{BlendState, Frame, FrameCommand, SamplerState, TextureEffect};
 use crate::texture::TextureRegistry;
 use crate::vertex::{decode_rgb_vertices, decode_tex_vertices, usable_rgb_len, usable_tex_len};
 
@@ -167,6 +167,17 @@ impl Adapter {
                 )));
         }
         0
+    }
+
+    pub fn set_texture_effect(&mut self, effect: TextureEffect) -> i32 {
+        if self.frame_active {
+            self.commands.push(FrameCommand::SetTextureEffect(effect));
+        }
+        0
+    }
+
+    pub fn set_texture_effect_raw(&mut self, effect: u32) -> i32 {
+        self.set_texture_effect(TextureEffect::from_raw(effect))
     }
 
     pub fn set_scissor(&mut self, rect: Option<crate::command::ScissorRect>) -> i32 {

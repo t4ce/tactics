@@ -171,6 +171,46 @@ pub struct WgpuFiveWindowApp<P, S, T, U, V> {
     last_error: Option<RenderError>,
 }
 
+pub struct WgpuSixWindowApp<P, S, T, U, V, W> {
+    primary_title: String,
+    secondary_title: String,
+    tertiary_title: String,
+    quaternary_title: String,
+    quinary_title: String,
+    senary_title: String,
+    primary_config: AdapterConfig,
+    secondary_config: AdapterConfig,
+    tertiary_config: AdapterConfig,
+    quaternary_config: AdapterConfig,
+    quinary_config: AdapterConfig,
+    senary_config: AdapterConfig,
+    primary_producer: P,
+    secondary_producer: S,
+    tertiary_producer: T,
+    quaternary_producer: U,
+    quinary_producer: V,
+    senary_producer: W,
+    primary_adapter: Adapter,
+    secondary_adapter: Adapter,
+    tertiary_adapter: Adapter,
+    quaternary_adapter: Adapter,
+    quinary_adapter: Adapter,
+    senary_adapter: Adapter,
+    primary_window: Option<Arc<Window>>,
+    secondary_window: Option<Arc<Window>>,
+    tertiary_window: Option<Arc<Window>>,
+    quaternary_window: Option<Arc<Window>>,
+    quinary_window: Option<Arc<Window>>,
+    senary_window: Option<Arc<Window>>,
+    primary_renderer: Option<WgpuRenderer>,
+    secondary_renderer: Option<WgpuRenderer>,
+    tertiary_renderer: Option<WgpuRenderer>,
+    quaternary_renderer: Option<WgpuRenderer>,
+    quinary_renderer: Option<WgpuRenderer>,
+    senary_renderer: Option<WgpuRenderer>,
+    last_error: Option<RenderError>,
+}
+
 impl<P> WgpuWindowApp<P> {
     pub fn new(title: impl Into<String>, config: AdapterConfig, producer: P) -> Self {
         Self {
@@ -391,6 +431,82 @@ impl<P, S, T, U, V> WgpuFiveWindowApp<P, S, T, U, V> {
         T: FrameProducer + 'static,
         U: FrameProducer + 'static,
         V: FrameProducer + 'static,
+    {
+        let event_loop = EventLoop::new()?;
+        event_loop.run_app(&mut self)
+    }
+}
+
+impl<P, S, T, U, V, W> WgpuSixWindowApp<P, S, T, U, V, W> {
+    pub fn new(
+        primary_title: impl Into<String>,
+        primary_config: AdapterConfig,
+        primary_producer: P,
+        secondary_title: impl Into<String>,
+        secondary_config: AdapterConfig,
+        secondary_producer: S,
+        tertiary_title: impl Into<String>,
+        tertiary_config: AdapterConfig,
+        tertiary_producer: T,
+        quaternary_title: impl Into<String>,
+        quaternary_config: AdapterConfig,
+        quaternary_producer: U,
+        quinary_title: impl Into<String>,
+        quinary_config: AdapterConfig,
+        quinary_producer: V,
+        senary_title: impl Into<String>,
+        senary_config: AdapterConfig,
+        senary_producer: W,
+    ) -> Self {
+        Self {
+            primary_title: primary_title.into(),
+            secondary_title: secondary_title.into(),
+            tertiary_title: tertiary_title.into(),
+            quaternary_title: quaternary_title.into(),
+            quinary_title: quinary_title.into(),
+            senary_title: senary_title.into(),
+            primary_config,
+            secondary_config,
+            tertiary_config,
+            quaternary_config,
+            quinary_config,
+            senary_config,
+            primary_producer,
+            secondary_producer,
+            tertiary_producer,
+            quaternary_producer,
+            quinary_producer,
+            senary_producer,
+            primary_adapter: Adapter::new(primary_config),
+            secondary_adapter: Adapter::new(secondary_config),
+            tertiary_adapter: Adapter::new(tertiary_config),
+            quaternary_adapter: Adapter::new(quaternary_config),
+            quinary_adapter: Adapter::new(quinary_config),
+            senary_adapter: Adapter::new(senary_config),
+            primary_window: None,
+            secondary_window: None,
+            tertiary_window: None,
+            quaternary_window: None,
+            quinary_window: None,
+            senary_window: None,
+            primary_renderer: None,
+            secondary_renderer: None,
+            tertiary_renderer: None,
+            quaternary_renderer: None,
+            quinary_renderer: None,
+            senary_renderer: None,
+            last_error: None,
+        }
+    }
+
+    pub fn run(mut self) -> Result<(), winit::error::EventLoopError>
+    where
+        P: FrameProducer + 'static,
+        S: FrameProducer + 'static,
+        T: FrameProducer + 'static,
+        U: FrameProducer + 'static,
+        V: FrameProducer + 'static,
+        W: FrameProducer + 'static,
     {
         let event_loop = EventLoop::new()?;
         event_loop.run_app(&mut self)
@@ -915,6 +1031,192 @@ impl<P: FrameProducer, S: FrameProducer, T: FrameProducer, U: FrameProducer, V: 
             window.request_redraw();
         }
         if let Some(window) = &self.quinary_window {
+            window.request_redraw();
+        }
+    }
+}
+
+impl<
+        P: FrameProducer,
+        S: FrameProducer,
+        T: FrameProducer,
+        U: FrameProducer,
+        V: FrameProducer,
+        W: FrameProducer,
+    > ApplicationHandler for WgpuSixWindowApp<P, S, T, U, V, W>
+{
+    fn resumed(&mut self, event_loop: &ActiveEventLoop) {
+        if self.primary_window.is_none() {
+            let Some((window, renderer)) = create_window_renderer(
+                event_loop,
+                &self.primary_title,
+                self.primary_config,
+                self.primary_producer.cursor_visible(),
+                self.primary_producer.window_decorations(),
+            ) else {
+                event_loop.exit();
+                return;
+            };
+            self.primary_window = Some(window);
+            self.primary_renderer = Some(renderer);
+        }
+
+        if self.secondary_window.is_none() {
+            let Some((window, renderer)) = create_window_renderer(
+                event_loop,
+                &self.secondary_title,
+                self.secondary_config,
+                self.secondary_producer.cursor_visible(),
+                self.secondary_producer.window_decorations(),
+            ) else {
+                event_loop.exit();
+                return;
+            };
+            self.secondary_window = Some(window);
+            self.secondary_renderer = Some(renderer);
+        }
+
+        if self.tertiary_window.is_none() {
+            let Some((window, renderer)) = create_window_renderer(
+                event_loop,
+                &self.tertiary_title,
+                self.tertiary_config,
+                self.tertiary_producer.cursor_visible(),
+                self.tertiary_producer.window_decorations(),
+            ) else {
+                event_loop.exit();
+                return;
+            };
+            self.tertiary_window = Some(window);
+            self.tertiary_renderer = Some(renderer);
+        }
+
+        if self.quaternary_window.is_none() {
+            let Some((window, renderer)) = create_window_renderer(
+                event_loop,
+                &self.quaternary_title,
+                self.quaternary_config,
+                self.quaternary_producer.cursor_visible(),
+                self.quaternary_producer.window_decorations(),
+            ) else {
+                event_loop.exit();
+                return;
+            };
+            self.quaternary_window = Some(window);
+            self.quaternary_renderer = Some(renderer);
+        }
+
+        if self.quinary_window.is_none() {
+            let Some((window, renderer)) = create_window_renderer(
+                event_loop,
+                &self.quinary_title,
+                self.quinary_config,
+                self.quinary_producer.cursor_visible(),
+                self.quinary_producer.window_decorations(),
+            ) else {
+                event_loop.exit();
+                return;
+            };
+            self.quinary_window = Some(window);
+            self.quinary_renderer = Some(renderer);
+        }
+
+        if self.senary_window.is_none() {
+            let Some((window, renderer)) = create_window_renderer(
+                event_loop,
+                &self.senary_title,
+                self.senary_config,
+                self.senary_producer.cursor_visible(),
+                self.senary_producer.window_decorations(),
+            ) else {
+                event_loop.exit();
+                return;
+            };
+            self.senary_window = Some(window);
+            self.senary_renderer = Some(renderer);
+        }
+    }
+
+    fn window_event(
+        &mut self,
+        event_loop: &ActiveEventLoop,
+        window_id: WindowId,
+        event: WindowEvent,
+    ) {
+        if self.primary_window.as_ref().map(|w| w.id()) == Some(window_id) {
+            handle_window_event(
+                event_loop,
+                event,
+                &mut self.primary_producer,
+                &mut self.primary_adapter,
+                &mut self.primary_renderer,
+                &mut self.last_error,
+            );
+        } else if self.secondary_window.as_ref().map(|w| w.id()) == Some(window_id) {
+            handle_window_event(
+                event_loop,
+                event,
+                &mut self.secondary_producer,
+                &mut self.secondary_adapter,
+                &mut self.secondary_renderer,
+                &mut self.last_error,
+            );
+        } else if self.tertiary_window.as_ref().map(|w| w.id()) == Some(window_id) {
+            handle_window_event(
+                event_loop,
+                event,
+                &mut self.tertiary_producer,
+                &mut self.tertiary_adapter,
+                &mut self.tertiary_renderer,
+                &mut self.last_error,
+            );
+        } else if self.quaternary_window.as_ref().map(|w| w.id()) == Some(window_id) {
+            handle_window_event(
+                event_loop,
+                event,
+                &mut self.quaternary_producer,
+                &mut self.quaternary_adapter,
+                &mut self.quaternary_renderer,
+                &mut self.last_error,
+            );
+        } else if self.quinary_window.as_ref().map(|w| w.id()) == Some(window_id) {
+            handle_window_event(
+                event_loop,
+                event,
+                &mut self.quinary_producer,
+                &mut self.quinary_adapter,
+                &mut self.quinary_renderer,
+                &mut self.last_error,
+            );
+        } else if self.senary_window.as_ref().map(|w| w.id()) == Some(window_id) {
+            handle_window_event(
+                event_loop,
+                event,
+                &mut self.senary_producer,
+                &mut self.senary_adapter,
+                &mut self.senary_renderer,
+                &mut self.last_error,
+            );
+        }
+    }
+
+    fn about_to_wait(&mut self, _event_loop: &ActiveEventLoop) {
+        if let Some(window) = &self.primary_window {
+            window.request_redraw();
+        }
+        if let Some(window) = &self.secondary_window {
+            window.request_redraw();
+        }
+        if let Some(window) = &self.tertiary_window {
+            window.request_redraw();
+        }
+        if let Some(window) = &self.quaternary_window {
+            window.request_redraw();
+        }
+        if let Some(window) = &self.quinary_window {
+            window.request_redraw();
+        }
+        if let Some(window) = &self.senary_window {
             window.request_redraw();
         }
     }

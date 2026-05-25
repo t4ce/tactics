@@ -106,6 +106,22 @@ impl SamplerState {
     }
 }
 
+#[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq)]
+pub enum TextureEffect {
+    #[default]
+    Plain,
+    World,
+}
+
+impl TextureEffect {
+    pub fn from_raw(value: u32) -> Self {
+        match value {
+            1 => Self::World,
+            _ => Self::Plain,
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ScissorRect {
     pub x: u32,
@@ -118,6 +134,7 @@ pub struct ScissorRect {
 pub enum FrameCommand {
     SetBlend(BlendState),
     SetSampler(SamplerState),
+    SetTextureEffect(TextureEffect),
     SetScissor(Option<ScissorRect>),
     SetRenderTarget(u32),
     DrawRgb {

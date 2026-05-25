@@ -1,10 +1,10 @@
 use crate::terrain_rules::AtlasTile;
 use crate::{ase_assets, ts_ui};
 use adapterlibgfx::api::{Adapter, AdapterConfig};
-use adapterlibgfx::command::ScissorRect;
+use adapterlibgfx::command::{ScissorRect, TextureEffect};
 use adapterlibgfx::vertex::{Rgba8, TexVertex};
 use adapterlibgfx::window::{
-    FrameProducer, InputButtonState, InputEvent, InputKey, InputMouseButton, WgpuFiveWindowApp,
+    FrameProducer, InputButtonState, InputEvent, InputKey, InputMouseButton, WgpuSixWindowApp,
 };
 use std::collections::{BTreeMap, HashSet};
 use std::fs;
@@ -13,6 +13,8 @@ use std::time::Instant;
 
 #[path = "wldgenerator.rs"]
 mod wldgenerator;
+#[path = "worldviewer.rs"]
+mod worldviewer;
 
 const WINDOW_WIDTH: u32 = 1280;
 const WINDOW_HEIGHT: u32 = 800;
@@ -23,7 +25,7 @@ const EXPLORER_HEIGHT: u32 = 520;
 const UNIT_VIEWER_WIDTH: u32 = 640;
 const UNIT_VIEWER_HEIGHT: u32 = 520;
 const ICON_VIEWER_WIDTH: u32 = 360;
-const ICON_VIEWER_HEIGHT: u32 = 240;
+const ICON_VIEWER_HEIGHT: u32 = 320;
 const EVENT_EDITOR_WIDTH: u32 = 760;
 const EVENT_EDITOR_HEIGHT: u32 = 520;
 const TERRAIN_TEXTURE: u32 = 1;
@@ -89,6 +91,20 @@ const TOOL3_BYTES: &[u8] = include_bytes!("../ts_freepack/Terrain/Tools/Tool_03.
 const TOOL4_BYTES: &[u8] = include_bytes!("../ts_freepack/Terrain/Tools/Tool_04.png");
 const MEAT_RESOURCE_BYTES: &[u8] = include_bytes!("../ts_freepack/Terrain/Tools/Meat Resource.png");
 const WOOD_RESOURCE_BYTES: &[u8] = include_bytes!("../ts_freepack/Terrain/Tools/Wood Resource.png");
+const UI_ICON_BYTES: [&[u8]; 12] = [
+    include_bytes!("../ts_freepack/UI Elements/UI Elements/Icons/Icon_01.png"),
+    include_bytes!("../ts_freepack/UI Elements/UI Elements/Icons/Icon_02.png"),
+    include_bytes!("../ts_freepack/UI Elements/UI Elements/Icons/Icon_03.png"),
+    include_bytes!("../ts_freepack/UI Elements/UI Elements/Icons/Icon_04.png"),
+    include_bytes!("../ts_freepack/UI Elements/UI Elements/Icons/Icon_05.png"),
+    include_bytes!("../ts_freepack/UI Elements/UI Elements/Icons/Icon_06.png"),
+    include_bytes!("../ts_freepack/UI Elements/UI Elements/Icons/Icon_07.png"),
+    include_bytes!("../ts_freepack/UI Elements/UI Elements/Icons/Icon_08.png"),
+    include_bytes!("../ts_freepack/UI Elements/UI Elements/Icons/Icon_09.png"),
+    include_bytes!("../ts_freepack/UI Elements/UI Elements/Icons/Icon_10.png"),
+    include_bytes!("../ts_freepack/UI Elements/UI Elements/Icons/Icon_11.png"),
+    include_bytes!("../ts_freepack/UI Elements/UI Elements/Icons/Icon_12.png"),
+];
 const CLOUDS_ASEPRITE_PATH: &str = "ts_freepack/Clouds.aseprite";
 const TREES_ASEPRITE_PATH: &str = "ts_freepack/Trees.aseprite";
 const BUSHES_ASEPRITE_PATH: &str = "ts_freepack/Bushes.aseprite";
@@ -163,8 +179,8 @@ const PANEL_H: f32 = 320.0;
 
 const TILE_SIZE: f32 = 64.0;
 const BUILDING_GRID_DIVISIONS: usize = 2;
-const WORLD_COLS: usize = 38;
-const WORLD_ROWS: usize = 19;
+const WORLD_COLS: usize = 48;
+const WORLD_ROWS: usize = 29;
 const BUILDING_SCALE: f32 = TILE_SIZE / TERRAIN_TILE_PX as f32;
 const BUILDING_COUNT: usize = 8;
 const PLANT_PROP_COUNT: usize = 12;
@@ -244,13 +260,19 @@ const UNIT_WALK_SPECS: [UnitWalkSpec; 14] = [
 ];
 
 pub(crate) fn run() {
-    WgpuFiveWindowApp::new(
+    WgpuSixWindowApp::new(
         "tactics world editor",
         AdapterConfig {
             width: WINDOW_WIDTH,
             height: WINDOW_HEIGHT,
         },
         Game::new(),
+        "tactics world viewer",
+        AdapterConfig {
+            width: WINDOW_WIDTH,
+            height: WINDOW_HEIGHT,
+        },
+        worldviewer::WorldViewer::new(),
         "tactics unit walk viewer",
         AdapterConfig {
             width: UNIT_VIEWER_WIDTH,
@@ -1907,6 +1929,7 @@ impl Game {
     }
 
     fn draw_world(&mut self, adapter: &mut Adapter) {
+        let _ = adapter.set_texture_effect(TextureEffect::World);
         self.terrain_cache.rebuild_if_dirty(&self.world);
         let mut backgrounds = SpriteBatch::new(self.window_width, self.window_height);
         let mut foregrounds = SpriteBatch::new(self.window_width, self.window_height);
@@ -2000,6 +2023,7 @@ impl Game {
         self.draw_prop_preview(adapter);
         self.draw_buildings(adapter);
         self.draw_building_preview(adapter);
+        let _ = adapter.set_texture_effect(TextureEffect::Plain);
         self.draw_fog(adapter);
         self.draw_clouds(adapter);
     }
@@ -4075,40 +4099,47 @@ fn load_rock_prop_assets() -> [ImageAsset; ROCK_PROP_COUNT] {
 }
 
 fn load_icon_viewer_icons() -> Vec<IconTile> {
-    let mut icons = vec![
+    let mut icons = UI_ICON_BYTES
+        .iter()
+        .enumerate()
+        .map(|(index, &bytes)| IconTile {
+            label: format!("Icon {:02}", index + 1),
+            image: ImageAsset::from_png_bytes_cropped(
+                ICON_VIEWER_TEXTURE_BASE + index as u32,
+                bytes,
+            ),
+        })
+        .collect::<Vec<_>>();
+
+    let tool_texture_base = ICON_VIEWER_TEXTURE_BASE + UI_ICON_BYTES.len() as u32;
+    icons.extend([
         IconTile {
             label: "Tool 01".to_string(),
-            image: ImageAsset::from_png_bytes_cropped(ICON_VIEWER_TEXTURE_BASE, TOOL1_BYTES),
+            image: ImageAsset::from_png_bytes_cropped(tool_texture_base, TOOL1_BYTES),
         },
         IconTile {
             label: "Tool 02".to_string(),
-            image: ImageAsset::from_png_bytes_cropped(ICON_VIEWER_TEXTURE_BASE + 1, TOOL2_BYTES),
+            image: ImageAsset::from_png_bytes_cropped(tool_texture_base + 1, TOOL2_BYTES),
         },
         IconTile {
             label: "Tool 03".to_string(),
-            image: ImageAsset::from_png_bytes_cropped(ICON_VIEWER_TEXTURE_BASE + 2, TOOL3_BYTES),
+            image: ImageAsset::from_png_bytes_cropped(tool_texture_base + 2, TOOL3_BYTES),
         },
         IconTile {
             label: "Tool 04".to_string(),
-            image: ImageAsset::from_png_bytes_cropped(ICON_VIEWER_TEXTURE_BASE + 3, TOOL4_BYTES),
+            image: ImageAsset::from_png_bytes_cropped(tool_texture_base + 3, TOOL4_BYTES),
         },
         IconTile {
             label: "Meat".to_string(),
-            image: ImageAsset::from_png_bytes_cropped(
-                ICON_VIEWER_TEXTURE_BASE + 4,
-                MEAT_RESOURCE_BYTES,
-            ),
+            image: ImageAsset::from_png_bytes_cropped(tool_texture_base + 4, MEAT_RESOURCE_BYTES),
         },
         IconTile {
             label: "Wood".to_string(),
-            image: ImageAsset::from_png_bytes_cropped(
-                ICON_VIEWER_TEXTURE_BASE + 5,
-                WOOD_RESOURCE_BYTES,
-            ),
+            image: ImageAsset::from_png_bytes_cropped(tool_texture_base + 5, WOOD_RESOURCE_BYTES),
         },
-    ];
+    ]);
 
-    if let Some(image) = load_archer_arrow_icon(ICON_VIEWER_TEXTURE_BASE + 6) {
+    if let Some(image) = load_archer_arrow_icon(tool_texture_base + 6) {
         icons.push(IconTile {
             label: "Arrow".to_string(),
             image,
@@ -4458,24 +4489,11 @@ impl FrameProducer for IconViewer {
 
         let viewer_w = self.window_width as f32;
         let viewer_h = self.window_height as f32;
-        let mut title = ts_ui::UiBatch::new(self.window_width, self.window_height);
-        title.big_ribbon(
-            0,
-            16.0,
-            14.0,
-            viewer_w - 32.0,
-            44.0,
-            Rgba8::new(255, 255, 255, 235),
-        );
-        title.text("ICONS", 34.0, 27.0, 2.0, Rgba8::new(32, 56, 60, 255));
-        let _ =
-            adapter.draw_tex_triangles_no_present(ts_ui::BIG_RIBBONS_TEXTURE, &title.texture_bytes);
-        let _ = adapter.draw_rgb_triangles_no_present(&title.solid_bytes);
-
-        let grid_x = 28.0;
-        let grid_y = 78.0;
-        let cell_w = 74.0;
-        let cell_h = 74.0;
+        let grid_x = 24.0;
+        let grid_y = 18.0;
+        let cell_w = 50.0;
+        let cell_h = 58.0;
+        let icon_box = 32.0;
         let cols = ((viewer_w - grid_x * 2.0) / cell_w).floor().max(1.0) as usize;
         for (index, icon) in self.icons.iter().enumerate() {
             let col = index % cols;
@@ -4485,15 +4503,15 @@ impl FrameProducer for IconViewer {
             if cell_y > viewer_h - 34.0 {
                 break;
             }
-            let scale = (48.0 / icon.image.width as f32)
-                .min(48.0 / icon.image.height as f32)
+            let scale = (icon_box / icon.image.width as f32)
+                .min(icon_box / icon.image.height as f32)
                 .min(1.0);
             let w = icon.image.width as f32 * scale;
             let h = icon.image.height as f32 * scale;
             let mut sprite = SpriteBatch::new(self.window_width, self.window_height);
             sprite.image(
-                (cell_x + (48.0 - w) * 0.5).floor(),
-                (cell_y + 2.0 + (48.0 - h) * 0.5).floor(),
+                (cell_x + (icon_box - w) * 0.5).floor(),
+                (cell_y + 2.0 + (icon_box - h) * 0.5).floor(),
                 w.max(1.0),
                 h.max(1.0),
                 Rgba8::WHITE,
@@ -4504,8 +4522,8 @@ impl FrameProducer for IconViewer {
             let label_w = ui_text_width(&icon.label.to_uppercase(), 1.0);
             label.text(
                 &icon.label.to_uppercase(),
-                cell_x + (48.0 - label_w) * 0.5,
-                cell_y + 54.0,
+                cell_x + (icon_box - label_w) * 0.5,
+                cell_y + 40.0,
                 1.0,
                 Rgba8::new(220, 238, 232, 255),
             );
@@ -7586,7 +7604,7 @@ mod tests {
     }
 
     #[test]
-    fn icon_viewer_loads_tool_resource_and_arrow_icons() {
+    fn icon_viewer_loads_ui_tool_resource_and_arrow_icons() {
         let viewer = IconViewer::new();
         let labels = viewer
             .icons
@@ -7594,6 +7612,9 @@ mod tests {
             .map(|icon| icon.label.as_str())
             .collect::<Vec<_>>();
 
+        for index in 1..=12 {
+            assert!(labels.contains(&format!("Icon {index:02}").as_str()));
+        }
         for expected in ["Tool 01", "Tool 02", "Tool 03", "Tool 04", "Meat", "Wood"] {
             assert!(labels.contains(&expected));
         }
@@ -7730,43 +7751,48 @@ mod tests {
     }
 
     #[test]
-    fn seeded_world_generation_is_deterministic() {
-        let a = wldgenerator::generate_world(20, 20, 123);
-        let b = wldgenerator::generate_world(20, 20, 123);
-        let c = wldgenerator::generate_world(20, 20, 124);
+    fn world_generation_collapses_sparse_seed_to_full_raw_tiles() {
+        let a = wldgenerator::generate_world(100, 100, 123);
+        let b = wldgenerator::generate_world(100, 100, 123);
+        let c = wldgenerator::generate_world(100, 100, 124);
 
-        assert_eq!(a.backgrounds, b.backgrounds);
-        assert_ne!(a.backgrounds, c.backgrounds);
+        assert_eq!(a.cells, b.cells);
+        assert_ne!(a.cells, c.cells);
+        let water_count = a
+            .cells
+            .iter()
+            .filter(|&&cell| cell == wldgenerator::GeneratedCell::Water)
+            .count();
+        let grass_count = a
+            .cells
+            .iter()
+            .filter(|&&cell| cell == wldgenerator::GeneratedCell::Grass)
+            .count();
         assert!(
-            a.backgrounds
+            a.cells
                 .iter()
-                .any(|&background| background == BackgroundTile::Water)
+                .all(|&cell| cell != wldgenerator::GeneratedCell::Unknown)
         );
-        assert!(a.foregrounds.iter().any(Option::is_some));
-        assert_eq!(
-            a.foregrounds
-                .iter()
-                .filter(|&&tile| tile == Some(RAMP_A.top) || tile == Some(RAMP_B.top))
-                .count(),
-            wldgenerator::GENERATED_RAMP_COUNT
-        );
-        assert!(a.buildings.is_empty());
-        assert!(b.buildings.is_empty());
-        assert!(a.props.is_empty());
-        assert!(b.props.is_empty());
+        assert!(water_count > 0);
+        assert!(grass_count > 0);
+        assert_eq!(water_count + grass_count, 100 * 100);
         assert!(
-            a.water_states
+            a.cells
                 .iter()
-                .all(|&state| state == WaterState::Nothing)
+                .filter_map(|&cell| cell.background())
+                .all(|background| matches!(
+                    background,
+                    BackgroundTile::Grass | BackgroundTile::Water
+                ))
         );
-        assert!(!a.foregrounds.contains(&Some(GRASS_BG_TILE)));
     }
 
     #[test]
-    fn seeded_editor_world_keeps_asset_layers_empty() {
+    fn seeded_generator_world_keeps_dimensions() {
         let world = wldgenerator::generate_world(WORLD_COLS, WORLD_ROWS, DEFAULT_SEED);
 
-        assert!(world.buildings.is_empty());
-        assert!(world.props.is_empty());
+        assert_eq!(world.cols, WORLD_COLS);
+        assert_eq!(world.rows, WORLD_ROWS);
+        assert_eq!(world.cells.len(), WORLD_COLS * WORLD_ROWS);
     }
 }

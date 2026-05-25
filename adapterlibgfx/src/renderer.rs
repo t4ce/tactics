@@ -8,7 +8,7 @@ use winit::window::Window;
 
 use crate::command::{
     BlendFactor, BlendState, Frame, FrameCommand, SamplerFilter, SamplerState, SamplerWrap,
-    ScissorRect,
+    ScissorRect, TextureEffect,
 };
 use crate::texture::{TextureImage, TextureRegistry};
 use crate::vertex::{GpuRgbVertex, GpuTexVertex, RgbVertex, TexVertex};
@@ -68,6 +68,11 @@ const SHADER_TEX_FRAGMENT: &str = r#"
 fn tex_fs(in: TexOut) -> @location(0) vec4<f32> {
     return textureSample(tex_image, tex_sampler, in.uv) * in.color;
 }
+
+@fragment
+fn world_tex_fs(in: TexOut) -> @location(0) vec4<f32> {
+    return textureSample(tex_image, tex_sampler, in.uv) * in.color;
+}
 "#;
 
 #[cfg(feature = "shaderson")]
@@ -78,6 +83,16 @@ fn tex_alpha(uv: vec2<f32>) -> f32 {
 
 @fragment
 fn tex_fs(in: TexOut) -> @location(0) vec4<f32> {
+    let base = textureSample(tex_image, tex_sampler, in.uv) * in.color;
+    return base;
+}
+
+fn hash21(pixel: vec2<f32>) -> f32 {
+    return fract(sin(dot(pixel, vec2<f32>(12.9898, 78.233))) * 43758.5453);
+}
+
+@fragment
+fn world_tex_fs(in: TexOut) -> @location(0) vec4<f32> {
     let base = textureSample(tex_image, tex_sampler, in.uv) * in.color;
     let dims = max(vec2<f32>(textureDimensions(tex_image, 0u)), vec2<f32>(1.0, 1.0));
     let texel = 1.0 / dims;
@@ -96,20 +111,36 @@ fn tex_fs(in: TexOut) -> @location(0) vec4<f32> {
     }
 
     let coverage = smoothstep(0.02, 0.20, base.a);
-    let highlight_edge = max(0.0, 1.0 - min(left, up)) * coverage;
-    let shadow_edge = max(0.0, 1.0 - min(right, down)) * coverage;
-
     let luma = dot(base.rgb, vec3<f32>(0.299, 0.587, 0.114));
-    let gray = vec3<f32>(luma);
-    var rgb = gray + (base.rgb - gray) * 1.14;
-    rgb = (rgb - vec3<f32>(0.5, 0.5, 0.5)) * 1.08 + vec3<f32>(0.5, 0.5, 0.5);
-    rgb += vec3<f32>(1.0, 0.90, 0.56) * highlight_edge * 0.13;
-    rgb -= vec3<f32>(0.035, 0.045, 0.075) * shadow_edge * 0.38;
-
     let pixel = floor(in.position.xy);
-    let hash = fract(sin(dot(pixel, vec2<f32>(12.9898, 78.233))) * 43758.5453);
-    let checker = step(0.5, fract((pixel.x + pixel.y) * 0.5)) * 0.024 - 0.012;
-    rgb *= 0.988 + (hash - 0.5) * 0.030 + checker;
+    let water = smoothstep(0.04, 0.20, base.b - base.r)
+        * smoothstep(0.02, 0.18, base.g - base.r);
+    let foliage = smoothstep(0.03, 0.22, base.g - max(base.r, base.b));
+    let gold = smoothstep(0.08, 0.34, base.r - base.b)
+        * smoothstep(0.00, 0.22, base.g - base.b)
+        * smoothstep(0.34, 0.78, luma);
+
+    let local_y = fract(in.uv.y * dims.y);
+    let tile_band = smoothstep(0.0, 0.55, local_y) * (1.0 - smoothstep(0.72, 1.0, local_y));
+    let top_light = max(0.0, 1.0 - min(left, up)) * coverage;
+    let foot_shadow = max(0.0, 1.0 - min(right, down)) * coverage;
+    let alpha_slope = clamp((right + down - left - up) * 0.38, -0.22, 0.22);
+
+    let gray = vec3<f32>(luma);
+    var rgb = gray + (base.rgb - gray) * (1.05 + foliage * 0.08 + gold * 0.10);
+    rgb += vec3<f32>(1.0, 0.86, 0.52) * top_light * (0.08 + gold * 0.12);
+    rgb -= vec3<f32>(0.025, 0.040, 0.075) * foot_shadow * (0.30 + foliage * 0.16);
+    rgb += vec3<f32>(0.030, 0.050, 0.020) * foliage * tile_band;
+    rgb += vec3<f32>(0.045, 0.075, 0.090) * water;
+    rgb *= 1.0 + alpha_slope;
+
+    let ripple = sin((pixel.x + pixel.y * 0.45) * 0.42) * 0.018;
+    rgb += vec3<f32>(0.04, 0.07, 0.10) * water * ripple;
+    rgb += vec3<f32>(1.0, 0.82, 0.30) * gold * step(0.965, hash21(pixel)) * 0.20;
+
+    let grain = hash21(pixel) - 0.5;
+    let dither = step(0.5, fract((pixel.x + pixel.y) * 0.5)) * 0.018 - 0.009;
+    rgb *= 0.995 + grain * 0.018 + dither;
 
     return vec4<f32>(clamp(rgb, vec3<f32>(0.0), vec3<f32>(1.0)), base.a);
 }
@@ -133,6 +164,7 @@ enum PipelineKind {
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 struct PipelineKey {
     kind: PipelineKind,
+    texture_effect: TextureEffect,
     blend: BlendState,
     format: wgpu::TextureFormat,
 }
@@ -156,6 +188,7 @@ pub struct WgpuRenderer {
     pipelines: HashMap<PipelineKey, wgpu::RenderPipeline>,
     textures: HashMap<u32, GpuTexture>,
     sampler: SamplerState,
+    texture_effect: TextureEffect,
     blend: BlendState,
     scissor: Option<ScissorRect>,
 }
@@ -237,6 +270,7 @@ impl WgpuRenderer {
             pipelines: HashMap::new(),
             textures: HashMap::new(),
             sampler: SamplerState::default(),
+            texture_effect: TextureEffect::default(),
             blend: BlendState::default(),
             scissor: None,
         })
@@ -287,6 +321,7 @@ impl WgpuRenderer {
         });
 
         self.sampler = SamplerState::default();
+        self.texture_effect = TextureEffect::default();
         self.blend = BlendState::default();
         self.scissor = None;
 
@@ -308,6 +343,7 @@ impl WgpuRenderer {
             match command {
                 FrameCommand::SetBlend(blend) => self.blend = *blend,
                 FrameCommand::SetSampler(sampler) => self.sampler = *sampler,
+                FrameCommand::SetTextureEffect(effect) => self.texture_effect = *effect,
                 FrameCommand::SetScissor(scissor) => {
                     self.scissor = if current_target == 0 {
                         scissor.map(|rect| self.clip_surface_scissor(rect))
@@ -643,6 +679,11 @@ impl WgpuRenderer {
     ) -> &wgpu::RenderPipeline {
         let key = PipelineKey {
             kind,
+            texture_effect: if matches!(kind, PipelineKind::Tex) {
+                self.texture_effect
+            } else {
+                TextureEffect::Plain
+            },
             blend: self.blend,
             format,
         };
@@ -668,7 +709,10 @@ impl WgpuRenderer {
             ),
             PipelineKind::Tex => (
                 "tex_vs",
-                "tex_fs",
+                match key.texture_effect {
+                    TextureEffect::Plain => "tex_fs",
+                    TextureEffect::World => "world_tex_fs",
+                },
                 vec![GpuTexVertex::layout()],
                 self.device
                     .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
