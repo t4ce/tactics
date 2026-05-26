@@ -4,7 +4,7 @@ use adapterlibgfx::api::{Adapter, AdapterConfig};
 use adapterlibgfx::command::{ScissorRect, TextureEffect};
 use adapterlibgfx::vertex::{Rgba8, TexVertex};
 use adapterlibgfx::window::{
-    FrameProducer, InputButtonState, InputEvent, InputKey, InputMouseButton, WgpuSixWindowApp,
+    FrameProducer, InputButtonState, InputEvent, InputKey, InputMouseButton, WgpuSevenWindowApp,
 };
 use std::collections::{BTreeMap, HashSet};
 use std::fs;
@@ -18,10 +18,6 @@ mod worldviewer;
 
 const WINDOW_WIDTH: u32 = 1280;
 const WINDOW_HEIGHT: u32 = 800;
-#[cfg(test)]
-const EXPLORER_WIDTH: u32 = 640;
-#[cfg(test)]
-const EXPLORER_HEIGHT: u32 = 520;
 const UNIT_VIEWER_WIDTH: u32 = 640;
 const UNIT_VIEWER_HEIGHT: u32 = 520;
 const ICON_VIEWER_WIDTH: u32 = 360;
@@ -53,10 +49,9 @@ const PLANT_PROP_TEXTURE_STRIDE: u32 = 64;
 const GOLD_PROP_TEXTURE_BASE: u32 = 1400;
 const GOLD_PROP_TEXTURE_STRIDE: u32 = 64;
 const ROCK_PROP_TEXTURE_BASE: u32 = 1900;
-#[cfg(test)]
-const ASE_EXPLORER_TEXTURE_BASE: u32 = 1000;
 const UNIT_VIEWER_TEXTURE_BASE: u32 = 5000;
 const ICON_VIEWER_TEXTURE_BASE: u32 = 7000;
+const IDLE_WORLD_TEXTURE_BASE: u32 = 9000;
 const TERRAIN_TILE_PX: u32 = 64;
 const TERRAIN_BYTES: &[u8] = include_bytes!("../ts_freepack/Terrain/Tileset/Tilemap_color2.png");
 const CURSOR_DEFAULT_BYTES: &[u8] =
@@ -198,42 +193,34 @@ const PALETTE_GAP: f32 = 0.0;
 const EDGE_SCROLL_ZONE: f32 = 72.0;
 const EDGE_SCROLL_SPEED: f32 = 560.0;
 const DEFAULT_SEED: u64 = 0x5EED_2026;
-#[cfg(test)]
-const ASE_EXPLORER_TINTS: [Rgba8; 5] = [
-    Rgba8::WHITE,
-    Rgba8::new(255, 214, 214, 255),
-    Rgba8::new(216, 255, 218, 255),
-    Rgba8::new(214, 235, 255, 255),
-    Rgba8::new(255, 243, 188, 255),
-];
-#[cfg(test)]
-const ASEPRITE_STASH: [&str; 18] = [
-    "ts_freepack/Archer.aseprite",
-    "ts_freepack/Bushes.aseprite",
-    "ts_freepack/Clouds.aseprite",
-    "ts_freepack/Gold Resource.aseprite",
-    "ts_freepack/Gold Stones.aseprite",
-    "ts_freepack/Lancer.aseprite",
-    "ts_freepack/Monk.aseprite",
-    "ts_freepack/Particle FX.aseprite",
-    "ts_freepack/Pawn.aseprite",
-    "ts_freepack/Rubber Duck.aseprite",
-    "ts_freepack/Sheep.aseprite",
-    "ts_freepack/Trees.aseprite",
-    "ts_freepack/Warrior.aseprite",
-    "ts_freepack/Water Foam.aseprite",
-    "ts_freepack/Water Rocks_01.aseprite",
-    "ts_freepack/Water Rocks_02.aseprite",
-    "ts_freepack/Water Rocks_03.aseprite",
-    "ts_freepack/Water Rocks_04.aseprite",
-];
-#[cfg(test)]
-const GOLD_EXPLORER_PATHS: [&str; 2] = [
-    "ts_freepack/Gold Stones.aseprite",
-    "ts_freepack/Gold Resource.aseprite",
-];
+const IDLE_WORLD_VIRTUAL_WIDTH: f32 = WINDOW_WIDTH as f32;
+const IDLE_WORLD_VIRTUAL_HEIGHT: f32 = WINDOW_HEIGHT as f32;
+const IDLE_WORLD_MIN_SELECTION_DRAG_PX: f32 = 5.0;
 const PAWN_ASEPRITE_PATH: &str = "ts_freepack/Pawn.aseprite";
 const PARTICLE_FX_ASEPRITE_PATH: &str = "ts_freepack/Particle FX.aseprite";
+const IDLE_WORLD_UNIT_SPECS: [UnitWalkSpec; 5] = [
+    UnitWalkSpec::animated("Archer Idle", "ts_freepack/Archer.aseprite", "Idle"),
+    UnitWalkSpec::animated_offset(
+        "Lancer Idle",
+        "ts_freepack/Lancer.aseprite",
+        "Idle",
+        0.0,
+        -16.0,
+    ),
+    UnitWalkSpec::animated("Monk Idle", "ts_freepack/Monk.aseprite", "Idle"),
+    UnitWalkSpec::animated("Warrior Idle", "ts_freepack/Warrior.aseprite", "Idle"),
+    UnitWalkSpec::animated_offset("Sheep Idle", "ts_freepack/Sheep.aseprite", "Idle", 0.0, 8.0),
+];
+const PAWN_IDLE_TAGS: [&str; 8] = [
+    "Idle",
+    "Idle Wood",
+    "Idle Meat",
+    "Idle Gold",
+    "Idle Hammer",
+    "Idle Axe",
+    "Idle Knife",
+    "Idle Pickaxe",
+];
 const UNIT_WALK_SPECS: [UnitWalkSpec; 14] = [
     UnitWalkSpec::animated("Archer", "ts_freepack/Archer.aseprite", "Run"),
     UnitWalkSpec::animated("Archer Idle", "ts_freepack/Archer.aseprite", "Idle"),
@@ -260,7 +247,7 @@ const UNIT_WALK_SPECS: [UnitWalkSpec; 14] = [
 ];
 
 pub(crate) fn run() {
-    WgpuSixWindowApp::new(
+    WgpuSevenWindowApp::new(
         "tactics world editor",
         AdapterConfig {
             width: WINDOW_WIDTH,
@@ -297,6 +284,12 @@ pub(crate) fn run() {
             height: EVENT_EDITOR_HEIGHT,
         },
         EventEditor::new(),
+        "tactics idle world",
+        AdapterConfig {
+            width: WINDOW_WIDTH,
+            height: WINDOW_HEIGHT,
+        },
+        IdleWorldViewer::new(),
     )
     .run()
     .expect("window loop failed");
@@ -905,18 +898,25 @@ struct Game {
     last_frame: Instant,
 }
 
-#[cfg(test)]
-struct AsepriteExplorer {
-    files: Vec<ExplorerFile>,
-    selected: usize,
+struct UnitWalkViewer {
+    units: Vec<UnitWalkClip>,
     uploaded: bool,
     window_width: u32,
     window_height: u32,
     started_at: Instant,
 }
 
-struct UnitWalkViewer {
+struct IdleWorldViewer {
+    terrain: TextureAtlas,
+    cursor_default: ImageAsset,
+    cursor_hover: ImageAsset,
+    cursor_select: ImageAsset,
+    clouds: Vec<ImageAsset>,
+    cloud_instances: Vec<CloudInstance>,
     units: Vec<UnitWalkClip>,
+    selected_units: Vec<usize>,
+    selection_start: Option<Point>,
+    mouse: Point,
     uploaded: bool,
     window_width: u32,
     window_height: u32,
@@ -940,6 +940,14 @@ struct IconViewer {
 struct IconTile {
     label: String,
     image: ImageAsset,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct IdleUnitDraw {
+    index: usize,
+    depth_y: f32,
+    texture_id: u32,
+    rect: TableRect,
 }
 
 struct EventEditor {
@@ -1073,26 +1081,12 @@ impl ScenarioAction {
     }
 }
 
-#[cfg(test)]
-struct ExplorerFile {
-    frames: Vec<ExplorerFrame>,
-    clips: Vec<ExplorerClip>,
-    tint_index: usize,
-}
-
 struct ExplorerFrame {
     texture_id: u32,
     width: u32,
     height: u32,
     rgba: Vec<u8>,
     duration_ms: u32,
-}
-
-#[cfg(test)]
-struct ExplorerClip {
-    name: String,
-    frame_indices: Vec<usize>,
-    total_duration_ms: u32,
 }
 
 struct UnitWalkClip {
@@ -1264,6 +1258,7 @@ struct TerrainDrawCell {
 #[derive(Debug)]
 struct TerrainDrawCache {
     backgrounds: Vec<TerrainDrawCell>,
+    under_foregrounds: Vec<TerrainDrawCell>,
     foregrounds: Vec<TerrainDrawCell>,
     dirty: bool,
 }
@@ -1272,6 +1267,7 @@ impl TerrainDrawCache {
     fn new() -> Self {
         Self {
             backgrounds: Vec::new(),
+            under_foregrounds: Vec::new(),
             foregrounds: Vec::new(),
             dirty: true,
         }
@@ -1287,6 +1283,7 @@ impl TerrainDrawCache {
         }
 
         self.backgrounds.clear();
+        self.under_foregrounds.clear();
         self.foregrounds.clear();
         for row in 0..world.rows {
             for col in 0..world.cols {
@@ -1296,6 +1293,10 @@ impl TerrainDrawCache {
                         col,
                         row,
                     });
+                }
+                if let Some(tile) = world.under_foreground(col, row) {
+                    self.under_foregrounds
+                        .push(TerrainDrawCell { tile, col, row });
                 }
                 if let Some(tile) = world.foreground(col, row) {
                     self.foregrounds.push(TerrainDrawCell { tile, col, row });
@@ -1308,22 +1309,14 @@ impl TerrainDrawCache {
 }
 
 fn initial_editor_world() -> TileWorld {
-    #[cfg(test)]
-    {
-        TileWorld::new(WORLD_COLS, WORLD_ROWS)
-    }
-
-    #[cfg(not(test))]
-    {
-        match TileWorld::load_from_path(WORLD_SAVE_PATH) {
-            Ok(world) => {
-                eprintln!("loaded world from {WORLD_SAVE_PATH}");
-                world
-            }
-            Err(error) => {
-                eprintln!("using empty grass world: failed to load {WORLD_SAVE_PATH}: {error}");
-                TileWorld::new(WORLD_COLS, WORLD_ROWS)
-            }
+    match TileWorld::load_from_path(WORLD_SAVE_PATH) {
+        Ok(world) => {
+            eprintln!("loaded world from {WORLD_SAVE_PATH}");
+            world
+        }
+        Err(error) => {
+            eprintln!("using empty grass world: failed to load {WORLD_SAVE_PATH}: {error}");
+            TileWorld::new(WORLD_COLS, WORLD_ROWS)
         }
     }
 }
@@ -1959,6 +1952,7 @@ impl Game {
         self.terrain_cache.rebuild_if_dirty(&self.world);
         let mut water = SolidBatch::new(self.window_width, self.window_height);
         let mut backgrounds = SpriteBatch::new(self.window_width, self.window_height);
+        let mut under_foregrounds = SpriteBatch::new(self.window_width, self.window_height);
         let mut foregrounds = SpriteBatch::new(self.window_width, self.window_height);
         let start_col = (self.camera.x / TILE_SIZE).floor().max(0.0) as usize;
         let start_row = (self.camera.y / TILE_SIZE).floor().max(0.0) as usize;
@@ -1988,6 +1982,25 @@ impl Game {
             let x = VIEW_X + cell.col as f32 * TILE_SIZE - self.camera.x;
             let y = VIEW_Y + cell.row as f32 * TILE_SIZE - self.camera.y;
             backgrounds.sprite(
+                &self.terrain,
+                cell.tile,
+                x,
+                y,
+                TILE_SIZE,
+                TILE_SIZE,
+                Rgba8::WHITE,
+            );
+        }
+
+        for cell in self
+            .terrain_cache
+            .under_foregrounds
+            .iter()
+            .filter(|cell| terrain_cell_visible(cell, start_col, start_row, end_col, end_row))
+        {
+            let x = VIEW_X + cell.col as f32 * TILE_SIZE - self.camera.x;
+            let y = VIEW_Y + cell.row as f32 * TILE_SIZE - self.camera.y;
+            under_foregrounds.sprite(
                 &self.terrain,
                 cell.tile,
                 x,
@@ -2060,6 +2073,8 @@ impl Game {
         let _ = adapter.draw_rgb_triangles_no_present(&water.bytes);
         let _ = adapter.draw_tex_triangles_no_present(self.terrain.texture_id, &backgrounds.bytes);
         self.draw_water_states(adapter);
+        let _ = adapter
+            .draw_tex_triangles_no_present(self.terrain.texture_id, &under_foregrounds.bytes);
         let _ = adapter.draw_tex_triangles_no_present(self.terrain.texture_id, &foregrounds.bytes);
         self.draw_props(adapter);
         self.draw_prop_preview(adapter);
@@ -3027,7 +3042,7 @@ impl Game {
             .selected
             .map(brush_developer_name)
             .unwrap_or_else(|| "BUILDINGS".to_string());
-        let scale = 2.0;
+        let scale = 1.0;
         let text_width = ui_text_width(&caption, scale);
         ui.text(
             &caption,
@@ -3165,96 +3180,6 @@ impl FrameProducer for Game {
     }
 }
 
-#[cfg(test)]
-impl AsepriteExplorer {
-    fn new() -> Self {
-        let mut next_texture_id = ASE_EXPLORER_TEXTURE_BASE;
-        let files = ASEPRITE_STASH
-            .iter()
-            .filter_map(|&path| {
-                if path == "ts_freepack/Gold Resource.aseprite" {
-                    return load_explorer_file_group(&GOLD_EXPLORER_PATHS, &mut next_texture_id);
-                }
-                if path == "ts_freepack/Gold Stones.aseprite" {
-                    return None;
-                }
-
-                load_explorer_file(path, &mut next_texture_id)
-            })
-            .collect();
-
-        Self {
-            files,
-            selected: 0,
-            uploaded: false,
-            window_width: EXPLORER_WIDTH,
-            window_height: EXPLORER_HEIGHT,
-            started_at: Instant::now(),
-        }
-    }
-
-    fn resize_view(&mut self, width: u32, height: u32) {
-        self.window_width = width.max(1);
-        self.window_height = height.max(1);
-    }
-
-    fn upload_assets(&mut self, adapter: &mut Adapter) {
-        if self.uploaded {
-            return;
-        }
-
-        for image in [
-            ImageAsset::from_png_bytes(ts_ui::BANNER_TEXTURE, ts_ui::BANNER_BYTES),
-            ImageAsset::from_png_bytes(ts_ui::BIG_RIBBONS_TEXTURE, ts_ui::BIG_RIBBONS_BYTES),
-        ] {
-            let rc = adapter.upload_texture_rgba_image(
-                image.texture_id,
-                image.width,
-                image.height,
-                &image.rgba,
-            );
-            assert_eq!(
-                rc, 0,
-                "failed to upload explorer ui texture {}",
-                image.texture_id
-            );
-        }
-
-        for file in &self.files {
-            for frame in &file.frames {
-                let rc = adapter.upload_texture_rgba_image(
-                    frame.texture_id,
-                    frame.width,
-                    frame.height,
-                    &frame.rgba,
-                );
-                assert_eq!(
-                    rc, 0,
-                    "failed to upload explorer aseprite texture {}",
-                    frame.texture_id
-                );
-            }
-        }
-
-        self.uploaded = true;
-    }
-
-    fn select_next(&mut self, steps: isize) {
-        if self.files.is_empty() {
-            return;
-        }
-
-        let len = self.files.len() as isize;
-        self.selected = (self.selected as isize + steps).rem_euclid(len) as usize;
-    }
-
-    fn cycle_tint(&mut self) {
-        if let Some(file) = self.files.get_mut(self.selected) {
-            file.tint_index = (file.tint_index + 1) % ASE_EXPLORER_TINTS.len();
-        }
-    }
-}
-
 impl UnitWalkViewer {
     fn new() -> Self {
         let mut next_texture_id = UNIT_VIEWER_TEXTURE_BASE;
@@ -3319,6 +3244,392 @@ impl UnitWalkViewer {
         }
 
         self.uploaded = true;
+    }
+}
+
+impl IdleWorldViewer {
+    fn new() -> Self {
+        let mut next_texture_id = IDLE_WORLD_TEXTURE_BASE;
+        let mut units = load_idle_world_unit_clips(&mut next_texture_id);
+        units.extend(load_pawn_idle_unit_clips(&mut next_texture_id));
+        let clouds = load_cloud_assets();
+        let cloud_instances = generate_clouds(
+            DEFAULT_SEED ^ 0x1D1E_2026,
+            &clouds,
+            (IDLE_WORLD_VIRTUAL_WIDTH / TILE_SIZE).ceil() as usize,
+            (IDLE_WORLD_VIRTUAL_HEIGHT / TILE_SIZE).ceil() as usize,
+        );
+
+        Self {
+            terrain: TextureAtlas::from_png_bytes(TERRAIN_TEXTURE, TERRAIN_BYTES, TERRAIN_TILE_PX),
+            cursor_default: ImageAsset::from_png_bytes_cropped(
+                CURSOR_DEFAULT_TEXTURE,
+                CURSOR_DEFAULT_BYTES,
+            ),
+            cursor_hover: ImageAsset::from_png_bytes_cropped(
+                CURSOR_HOVER_TEXTURE,
+                CURSOR_HOVER_BYTES,
+            ),
+            cursor_select: ImageAsset::from_png_bytes(CURSOR_SELECT_TEXTURE, CURSOR_SELECT_BYTES),
+            clouds,
+            cloud_instances,
+            units,
+            selected_units: Vec::new(),
+            selection_start: None,
+            mouse: Point::default(),
+            uploaded: false,
+            window_width: WINDOW_WIDTH,
+            window_height: WINDOW_HEIGHT,
+            started_at: Instant::now(),
+        }
+    }
+
+    fn resize_view(&mut self, width: u32, height: u32) {
+        self.window_width = width.max(1);
+        self.window_height = height.max(1);
+    }
+
+    fn upload_assets(&mut self, adapter: &mut Adapter) {
+        if self.uploaded {
+            return;
+        }
+
+        let rc = adapter.upload_texture_rgba_image(
+            self.terrain.texture_id,
+            self.terrain.width,
+            self.terrain.height,
+            &self.terrain.rgba,
+        );
+        assert_eq!(rc, 0, "failed to upload idle world terrain texture");
+
+        let small_bar_base =
+            ImageAsset::from_png_bytes(ts_ui::SMALL_BAR_BASE_TEXTURE, ts_ui::SMALL_BAR_BASE_BYTES);
+        for image in [
+            &self.cursor_default,
+            &self.cursor_hover,
+            &self.cursor_select,
+            &small_bar_base,
+        ] {
+            let rc = adapter.upload_texture_rgba_image(
+                image.texture_id,
+                image.width,
+                image.height,
+                &image.rgba,
+            );
+            assert_eq!(
+                rc, 0,
+                "failed to upload idle world ui texture {}",
+                image.texture_id
+            );
+        }
+
+        for image in &self.clouds {
+            let rc = adapter.upload_texture_rgba_image(
+                image.texture_id,
+                image.width,
+                image.height,
+                &image.rgba,
+            );
+            assert_eq!(
+                rc, 0,
+                "failed to upload idle world cloud texture {}",
+                image.texture_id
+            );
+        }
+
+        for unit in &self.units {
+            for frame in &unit.frames {
+                let rc = adapter.upload_texture_rgba_image(
+                    frame.texture_id,
+                    frame.width,
+                    frame.height,
+                    &frame.rgba,
+                );
+                assert_eq!(
+                    rc, 0,
+                    "failed to upload idle world texture {}",
+                    frame.texture_id
+                );
+            }
+        }
+
+        self.uploaded = true;
+    }
+
+    fn elapsed_ms(&self) -> u32 {
+        self.started_at.elapsed().as_millis() as u32
+    }
+
+    fn unit_rect(&self, index: usize, elapsed_ms: u32) -> Option<(TableRect, &ExplorerFrame)> {
+        let unit = self.units.get(index)?;
+        let frame = unit_walk_frame(unit, elapsed_ms);
+        let scale = 1.0;
+        let w = frame.width as f32 * scale;
+        let h = frame.height as f32 * scale;
+        let foot = idle_world_unit_foot_position(index, self.units.len().max(1));
+        Some((
+            TableRect {
+                x: foot.x - w * 0.5 + unit.offset_x,
+                y: foot.y - h + unit.offset_y,
+                w,
+                h,
+            },
+            frame,
+        ))
+    }
+
+    fn unit_draws(&self, elapsed_ms: u32) -> Vec<IdleUnitDraw> {
+        let mut draws = self
+            .units
+            .iter()
+            .enumerate()
+            .filter_map(|(index, _)| {
+                let (rect, frame) = self.unit_rect(index, elapsed_ms)?;
+                Some(IdleUnitDraw {
+                    index,
+                    depth_y: rect.y + rect.h,
+                    texture_id: frame.texture_id,
+                    rect,
+                })
+            })
+            .collect::<Vec<_>>();
+        draws.sort_by(|a, b| {
+            a.depth_y
+                .partial_cmp(&b.depth_y)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+        draws
+    }
+
+    fn unit_at_point(&self, point: Point, elapsed_ms: u32) -> Option<usize> {
+        for draw in self.unit_draws(elapsed_ms).iter().rev() {
+            let (rect, frame) = self.unit_rect(draw.index, elapsed_ms)?;
+            if !inside_rect(point.x, point.y, rect.x, rect.y, rect.w, rect.h) {
+                continue;
+            }
+
+            let px = ((point.x - rect.x) / rect.w * frame.width as f32).floor() as usize;
+            let py = ((point.y - rect.y) / rect.h * frame.height as f32).floor() as usize;
+            if px >= frame.width as usize || py >= frame.height as usize {
+                continue;
+            }
+            let alpha = frame.rgba[(py * frame.width as usize + px) * 4 + 3];
+            if alpha != 0 {
+                return Some(draw.index);
+            }
+        }
+
+        None
+    }
+
+    fn handle_left_click(&mut self) {
+        self.selected_units.clear();
+        if let Some(index) = self.unit_at_point(self.mouse, self.elapsed_ms()) {
+            self.selected_units.push(index);
+        }
+    }
+
+    fn start_selection(&mut self) {
+        self.selection_start = Some(self.mouse);
+    }
+
+    fn finish_selection(&mut self) {
+        if self.selection_drag_is_large_enough() {
+            self.selected_units = self.units_in_selection_rect(self.elapsed_ms());
+        } else {
+            self.handle_left_click();
+        }
+        self.selection_start = None;
+    }
+
+    fn cancel_selection(&mut self) {
+        self.selection_start = None;
+        self.selected_units.clear();
+    }
+
+    fn selection_drag_is_large_enough(&self) -> bool {
+        let Some(start) = self.selection_start else {
+            return false;
+        };
+        (self.mouse.x - start.x).abs() >= IDLE_WORLD_MIN_SELECTION_DRAG_PX
+            || (self.mouse.y - start.y).abs() >= IDLE_WORLD_MIN_SELECTION_DRAG_PX
+    }
+
+    fn selection_rect(&self) -> Option<TableRect> {
+        let start = self.selection_start?;
+        let x0 = start.x.min(self.mouse.x);
+        let y0 = start.y.min(self.mouse.y);
+        let x1 = start.x.max(self.mouse.x);
+        let y1 = start.y.max(self.mouse.y);
+        Some(TableRect {
+            x: x0,
+            y: y0,
+            w: (x1 - x0).max(1.0),
+            h: (y1 - y0).max(1.0),
+        })
+    }
+
+    fn active_selection_rect(&self) -> Option<TableRect> {
+        self.selection_drag_is_large_enough()
+            .then(|| self.selection_rect())
+            .flatten()
+    }
+
+    fn units_in_selection_rect(&self, elapsed_ms: u32) -> Vec<usize> {
+        let Some(selection) = self.selection_rect() else {
+            return Vec::new();
+        };
+        self.unit_draws(elapsed_ms)
+            .into_iter()
+            .filter(|draw| rects_intersect(selection, draw.rect))
+            .map(|draw| draw.index)
+            .collect()
+    }
+
+    fn cursor_image(&self, elapsed_ms: u32) -> &ImageAsset {
+        if self.selection_start.is_some() {
+            &self.cursor_default
+        } else if self.unit_at_point(self.mouse, elapsed_ms).is_some() {
+            &self.cursor_hover
+        } else {
+            &self.cursor_default
+        }
+    }
+
+    fn draw_clouds(&self, adapter: &mut Adapter) {
+        if self.clouds.is_empty() {
+            return;
+        }
+
+        let elapsed = self.started_at.elapsed().as_secs_f32();
+        let mut batches = BTreeMap::new();
+        for cloud in &self.cloud_instances {
+            let image = &self.clouds[cloud.asset_index % self.clouds.len()];
+            let fade = ((elapsed * 0.12 + cloud.phase).sin() + 1.0) * 0.5;
+            let alpha =
+                (cloud.alpha_min + (cloud.alpha_max - cloud.alpha_min) * fade).clamp(0.0, 1.0);
+            let scale =
+                cloud.scale * (1.0 + cloud.scale_wobble * (elapsed * 0.18 + cloud.phase).sin());
+            let wrap_w = IDLE_WORLD_VIRTUAL_WIDTH + image.width as f32 * scale;
+            let wrap_h = IDLE_WORLD_VIRTUAL_HEIGHT + image.height as f32 * scale;
+            let x = (cloud.x + cloud.drift_x * elapsed).rem_euclid(wrap_w)
+                - image.width as f32 * scale * 0.5;
+            let y = (cloud.y + cloud.drift_y * elapsed).rem_euclid(wrap_h)
+                - image.height as f32 * scale * 0.5;
+            let w = image.width as f32 * scale;
+            let h = image.height as f32 * scale;
+            if x + w < 0.0
+                || y + h < 0.0
+                || x > self.window_width as f32
+                || y > self.window_height as f32
+            {
+                continue;
+            }
+
+            batches
+                .entry(image.texture_id)
+                .or_insert_with(|| SpriteBatch::new(self.window_width, self.window_height))
+                .image(
+                    x.floor(),
+                    y.floor(),
+                    w.floor().max(1.0),
+                    h.floor().max(1.0),
+                    Rgba8::new(255, 255, 255, (alpha * 255.0).round() as u8),
+                );
+        }
+
+        for (texture_id, batch) in batches {
+            let _ = adapter.draw_tex_triangles_no_present(texture_id, &batch.bytes);
+        }
+    }
+
+    fn draw_selection_corners(&self, adapter: &mut Adapter, rect: TableRect) {
+        let mut corners = SpriteBatch::new(self.window_width, self.window_height);
+        let [top_left, top_right, bottom_left, bottom_right] = SELECT_CORNER_SOURCES;
+        let corner_w = top_left.width as f32;
+        let corner_h = top_left.height as f32;
+        let x = rect.x.floor() - 4.0;
+        let y = rect.y.floor() - 4.0;
+        let w = rect.w.ceil() + 8.0;
+        let h = rect.h.ceil() + 8.0;
+
+        corners.image_region(
+            &self.cursor_select,
+            top_left,
+            x,
+            y,
+            corner_w,
+            corner_h,
+            Rgba8::WHITE,
+        );
+        corners.image_region(
+            &self.cursor_select,
+            top_right,
+            x + w - corner_w,
+            y,
+            corner_w,
+            corner_h,
+            Rgba8::WHITE,
+        );
+        corners.image_region(
+            &self.cursor_select,
+            bottom_left,
+            x,
+            y + h - corner_h,
+            corner_w,
+            corner_h,
+            Rgba8::WHITE,
+        );
+        corners.image_region(
+            &self.cursor_select,
+            bottom_right,
+            x + w - corner_w,
+            y + h - corner_h,
+            corner_w,
+            corner_h,
+            Rgba8::WHITE,
+        );
+
+        let _ =
+            adapter.draw_tex_triangles_no_present(self.cursor_select.texture_id, &corners.bytes);
+    }
+
+    fn draw_selected_unit_ui(&self, adapter: &mut Adapter, elapsed_ms: u32) {
+        let mut health_bars = ts_ui::SmallBarBatch::new(self.window_width, self.window_height);
+        for &selected in &self.selected_units {
+            let Some((rect, _)) = self.unit_rect(selected, elapsed_ms) else {
+                continue;
+            };
+
+            let bar_w = 42.0;
+            let bar_h = 8.0;
+            health_bars.small_bar(
+                (rect.x + (rect.w - bar_w) * 0.5).floor(),
+                (rect.y - bar_h - 4.0).floor(),
+                bar_w,
+                bar_h,
+                1.0,
+                DemoUnitTeam::for_unit_index(selected).health_bar_color(),
+                Rgba8::new(255, 255, 255, 245),
+            );
+        }
+        if health_bars.base_bytes.is_empty() {
+            return;
+        }
+        let _ = adapter
+            .draw_tex_triangles_no_present(ts_ui::SMALL_BAR_BASE_TEXTURE, &health_bars.base_bytes);
+        let _ = adapter.draw_rgb_triangles_no_present(&health_bars.fill_solid_bytes);
+    }
+
+    fn draw_cursor(&self, adapter: &mut Adapter, elapsed_ms: u32) {
+        if self.selection_drag_is_large_enough() {
+            return;
+        }
+
+        let image = self.cursor_image(elapsed_ms);
+        let mut cursor = SpriteBatch::new(self.window_width, self.window_height);
+        cursor.image(self.mouse.x, self.mouse.y, 28.0, 28.0, Rgba8::WHITE);
+        let _ = adapter.draw_tex_triangles_no_present(image.texture_id, &cursor.bytes);
     }
 }
 
@@ -3489,24 +3800,61 @@ impl EventEditor {
 }
 
 fn load_unit_walk_clip(spec: UnitWalkSpec, next_texture_id: &mut u32) -> Option<UnitWalkClip> {
-    let set = ase_assets::load_tinted_aseprite_set(
+    load_unit_clip_from_tags(
+        spec.label.to_string(),
         spec.path,
+        &[spec.preferred_tag, "Idle"],
+        spec.offset_x,
+        spec.offset_y,
+        next_texture_id,
+    )
+}
+
+fn load_idle_world_unit_clips(next_texture_id: &mut u32) -> Vec<UnitWalkClip> {
+    IDLE_WORLD_UNIT_SPECS
+        .iter()
+        .filter_map(|spec| {
+            let tags: &[&str] = if spec.label == "Sheep Idle" {
+                &["Idle", "Move"]
+            } else {
+                &["Idle"]
+            };
+            load_unit_clip_from_tags(
+                spec.label.to_string(),
+                spec.path,
+                tags,
+                spec.offset_x,
+                spec.offset_y,
+                next_texture_id,
+            )
+        })
+        .collect()
+}
+
+fn load_unit_clip_from_tags(
+    label: String,
+    path: &str,
+    preferred_tags: &[&str],
+    offset_x: f32,
+    offset_y: f32,
+    next_texture_id: &mut u32,
+) -> Option<UnitWalkClip> {
+    let set = ase_assets::load_tinted_aseprite_set(
+        path,
         [255, 255, 255, 255],
         ase_assets::TintMode::Multiply,
     )
     .ok()?;
-    let tag = set
-        .tags
+    let tag = preferred_tags
         .iter()
-        .find(|tag| tag.name.trim() == spec.preferred_tag)
-        .or_else(|| set.tags.iter().find(|tag| tag.name.trim() == "Idle"))?;
+        .find_map(|name| set.tags.iter().find(|tag| tag.name.trim() == *name))?;
     unit_clip_from_frames(
-        spec.label.to_string(),
+        label,
         tag.name.trim().to_string(),
         set.frames
             .get(tag.from_frame as usize..=tag.to_frame as usize)?,
-        spec.offset_x,
-        spec.offset_y,
+        offset_x,
+        offset_y,
         next_texture_id,
     )
 }
@@ -3530,6 +3878,38 @@ fn load_pawn_unit_clips(next_texture_id: &mut u32) -> Vec<UnitWalkClip> {
             unit_clip_from_frames(
                 format!("Pawn {tag_name}"),
                 tag_name,
+                frames,
+                0.0,
+                0.0,
+                next_texture_id,
+            )
+        })
+        .collect()
+}
+
+fn load_pawn_idle_unit_clips(next_texture_id: &mut u32) -> Vec<UnitWalkClip> {
+    let Ok(set) = ase_assets::load_tinted_aseprite_set(
+        PAWN_ASEPRITE_PATH,
+        [255, 255, 255, 255],
+        ase_assets::TintMode::Multiply,
+    ) else {
+        return Vec::new();
+    };
+
+    PAWN_IDLE_TAGS
+        .iter()
+        .filter_map(|tag_name| {
+            let tag = if *tag_name == "Idle" {
+                set.tags.iter().rfind(|tag| tag.name.trim() == *tag_name)?
+            } else {
+                set.tags.iter().find(|tag| tag.name.trim() == *tag_name)?
+            };
+            let frames = set
+                .frames
+                .get(tag.from_frame as usize..=tag.to_frame as usize)?;
+            unit_clip_from_frames(
+                format!("Pawn {tag_name}"),
+                (*tag_name).to_string(),
                 frames,
                 0.0,
                 0.0,
@@ -3633,6 +4013,19 @@ fn unit_walk_frame(unit: &UnitWalkClip, elapsed_ms: u32) -> &ExplorerFrame {
 
 fn unit_viewer_flip_x(elapsed_ms: u32) -> bool {
     (elapsed_ms / 5_000) % 2 == 1
+}
+
+fn idle_world_unit_foot_position(index: usize, count: usize) -> Point {
+    let count = count.max(1);
+    let angle = -std::f32::consts::FRAC_PI_2 + index as f32 / count as f32 * std::f32::consts::TAU;
+    let virtual_cols = IDLE_WORLD_VIRTUAL_WIDTH / TILE_SIZE;
+    let virtual_rows = IDLE_WORLD_VIRTUAL_HEIGHT / TILE_SIZE;
+    let radius_tiles = virtual_cols.min(virtual_rows) * 0.32;
+
+    Point {
+        x: (virtual_cols * 0.5 + angle.cos() * radius_tiles) * TILE_SIZE,
+        y: (virtual_rows * 0.5 + angle.sin() * radius_tiles) * TILE_SIZE,
+    }
 }
 
 fn ui_text_width(text: &str, scale: f32) -> f32 {
@@ -3777,161 +4170,6 @@ fn unit_viewer_label(unit: &UnitWalkClip) -> String {
     } else {
         name
     }
-}
-
-#[cfg(test)]
-fn load_explorer_file(path: &str, next_texture_id: &mut u32) -> Option<ExplorerFile> {
-    let set = ase_assets::load_tinted_aseprite_set(
-        path,
-        [255, 255, 255, 255],
-        ase_assets::TintMode::Multiply,
-    )
-    .ok()?;
-    let frames = set
-        .frames
-        .into_iter()
-        .map(|frame| {
-            let texture_id = *next_texture_id;
-            *next_texture_id += 1;
-            ExplorerFrame {
-                texture_id,
-                width: frame.width,
-                height: frame.height,
-                rgba: frame.rgba,
-                duration_ms: frame.duration_ms.unwrap_or(120).max(1),
-            }
-        })
-        .collect::<Vec<_>>();
-    if frames.is_empty() {
-        return None;
-    }
-    let clips = explorer_clips_from_tags(path, &set.tags, &frames);
-
-    Some(ExplorerFile {
-        frames,
-        clips,
-        tint_index: 0,
-    })
-}
-
-#[cfg(test)]
-fn load_explorer_file_group(paths: &[&str], next_texture_id: &mut u32) -> Option<ExplorerFile> {
-    let mut frames = Vec::new();
-    let mut clips = Vec::new();
-
-    for path in paths {
-        let file = load_explorer_file(path, next_texture_id)?;
-        let frame_offset = frames.len();
-        frames.extend(file.frames);
-        clips.extend(file.clips.into_iter().map(|mut clip| {
-            for frame_index in &mut clip.frame_indices {
-                *frame_index += frame_offset;
-            }
-            clip
-        }));
-    }
-
-    Some(ExplorerFile {
-        frames,
-        clips,
-        tint_index: 0,
-    })
-}
-
-#[cfg(test)]
-fn explorer_clips_from_tags(
-    path: &str,
-    tags: &[ase_assets::AsepriteTag],
-    frames: &[ExplorerFrame],
-) -> Vec<ExplorerClip> {
-    let clips = tags
-        .iter()
-        .filter(|tag| !is_explorer_helper_tag(tag.name.as_str()))
-        .filter_map(|tag| {
-            let frame_indices = (tag.from_frame..=tag.to_frame)
-                .filter_map(|frame| {
-                    let index = frame as usize;
-                    (index < frames.len()).then_some(index)
-                })
-                .collect::<Vec<_>>();
-            if frame_indices.is_empty() {
-                return None;
-            }
-
-            let total_duration_ms = frame_indices
-                .iter()
-                .map(|&index| frames[index].duration_ms)
-                .sum::<u32>()
-                .max(1);
-
-            Some(ExplorerClip {
-                name: tag.name.clone(),
-                frame_indices,
-                total_duration_ms,
-            })
-        })
-        .collect::<Vec<_>>();
-
-    if !clips.is_empty() {
-        return clips;
-    }
-
-    if should_group_untagged_as_single_animation(path, frames) {
-        return vec![ExplorerClip {
-            name: "Animation".to_string(),
-            frame_indices: (0..frames.len()).collect(),
-            total_duration_ms: frames
-                .iter()
-                .map(|frame| frame.duration_ms)
-                .sum::<u32>()
-                .max(1),
-        }];
-    }
-
-    frames
-        .iter()
-        .enumerate()
-        .map(|(index, frame)| ExplorerClip {
-            name: format!("Frame {}", index + 1),
-            frame_indices: vec![index],
-            total_duration_ms: frame.duration_ms.max(1),
-        })
-        .collect()
-}
-
-#[cfg(test)]
-fn is_explorer_helper_tag(name: &str) -> bool {
-    matches!(name, "Still" | "Highlight")
-}
-
-#[cfg(test)]
-fn should_group_untagged_as_single_animation(path: &str, frames: &[ExplorerFrame]) -> bool {
-    frames.len() > 1
-        && (path.contains("Rubber Duck")
-            || path.contains("Water Rocks")
-            || path.contains("Gold Resource"))
-}
-
-#[cfg(test)]
-fn explorer_clip_frame<'a>(
-    clip: &ExplorerClip,
-    frames: &'a [ExplorerFrame],
-    elapsed_ms: u32,
-) -> &'a ExplorerFrame {
-    if clip.frame_indices.len() == 1 {
-        return &frames[clip.frame_indices[0]];
-    }
-
-    let mut cursor = elapsed_ms % clip.total_duration_ms;
-    for &frame_index in &clip.frame_indices {
-        let frame = &frames[frame_index];
-        if cursor < frame.duration_ms {
-            return frame;
-        }
-        cursor -= frame.duration_ms;
-    }
-
-    &frames[clip.frame_indices[0]]
 }
 
 fn load_cloud_assets() -> Vec<ImageAsset> {
@@ -4242,132 +4480,6 @@ fn generate_clouds(
         .collect()
 }
 
-#[cfg(test)]
-impl FrameProducer for AsepriteExplorer {
-    fn resize(&mut self, width: u32, height: u32) {
-        self.resize_view(width, height);
-    }
-
-    fn handle_input(&mut self, event: InputEvent) {
-        match event {
-            InputEvent::MouseWheel { y, .. } => {
-                if y > 0.0 {
-                    self.select_next(-1);
-                } else if y < 0.0 {
-                    self.select_next(1);
-                }
-            }
-            InputEvent::MouseButton {
-                button: InputMouseButton::Left,
-                state: InputButtonState::Pressed,
-            } => {
-                self.cycle_tint();
-            }
-            _ => {}
-        }
-    }
-
-    fn build_frame(&mut self, adapter: &mut Adapter) {
-        self.upload_assets(adapter);
-
-        let _ = adapter.begin_frame(0x243C40);
-        let _ = adapter.set_sampler_raw(0, 0, 0, 0);
-        let _ = adapter.set_blend_raw(1, 0x0302, 0x0303);
-
-        let explorer_w = self.window_width as f32;
-        let explorer_h = self.window_height as f32;
-        let mut title = ts_ui::UiBatch::new(self.window_width, self.window_height);
-        title.big_ribbon(
-            0,
-            22.0,
-            18.0,
-            explorer_w - 44.0,
-            48.0,
-            Rgba8::new(255, 255, 255, 235),
-        );
-        let total = self.files.len().max(1);
-        title.text(
-            &format!("ASE {:02}-{:02}", self.selected + 1, total),
-            44.0,
-            35.0,
-            2.0,
-            Rgba8::new(32, 56, 60, 255),
-        );
-        let _ =
-            adapter.draw_tex_triangles_no_present(ts_ui::BIG_RIBBONS_TEXTURE, &title.texture_bytes);
-        let _ = adapter.draw_rgb_triangles_no_present(&title.solid_bytes);
-
-        if let Some(file) = self.files.get(self.selected) {
-            let elapsed_ms = self.started_at.elapsed().as_millis() as u32;
-            let grid_x = 22.0;
-            let grid_y = 82.0;
-            let grid_w = (explorer_w - 44.0).max(1.0);
-            let grid_h = (explorer_h - 154.0).max(1.0);
-            let count = file.clips.len().max(1);
-            let cols = ((count as f32 * grid_w / grid_h).sqrt().ceil() as usize)
-                .max(1)
-                .min(count);
-            let rows = count.div_ceil(cols).max(1);
-            let cell_w = grid_w / cols as f32;
-            let cell_h = grid_h / rows as f32;
-            let tint = ASE_EXPLORER_TINTS[file.tint_index];
-
-            for (index, clip) in file.clips.iter().enumerate() {
-                let frame = explorer_clip_frame(clip, &file.frames, elapsed_ms);
-                let col = index % cols;
-                let row = index / cols;
-                let scale = (cell_w / frame.width as f32)
-                    .min(cell_h / frame.height as f32)
-                    .min(2.0);
-                let w = frame.width as f32 * scale;
-                let h = frame.height as f32 * scale;
-                let x = grid_x + col as f32 * cell_w + (cell_w - w) * 0.5;
-                let y = grid_y + row as f32 * cell_h + (cell_h - h) * 0.5;
-
-                let mut image = SpriteBatch::new(self.window_width, self.window_height);
-                image.image(
-                    x.floor(),
-                    y.floor(),
-                    w.floor().max(1.0),
-                    h.floor().max(1.0),
-                    tint,
-                );
-                let _ = adapter.draw_tex_triangles_no_present(frame.texture_id, &image.bytes);
-            }
-
-            let mut caption = ts_ui::UiBatch::new(self.window_width, self.window_height);
-            caption.banner_panel(
-                22.0,
-                explorer_h - 58.0,
-                explorer_w - 44.0,
-                34.0,
-                12.0,
-                Rgba8::new(255, 255, 255, 220),
-            );
-            caption.text(
-                &format!(
-                    "ASE {}-{} {}",
-                    file.clips.len(),
-                    file.frames.len(),
-                    file.clips
-                        .first()
-                        .map(|clip| clip.name.as_str())
-                        .unwrap_or("frames")
-                ),
-                44.0,
-                explorer_h - 46.0,
-                2.0,
-                Rgba8::new(32, 56, 60, 255),
-            );
-            let _ = adapter
-                .draw_tex_triangles_no_present(ts_ui::BANNER_TEXTURE, &caption.texture_bytes);
-            let _ = adapter.draw_rgb_triangles_no_present(&caption.solid_bytes);
-        }
-
-        let _ = adapter.end_frame();
-    }
-}
-
 impl FrameProducer for UnitWalkViewer {
     fn resize(&mut self, width: u32, height: u32) {
         self.resize_view(width, height);
@@ -4493,6 +4605,88 @@ impl FrameProducer for UnitWalkViewer {
         let _ =
             adapter.draw_tex_triangles_no_present(ts_ui::BANNER_TEXTURE, &caption.texture_bytes);
         let _ = adapter.draw_rgb_triangles_no_present(&caption.solid_bytes);
+
+        let _ = adapter.end_frame();
+    }
+}
+
+impl FrameProducer for IdleWorldViewer {
+    fn cursor_visible(&self) -> bool {
+        false
+    }
+
+    fn resize(&mut self, width: u32, height: u32) {
+        self.resize_view(width, height);
+    }
+
+    fn handle_input(&mut self, event: InputEvent) {
+        match event {
+            InputEvent::CursorMoved { x, y } => {
+                self.mouse = Point { x, y };
+            }
+            InputEvent::MouseButton {
+                button: InputMouseButton::Left,
+                state: InputButtonState::Pressed,
+            } => self.start_selection(),
+            InputEvent::MouseButton {
+                button: InputMouseButton::Left,
+                state: InputButtonState::Released,
+            } => self.finish_selection(),
+            InputEvent::MouseButton {
+                button: InputMouseButton::Right,
+                state: InputButtonState::Pressed,
+            }
+            | InputEvent::EscapePressed => {
+                self.cancel_selection();
+            }
+            _ => {}
+        }
+    }
+
+    fn build_frame(&mut self, adapter: &mut Adapter) {
+        self.upload_assets(adapter);
+
+        let _ = adapter.begin_frame(0x4B9A48);
+        let _ = adapter.set_sampler_raw(0, 0, 0, 0);
+        let _ = adapter.set_blend_raw(1, 0x0302, 0x0303);
+
+        let mut grass = SpriteBatch::new(self.window_width, self.window_height);
+        let cols = self.window_width.div_ceil(TILE_SIZE as u32);
+        let rows = self.window_height.div_ceil(TILE_SIZE as u32);
+        for row in 0..rows {
+            for col in 0..cols {
+                grass.sprite(
+                    &self.terrain,
+                    GRASS_BG_TILE,
+                    col as f32 * TILE_SIZE,
+                    row as f32 * TILE_SIZE,
+                    TILE_SIZE,
+                    TILE_SIZE,
+                    Rgba8::WHITE,
+                );
+            }
+        }
+        let _ = adapter.draw_tex_triangles_no_present(self.terrain.texture_id, &grass.bytes);
+        self.draw_clouds(adapter);
+
+        let elapsed_ms = self.started_at.elapsed().as_millis() as u32;
+        for draw in self.unit_draws(elapsed_ms) {
+            let mut image = SpriteBatch::new(self.window_width, self.window_height);
+            image.image(
+                draw.rect.x.floor(),
+                draw.rect.y.floor(),
+                draw.rect.w.floor().max(1.0),
+                draw.rect.h.floor().max(1.0),
+                Rgba8::WHITE,
+            );
+            let _ = adapter.draw_tex_triangles_no_present(draw.texture_id, &image.bytes);
+        }
+
+        self.draw_selected_unit_ui(adapter, elapsed_ms);
+        if let Some(rect) = self.active_selection_rect() {
+            self.draw_selection_corners(adapter, rect);
+        }
+        self.draw_cursor(adapter, elapsed_ms);
 
         let _ = adapter.end_frame();
     }
@@ -4743,6 +4937,8 @@ struct TileWorld {
     rows: usize,
     backgrounds: Vec<BackgroundTile>,
     water_states: Vec<WaterState>,
+    #[serde(default)]
+    under_foregrounds: Vec<Option<AtlasTile>>,
     foregrounds: Vec<Option<AtlasTile>>,
     buildings: Vec<PlacedBuilding>,
     props: Vec<PlacedProp>,
@@ -4770,6 +4966,7 @@ impl TileWorld {
             rows,
             backgrounds: vec![BackgroundTile::Grass; cols * rows],
             water_states: vec![WaterState::Nothing; cols * rows],
+            under_foregrounds: vec![None; cols * rows],
             foregrounds: vec![None; cols * rows],
             buildings: Vec::new(),
             props: Vec::new(),
@@ -4784,6 +4981,7 @@ impl TileWorld {
                     .splice(0..0, vec![BackgroundTile::Grass; self.cols]);
                 self.water_states
                     .splice(0..0, vec![WaterState::Nothing; self.cols]);
+                self.under_foregrounds.splice(0..0, vec![None; self.cols]);
                 self.foregrounds.splice(0..0, vec![None; self.cols]);
                 self.fog.splice(0..0, vec![false; self.cols]);
                 self.rows += 1;
@@ -4794,6 +4992,8 @@ impl TileWorld {
                     .extend(std::iter::repeat_n(BackgroundTile::Grass, self.cols));
                 self.water_states
                     .extend(std::iter::repeat_n(WaterState::Nothing, self.cols));
+                self.under_foregrounds
+                    .extend(std::iter::repeat_n(None, self.cols));
                 self.foregrounds
                     .extend(std::iter::repeat_n(None, self.cols));
                 self.fog.extend(std::iter::repeat_n(false, self.cols));
@@ -4820,6 +5020,7 @@ impl TileWorld {
                 self.drop_props_before_shift(|prop| prop.y2 >= BUILDING_GRID_DIVISIONS);
                 self.backgrounds.drain(0..self.cols);
                 self.water_states.drain(0..self.cols);
+                self.under_foregrounds.drain(0..self.cols);
                 self.foregrounds.drain(0..self.cols);
                 self.fog.drain(0..self.cols);
                 self.rows -= 1;
@@ -4837,6 +5038,7 @@ impl TileWorld {
                 let start = (self.rows - 1) * self.cols;
                 self.backgrounds.drain(start..start + self.cols);
                 self.water_states.drain(start..start + self.cols);
+                self.under_foregrounds.drain(start..start + self.cols);
                 self.foregrounds.drain(start..start + self.cols);
                 self.fog.drain(start..start + self.cols);
                 self.rows -= 1;
@@ -4877,6 +5079,8 @@ impl TileWorld {
             insert_layer_column(&self.backgrounds, old_cols, rows, at, BackgroundTile::Grass);
         self.water_states =
             insert_layer_column(&self.water_states, old_cols, rows, at, WaterState::Nothing);
+        self.under_foregrounds =
+            insert_layer_column(&self.under_foregrounds, old_cols, rows, at, None);
         self.foregrounds = insert_layer_column(&self.foregrounds, old_cols, rows, at, None);
         self.fog = insert_layer_column(&self.fog, old_cols, rows, at, false);
         self.cols += 1;
@@ -4887,6 +5091,7 @@ impl TileWorld {
         let rows = self.rows;
         self.backgrounds = remove_layer_column(&self.backgrounds, old_cols, rows, at);
         self.water_states = remove_layer_column(&self.water_states, old_cols, rows, at);
+        self.under_foregrounds = remove_layer_column(&self.under_foregrounds, old_cols, rows, at);
         self.foregrounds = remove_layer_column(&self.foregrounds, old_cols, rows, at);
         self.fog = remove_layer_column(&self.fog, old_cols, rows, at);
         self.cols -= 1;
@@ -4931,8 +5136,8 @@ impl TileWorld {
             fs::read_to_string(path.as_ref()).map_err(|error| format!("read failed: {error}"))?;
         let mut world = serde_json::from_str::<Self>(&json)
             .map_err(|error| format!("world json decode failed: {error}"))?;
-        world.validate()?;
         world.normalize_loaded_state();
+        world.validate()?;
         Ok(world)
     }
 
@@ -4947,6 +5152,7 @@ impl TileWorld {
         for (name, len) in [
             ("backgrounds", self.backgrounds.len()),
             ("water_states", self.water_states.len()),
+            ("under_foregrounds", self.under_foregrounds.len()),
             ("foregrounds", self.foregrounds.len()),
             ("fog", self.fog.len()),
         ] {
@@ -4958,6 +5164,10 @@ impl TileWorld {
     }
 
     fn normalize_loaded_state(&mut self) {
+        let cells = self.cols.saturating_mul(self.rows);
+        if self.under_foregrounds.len() != cells {
+            self.under_foregrounds = vec![None; cells];
+        }
         for state in &mut self.water_states {
             if *state == WaterState::Animation {
                 *state = WaterState::Nothing;
@@ -5008,6 +5218,10 @@ impl TileWorld {
         self.foregrounds[self.index(col, row)]
     }
 
+    fn under_foreground(&self, col: usize, row: usize) -> Option<AtlasTile> {
+        self.under_foregrounds[self.index(col, row)]
+    }
+
     fn render_background(&self, col: usize, row: usize) -> BackgroundTile {
         let background = self.background(col, row);
         if self
@@ -5039,6 +5253,7 @@ impl TileWorld {
                     self.backgrounds[index] = BackgroundTile::Water;
                 }
                 self.water_states[index] = WaterState::Nothing;
+                self.under_foregrounds[index] = None;
                 self.foregrounds[index] = Some(tile);
             }
             Brush::Ramp(ramp) => {
@@ -5065,6 +5280,7 @@ impl TileWorld {
 
     fn clear_foreground(&mut self, col: usize, row: usize) {
         let index = self.index(col, row);
+        self.under_foregrounds[index] = None;
         self.foregrounds[index] = None;
         let tile_rect = (
             (col * BUILDING_GRID_DIVISIONS) as isize,
@@ -5286,133 +5502,6 @@ impl TileWorld {
             .buildings
             .iter()
             .any(|building| rects_overlap(footprint, building_footprint_rect2(*building)))
-    }
-
-    fn collapse_shorelines(&mut self) {
-        for foreground in &mut self.foregrounds {
-            *foreground = None;
-        }
-
-        for row in 0..self.rows {
-            for col in 0..self.cols {
-                let index = self.index(col, row);
-                self.foregrounds[index] = match self.backgrounds[index] {
-                    BackgroundTile::Grass => self.shoreline_tile(col, row),
-                    BackgroundTile::Water
-                        if self.is_surrounded_by(col, row, BackgroundTile::Grass) =>
-                    {
-                        Some(SHORE_SINGLE_IN_GRASS)
-                    }
-                    BackgroundTile::Water => None,
-                };
-                if self.backgrounds[index] != BackgroundTile::Water
-                    || self.foregrounds[index].is_some()
-                {
-                    self.water_states[index] = WaterState::Nothing;
-                }
-            }
-        }
-    }
-
-    fn collapse_generated_shorelines(&mut self) {
-        self.remove_single_cell_shoreline_sources();
-        self.collapse_shorelines();
-    }
-
-    fn remove_single_cell_shoreline_sources(&mut self) {
-        let mut backgrounds = self.backgrounds.clone();
-
-        for row in 0..self.rows {
-            for col in 0..self.cols {
-                let index = self.index(col, row);
-                match self.backgrounds[index] {
-                    BackgroundTile::Grass
-                        if self.shoreline_tile(col, row) == Some(SHORE_SINGLE_IN_WATER) =>
-                    {
-                        backgrounds[index] = BackgroundTile::Water;
-                    }
-                    BackgroundTile::Water
-                        if self.is_surrounded_by(col, row, BackgroundTile::Grass) =>
-                    {
-                        backgrounds[index] = BackgroundTile::Grass;
-                    }
-                    _ => {}
-                }
-            }
-        }
-
-        self.backgrounds = backgrounds;
-    }
-
-    fn shoreline_tile(&self, col: usize, row: usize) -> Option<AtlasTile> {
-        let water_n = self.is_water_or_edge(col, row, 0, -1);
-        let water_e = self.is_water_or_edge(col, row, 1, 0);
-        let water_s = self.is_water_or_edge(col, row, 0, 1);
-        let water_w = self.is_water_or_edge(col, row, -1, 0);
-
-        if !(water_n || water_e || water_s || water_w) {
-            return None;
-        }
-
-        let tile = match (water_n, water_e, water_s, water_w) {
-            (true, true, false, true) => SHORE_NARROW_TOP,
-            (false, true, false, true) => SHORE_NARROW_MIDDLE,
-            (false, true, true, true) => SHORE_NARROW_BOTTOM,
-            (true, false, true, true) => SHORE_NARROW_LEFT,
-            (true, false, true, false) => SHORE_NARROW_CENTER,
-            (true, true, true, false) => SHORE_NARROW_RIGHT,
-            (true, true, true, true) => SHORE_SINGLE_IN_WATER,
-            (true, false, false, true) => SHORE_TOP_LEFT,
-            (true, true, false, false) => SHORE_TOP_RIGHT,
-            (false, false, true, true) => SHORE_BOTTOM_LEFT,
-            (false, true, true, false) => SHORE_BOTTOM_RIGHT,
-            (true, _, _, _) => SHORE_TOP,
-            (_, _, true, _) => SHORE_BOTTOM,
-            (_, true, _, _) => SHORE_RIGHT,
-            (_, _, _, true) => SHORE_LEFT,
-            _ => return None,
-        };
-        Some(tile)
-    }
-
-    fn is_water_or_edge(&self, col: usize, row: usize, dc: isize, dr: isize) -> bool {
-        let next_col = col as isize + dc;
-        let next_row = row as isize + dr;
-        if next_col < 0
-            || next_row < 0
-            || next_col >= self.cols as isize
-            || next_row >= self.rows as isize
-        {
-            return true;
-        }
-
-        self.background(next_col as usize, next_row as usize) == BackgroundTile::Water
-    }
-
-    fn is_surrounded_by(&self, col: usize, row: usize, background: BackgroundTile) -> bool {
-        for dr in -1..=1 {
-            for dc in -1..=1 {
-                if dc == 0 && dr == 0 {
-                    continue;
-                }
-
-                let next_col = col as isize + dc;
-                let next_row = row as isize + dr;
-                if next_col < 0
-                    || next_row < 0
-                    || next_col >= self.cols as isize
-                    || next_row >= self.rows as isize
-                {
-                    return false;
-                }
-
-                if self.background(next_col as usize, next_row as usize) != background {
-                    return false;
-                }
-            }
-        }
-
-        true
     }
 
     fn width_px(&self) -> f32 {
@@ -5824,11 +5913,8 @@ fn inside_rect(x: f32, y: f32, rect_x: f32, rect_y: f32, rect_w: f32, rect_h: f3
     x >= rect_x && x < rect_x + rect_w && y >= rect_y && y < rect_y + rect_h
 }
 
-#[cfg(test)]
-fn prop_draw_order(props: &[PlacedProp]) -> Vec<PlacedProp> {
-    let mut ordered = props.to_vec();
-    ordered.sort_by_key(|prop| (prop.y2, prop.x2));
-    ordered
+fn rects_intersect(a: TableRect, b: TableRect) -> bool {
+    a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h && a.y + a.h > b.y
 }
 
 fn terrain_cell_visible(
@@ -6040,11 +6126,6 @@ fn building_spec_footprint_rect2(
         spec.footprint_cols * BUILDING_GRID_DIVISIONS,
         spec.footprint_rows * BUILDING_GRID_DIVISIONS,
     )
-}
-
-#[cfg(test)]
-fn building_footprint_rect(building: PlacedBuilding) -> (usize, usize, usize, usize) {
-    half_rect_to_tile_rect(building_footprint_rect2(building))
 }
 
 fn building_footprint_rect2(building: PlacedBuilding) -> (isize, isize, usize, usize) {
@@ -6274,1707 +6355,4 @@ impl SeededRng {
 
 fn push_f32(out: &mut Vec<u8>, value: f32) {
     out.extend_from_slice(&value.to_le_bytes());
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn extracts_every_non_empty_tile_from_color2_tileset() {
-        let atlas = TextureAtlas::from_png_bytes(TERRAIN_TEXTURE, TERRAIN_BYTES, TERRAIN_TILE_PX);
-        let tiles = atlas.non_empty_tiles();
-
-        assert_eq!(atlas.cols, 9);
-        assert_eq!(atlas.rows, 6);
-        assert_eq!(tiles.len(), 43);
-        assert!(tiles.contains(&AtlasTile { col: 3, row: 0 }));
-        assert!(tiles.contains(&AtlasTile { col: 3, row: 5 }));
-        assert!(tiles.contains(&AtlasTile { col: 1, row: 1 }));
-        assert!(!tiles.contains(&AtlasTile { col: 6, row: 1 }));
-        assert!(!tiles.contains(&AtlasTile { col: 4, row: 0 }));
-        assert!(!tiles.contains(&AtlasTile { col: 4, row: 5 }));
-    }
-
-    #[test]
-    fn background_brushes_do_not_clear_foreground() {
-        let mut world = TileWorld::new(2, 2);
-        let foreground = AtlasTile { col: 0, row: 0 };
-
-        world.paint(0, 0, Brush::Foreground(foreground));
-        world.paint(1, 0, Brush::Foreground(foreground));
-        world.paint(1, 0, Brush::Background(BackgroundTile::Grass));
-        assert_eq!(world.background(1, 0), BackgroundTile::Grass);
-        assert_eq!(world.foreground(1, 0), Some(foreground));
-
-        world.paint(0, 0, Brush::Background(BackgroundTile::Water));
-        assert_eq!(world.background(0, 0), BackgroundTile::Water);
-        assert_eq!(world.foreground(0, 0), Some(foreground));
-
-        world.paint(0, 0, Brush::ClearForeground);
-        assert_eq!(world.background(0, 0), BackgroundTile::Water);
-        assert_eq!(world.foreground(0, 0), None);
-    }
-
-    #[test]
-    fn world_save_json_roundtrips_editor_layers() {
-        let mut world = TileWorld::new(4, 4);
-        world.paint(0, 0, Brush::Background(BackgroundTile::Water));
-        world.set_water_state(0, 0, WaterState::Duck);
-        world.paint(1, 1, Brush::Foreground(SHORE_TOP_LEFT));
-        world.paint_building(BuildingKind::House1, 4, 2);
-        world.paint_prop_half(PropKind::Plant(PlantKind::Bush1), 0, 6);
-        world.add_fog_rect((2, 2), (3, 3));
-
-        let path = std::env::temp_dir().join(format!(
-            "tactics_world_roundtrip_{}.json",
-            std::process::id()
-        ));
-
-        world.save_to_path(&path).expect("world should save");
-        let loaded = TileWorld::load_from_path(&path).expect("world should load");
-        let _ = fs::remove_file(path);
-
-        assert_eq!(loaded, world);
-    }
-
-    #[test]
-    fn clear_tool_removes_buildings_without_touching_background() {
-        let mut world = TileWorld::new(4, 4);
-        world.paint(0, 0, Brush::Background(BackgroundTile::Water));
-        world.paint(1, 0, Brush::Building(BuildingKind::House1));
-        assert_eq!(world.buildings.len(), 1);
-
-        world.paint(2, 1, Brush::ClearForeground);
-
-        assert_eq!(world.background(0, 0), BackgroundTile::Water);
-        assert!(world.buildings.is_empty());
-    }
-
-    #[test]
-    fn shoreline_foreground_tiles_render_on_water_background() {
-        let mut world = TileWorld::new(2, 2);
-
-        world.paint(0, 0, Brush::Foreground(SHORE_TOP_LEFT));
-        assert_eq!(world.background(0, 0), BackgroundTile::Water);
-        assert_eq!(world.render_background(0, 0), BackgroundTile::Water);
-
-        world.paint(0, 0, Brush::Background(BackgroundTile::Grass));
-        assert_eq!(world.background(0, 0), BackgroundTile::Grass);
-        assert_eq!(world.render_background(0, 0), BackgroundTile::Water);
-
-        world.paint(0, 0, Brush::Background(BackgroundTile::Grass));
-        let index = world.index(0, 0);
-        world.foregrounds[index] = Some(SHORE_SINGLE_IN_GRASS);
-        assert_eq!(world.background(0, 0), BackgroundTile::Grass);
-        assert_eq!(world.render_background(0, 0), BackgroundTile::Grass);
-
-        world.paint(1, 1, Brush::Foreground(RAMP_A.top));
-        assert_eq!(world.background(1, 1), BackgroundTile::Grass);
-        assert_eq!(world.render_background(1, 1), BackgroundTile::Grass);
-    }
-
-    #[test]
-    fn full_grass_tile_is_a_background_tool_not_a_foreground_palette_tile() {
-        let game = Game::new();
-
-        assert_eq!(
-            game.palette_brush(1),
-            Brush::Background(BackgroundTile::Grass)
-        );
-        assert!(!game.foreground_tiles.contains(&GRASS_BG_TILE));
-        assert!(!game.foreground_tiles.contains(&RAMP_A.top));
-        assert!(!game.foreground_tiles.contains(&RAMP_A.bottom));
-        assert!(!game.foreground_tiles.contains(&RAMP_B.top));
-        assert!(!game.foreground_tiles.contains(&RAMP_B.bottom));
-        for tile in PILLAR_TILES {
-            assert!(!game.foreground_tiles.contains(&tile));
-        }
-        assert_eq!(game.palette_brush(3), Brush::Ramp(RAMP_A));
-        assert_eq!(game.palette_brush(4), Brush::Ramp(RAMP_B));
-        assert_eq!(
-            game.palette_brush(6),
-            Brush::Building(BuildingKind::Archery)
-        );
-        assert_eq!(
-            game.palette_brush(6 + BUILDING_COUNT),
-            Brush::Prop(PropKind::Pillar(PILLAR_TILES[0]))
-        );
-        assert_eq!(
-            game.palette_brush(6 + BUILDING_COUNT + PILLAR_TILES.len()),
-            Brush::Prop(PropKind::Plant(PlantKind::Tree1))
-        );
-        assert_eq!(
-            game.palette_brush(6 + BUILDING_COUNT + PILLAR_TILES.len() + PLANT_PROP_COUNT),
-            Brush::GoldResource
-        );
-        assert_eq!(
-            game.palette_brush(
-                6 + BUILDING_COUNT + PILLAR_TILES.len() + PLANT_PROP_COUNT + GOLD_PALETTE_COUNT
-            ),
-            Brush::RockResource
-        );
-    }
-
-    #[test]
-    fn palette_caption_uses_stable_developer_names() {
-        assert_eq!(
-            brush_developer_name(Brush::Background(BackgroundTile::Water)),
-            "BG WATER"
-        );
-        assert_eq!(brush_developer_name(Brush::Ramp(RAMP_A)), "RAMP A");
-        assert_eq!(
-            brush_developer_name(Brush::Building(BuildingKind::House1)),
-            "BUILDING HOUSE 1"
-        );
-        assert_eq!(
-            brush_developer_name(Brush::Prop(PropKind::Pillar(PILLAR_TILES[2]))),
-            "PILLAR 3"
-        );
-        assert_eq!(
-            brush_developer_name(Brush::Prop(PropKind::Plant(PlantKind::Bush2))),
-            "BUSH 2"
-        );
-        assert_eq!(brush_developer_name(Brush::GoldResource), "GOLD RESOURCE");
-        assert_eq!(brush_developer_name(Brush::RockResource), "ROCK RESOURCE");
-        assert_eq!(
-            brush_developer_name(Brush::Foreground(SHORE_SINGLE_IN_GRASS)),
-            "SHORE SINGLE IN GRASS"
-        );
-    }
-
-    #[test]
-    fn building_specs_use_foundation_footprints_independent_from_art_size() {
-        let game = Game::new();
-
-        assert_eq!(game.buildings.len(), BUILDING_COUNT);
-        for (image, spec) in game.buildings.iter().zip(BUILDING_SPECS) {
-            assert_eq!(image.texture_id, spec.texture_id);
-            assert!(image.width >= spec.footprint_cols as u32 * TERRAIN_TILE_PX);
-            assert!(image.height >= spec.footprint_rows as u32 * TERRAIN_TILE_PX);
-        }
-        assert_eq!(building_spec(BuildingKind::House1).footprint_cols, 2);
-        assert_eq!(building_spec(BuildingKind::House1).footprint_rows, 2);
-        assert_eq!(building_spec(BuildingKind::House1).footprint_offset_rows, 1);
-        assert_eq!(building_spec(BuildingKind::House2).footprint_offset_rows, 1);
-        assert_eq!(building_spec(BuildingKind::House3).footprint_offset_rows, 1);
-        assert_eq!(building_spec(BuildingKind::House2).footprint_rows, 2);
-        assert_eq!(building_spec(BuildingKind::House3).footprint_rows, 2);
-        assert_eq!(building_spec(BuildingKind::Tower).footprint_rows, 2);
-        assert_eq!(building_spec(BuildingKind::Tower).footprint_offset_rows, 2);
-        assert_eq!(building_spec(BuildingKind::Archery).footprint_cols, 3);
-        assert_eq!(building_spec(BuildingKind::Archery).footprint_rows, 3);
-        assert_eq!(
-            building_spec(BuildingKind::Archery).footprint_offset_rows,
-            1
-        );
-        assert_eq!(building_spec(BuildingKind::Barracks).footprint_cols, 3);
-        assert_eq!(building_spec(BuildingKind::Barracks).footprint_rows, 3);
-        assert_eq!(
-            building_spec(BuildingKind::Barracks).footprint_offset_rows,
-            1
-        );
-        assert_eq!(building_spec(BuildingKind::Castle).footprint_cols, 5);
-        assert_eq!(building_spec(BuildingKind::Castle).footprint_rows, 3);
-        assert_eq!(building_spec(BuildingKind::Castle).footprint_offset_rows, 1);
-        assert_eq!(building_spec(BuildingKind::Monastery).footprint_cols, 3);
-        assert_eq!(building_spec(BuildingKind::Monastery).footprint_rows, 3);
-        assert_eq!(
-            building_spec(BuildingKind::Monastery).footprint_offset_rows,
-            2
-        );
-    }
-
-    #[test]
-    fn building_brush_places_only_on_clean_grass_foundations() {
-        let mut world = TileWorld::new(7, 7);
-
-        world.paint(0, 0, Brush::Building(BuildingKind::House1));
-        assert_eq!(
-            world.buildings,
-            vec![PlacedBuilding {
-                kind: BuildingKind::House1,
-                x2: 0,
-                y2: 0
-            }]
-        );
-
-        world.paint(2, 1, Brush::Background(BackgroundTile::Water));
-        world.paint(2, 0, Brush::Building(BuildingKind::House1));
-        assert_eq!(world.buildings.len(), 1);
-
-        world.paint(4, 3, Brush::Foreground(RAMP_A.top));
-        world.paint(4, 2, Brush::Building(BuildingKind::House1));
-        assert_eq!(world.buildings.len(), 1);
-    }
-
-    #[test]
-    fn building_brush_can_place_on_shoreline_foundations() {
-        let mut world = TileWorld::new(4, 4);
-
-        world.paint(0, 0, Brush::Background(BackgroundTile::Water));
-        world.collapse_shorelines();
-        assert!(world.foreground(0, 1).is_some_and(is_shoreline_tile));
-        world.paint(0, 0, Brush::Building(BuildingKind::House1));
-
-        assert_eq!(world.buildings.len(), 1);
-        assert_eq!(building_footprint_rect(world.buildings[0]), (0, 1, 2, 2));
-    }
-
-    #[test]
-    fn pillar_props_place_on_shorelines_and_block_buildings_and_ramps() {
-        let mut world = TileWorld::new(4, 4);
-        world.paint(0, 0, Brush::Background(BackgroundTile::Water));
-        world.collapse_shorelines();
-        assert!(world.foreground(0, 1).is_some_and(is_shoreline_tile));
-
-        world.paint(0, 1, Brush::Prop(PropKind::Pillar(PILLAR_TILES[0])));
-        assert_eq!(
-            world.props,
-            vec![PlacedProp {
-                kind: PropKind::Pillar(PILLAR_TILES[0]),
-                x2: 0,
-                y2: 2
-            }]
-        );
-
-        world.paint(0, 0, Brush::Building(BuildingKind::House1));
-        assert!(world.buildings.is_empty());
-
-        let before_top = world.foreground(0, 1);
-        let before_bottom = world.foreground(0, 2);
-        world.paint(0, 1, Brush::Ramp(RAMP_A));
-        assert_eq!(world.foreground(0, 1), before_top);
-        assert_eq!(world.foreground(0, 2), before_bottom);
-
-        world.paint(0, 1, Brush::ClearForeground);
-        assert!(world.props.is_empty());
-    }
-
-    #[test]
-    fn plant_props_place_on_grass_shores_with_single_tile_hitboxes() {
-        let mut world = TileWorld::new(4, 4);
-        world.paint(0, 0, Brush::Background(BackgroundTile::Water));
-        world.collapse_shorelines();
-        assert!(world.foreground(0, 1).is_some_and(is_shoreline_tile));
-
-        world.paint(0, 1, Brush::Prop(PropKind::Plant(PlantKind::Tree1)));
-        assert_eq!(
-            world.props,
-            vec![PlacedProp {
-                kind: PropKind::Plant(PlantKind::Tree1),
-                x2: 0,
-                y2: 2
-            }]
-        );
-
-        world.paint(0, 0, Brush::Prop(PropKind::Plant(PlantKind::Stump1)));
-        assert_eq!(world.props.len(), 1);
-
-        world.paint(0, 0, Brush::Building(BuildingKind::House1));
-        assert!(world.buildings.is_empty());
-        world.clear_foreground(0, 1);
-        assert!(world.props.is_empty());
-    }
-
-    #[test]
-    fn plant_props_use_half_grid_placement_and_foundation_checks() {
-        let mut world = TileWorld::new(4, 4);
-
-        world.paint_prop_half(PropKind::Plant(PlantKind::Bush1), 1, 1);
-        assert_eq!(
-            world.props,
-            vec![PlacedProp {
-                kind: PropKind::Plant(PlantKind::Bush1),
-                x2: 1,
-                y2: 1
-            }]
-        );
-
-        world.paint_prop_half(PropKind::Plant(PlantKind::Bush2), 2, 1);
-        assert_eq!(world.props.len(), 1);
-
-        world.paint(1, 1, Brush::Background(BackgroundTile::Water));
-        world.paint_prop_half(PropKind::Plant(PlantKind::Bush2), 3, 1);
-        assert_eq!(world.props.len(), 1);
-
-        world.clear_foreground(0, 0);
-        assert!(world.props.is_empty());
-    }
-
-    #[test]
-    fn gold_resource_brush_cycles_variants_on_empty_grass() {
-        let mut world = TileWorld::new(2, 2);
-
-        for expected in GoldKind::ALL {
-            world.paint(0, 0, Brush::GoldResource);
-            assert_eq!(
-                world.props,
-                vec![PlacedProp {
-                    kind: PropKind::Gold(expected),
-                    x2: 0,
-                    y2: 0
-                }]
-            );
-        }
-
-        world.paint(0, 0, Brush::GoldResource);
-        assert!(world.props.is_empty());
-    }
-
-    #[test]
-    fn gold_resource_brush_requires_unoccupied_grass() {
-        let mut world = TileWorld::new(4, 4);
-
-        world.paint(0, 0, Brush::Background(BackgroundTile::Water));
-        world.paint(0, 0, Brush::GoldResource);
-        assert!(world.props.is_empty());
-
-        world.paint(1, 0, Brush::Prop(PropKind::Pillar(PILLAR_TILES[0])));
-        world.paint(1, 0, Brush::GoldResource);
-        assert_eq!(world.props.len(), 1);
-
-        world.paint(2, 0, Brush::Building(BuildingKind::House1));
-        world.paint(2, 1, Brush::GoldResource);
-        assert_eq!(world.props.len(), 1);
-
-        world.paint(0, 1, Brush::GoldResource);
-        assert_eq!(
-            world.props.last().map(|prop| prop.kind),
-            Some(PropKind::Gold(GoldKind::Stone1))
-        );
-    }
-
-    #[test]
-    fn rock_resource_brush_cycles_static_rock_props_on_empty_grass() {
-        let mut world = TileWorld::new(2, 2);
-
-        for expected in RockKind::ALL {
-            world.paint(0, 0, Brush::RockResource);
-            assert_eq!(
-                world.props,
-                vec![PlacedProp {
-                    kind: PropKind::Rock(expected),
-                    x2: 0,
-                    y2: 0
-                }]
-            );
-        }
-
-        world.paint(0, 0, Brush::RockResource);
-        assert!(world.props.is_empty());
-    }
-
-    #[test]
-    fn rock_resource_brush_requires_unoccupied_grass() {
-        let mut world = TileWorld::new(4, 4);
-
-        world.paint(0, 0, Brush::Background(BackgroundTile::Water));
-        world.paint(0, 0, Brush::RockResource);
-        assert!(world.props.is_empty());
-
-        world.paint(1, 0, Brush::Prop(PropKind::Pillar(PILLAR_TILES[0])));
-        world.paint(1, 0, Brush::RockResource);
-        assert_eq!(world.props.len(), 1);
-
-        world.paint(2, 0, Brush::Building(BuildingKind::House1));
-        world.paint(2, 1, Brush::RockResource);
-        assert_eq!(world.props.len(), 1);
-
-        world.paint(0, 1, Brush::RockResource);
-        assert_eq!(
-            world.props.last().map(|prop| prop.kind),
-            Some(PropKind::Rock(RockKind::Rock1))
-        );
-    }
-
-    #[test]
-    fn small_bush_props_use_bottom_half_tile_footprints() {
-        let mut world = TileWorld::new(2, 2);
-
-        world.paint_prop_half(PropKind::Plant(PlantKind::Bush2), 0, 0);
-        world.paint_prop_half(PropKind::Plant(PlantKind::Bush4), 0, 1);
-        assert_eq!(world.props.len(), 2);
-        assert_eq!(prop_footprint_rect2(world.props[0]), (0, 1, 2, 1));
-        assert_eq!(prop_footprint_rect2(world.props[1]), (0, 2, 2, 1));
-
-        world.paint_prop_half(PropKind::Plant(PlantKind::Bush1), 0, 0);
-        assert_eq!(world.props.len(), 2);
-
-        world.paint_prop_half(PropKind::Plant(PlantKind::Bush2), 0, 3);
-        assert_eq!(world.props.len(), 2);
-    }
-
-    #[test]
-    fn small_bush_preview_uses_bottom_half_tile_footprint() {
-        assert_eq!(
-            brush_preview_footprint_rect2(
-                Brush::Prop(PropKind::Plant(PlantKind::Bush2)),
-                4,
-                6,
-                3,
-                WORLD_ROWS,
-            ),
-            (4, 7, 2, 1)
-        );
-        assert_eq!(
-            brush_preview_footprint_rect2(
-                Brush::Prop(PropKind::Plant(PlantKind::Bush1)),
-                4,
-                6,
-                3,
-                WORLD_ROWS,
-            ),
-            (4, 6, 2, 2)
-        );
-    }
-
-    #[test]
-    fn world_edges_can_be_added_and_removed_without_losing_layers() {
-        let mut world = TileWorld::new(2, 2);
-        world.set_background(1, 1, BackgroundTile::Water);
-        let old_index = world.index(1, 1);
-        world.foregrounds[old_index] = Some(SHORE_TOP);
-        world.fog[old_index] = true;
-        world.buildings.push(PlacedBuilding {
-            kind: BuildingKind::House1,
-            x2: 2,
-            y2: 0,
-        });
-        world.props.push(PlacedProp {
-            kind: PropKind::Plant(PlantKind::Bush1),
-            x2: 2,
-            y2: 2,
-        });
-
-        world.add_edge(WorldEdge::Top);
-        world.add_edge(WorldEdge::Left);
-
-        assert_eq!((world.cols, world.rows), (3, 3));
-        assert_eq!(world.background(2, 2), BackgroundTile::Water);
-        assert_eq!(world.foreground(2, 2), Some(SHORE_TOP));
-        assert!(world.fog(2, 2));
-        assert_eq!((world.buildings[0].x2, world.buildings[0].y2), (4, 2));
-        assert_eq!((world.props[0].x2, world.props[0].y2), (4, 4));
-
-        assert!(world.remove_edge(WorldEdge::Top));
-        assert!(world.remove_edge(WorldEdge::Left));
-
-        assert_eq!((world.cols, world.rows), (2, 2));
-        assert_eq!(world.background(1, 1), BackgroundTile::Water);
-        assert_eq!(world.foreground(1, 1), Some(SHORE_TOP));
-        assert!(world.fog(1, 1));
-        assert_eq!((world.buildings[0].x2, world.buildings[0].y2), (2, 0));
-        assert_eq!((world.props[0].x2, world.props[0].y2), (2, 2));
-    }
-
-    #[test]
-    fn removing_world_edges_drops_overlapping_objects() {
-        let mut world = TileWorld::new(2, 2);
-        world.props.push(PlacedProp {
-            kind: PropKind::Plant(PlantKind::Bush1),
-            x2: 0,
-            y2: 0,
-        });
-        world.buildings.push(PlacedBuilding {
-            kind: BuildingKind::House1,
-            x2: 0,
-            y2: -2,
-        });
-
-        assert!(world.remove_edge(WorldEdge::Left));
-        assert_eq!((world.cols, world.rows), (1, 2));
-        assert!(world.props.is_empty());
-        assert!(world.buildings.is_empty());
-
-        assert!(!world.remove_edge(WorldEdge::Left));
-        assert_eq!((world.cols, world.rows), (1, 2));
-    }
-
-    #[test]
-    fn prop_draw_order_puts_lower_map_tiles_in_front() {
-        let upper = PlacedProp {
-            kind: PropKind::Plant(PlantKind::Tree1),
-            x2: 2,
-            y2: 2,
-        };
-        let lower = PlacedProp {
-            kind: PropKind::Plant(PlantKind::Tree2),
-            x2: 2,
-            y2: 4,
-        };
-
-        assert_eq!(prop_draw_order(&[lower, upper]), vec![upper, lower]);
-        assert_eq!(prop_draw_order(&[upper, lower]), vec![upper, lower]);
-    }
-
-    #[test]
-    fn prop_insertions_keep_draw_order_cached_in_world() {
-        let mut world = TileWorld::new(4, 4);
-        world.paint_prop_half(PropKind::Plant(PlantKind::Tree1), 2, 4);
-        world.paint_prop_half(PropKind::Plant(PlantKind::Tree2), 0, 2);
-        world.paint_prop_half(PropKind::Plant(PlantKind::Tree3), 2, 2);
-
-        assert_eq!(
-            world
-                .props
-                .iter()
-                .map(|prop| (prop.x2, prop.y2))
-                .collect::<Vec<_>>(),
-            vec![(0, 2), (2, 2), (2, 4)]
-        );
-    }
-
-    #[test]
-    fn terrain_draw_cache_rebuilds_static_background_and_foreground_entries() {
-        let mut world = TileWorld::new(2, 2);
-        world.paint(0, 0, Brush::Background(BackgroundTile::Water));
-        world.paint(1, 0, Brush::Foreground(SHORE_TOP));
-
-        let mut cache = TerrainDrawCache::new();
-        cache.rebuild_if_dirty(&world);
-
-        assert!(!cache.dirty);
-        assert_eq!(cache.backgrounds.len(), 2);
-        assert_eq!(
-            cache.foregrounds,
-            vec![TerrainDrawCell {
-                tile: SHORE_TOP,
-                col: 1,
-                row: 0
-            }]
-        );
-    }
-
-    #[test]
-    fn loadscreen_uses_one_large_and_two_small_wood_tables() {
-        let tables = loadscreen_table_layout(WINDOW_WIDTH as f32, WINDOW_HEIGHT as f32);
-
-        assert_eq!(tables.len(), 3);
-        assert!(tables[0].w > tables[1].w);
-        assert!(tables[0].h > tables[1].h);
-        assert_eq!(tables[1].w, tables[2].w);
-        assert_eq!(tables[1].h, tables[2].h);
-        for table in tables {
-            assert!(table.x >= 0.0);
-            assert!(table.y >= 0.0);
-            assert!(table.x + table.w <= WINDOW_WIDTH as f32);
-            assert!(table.y + table.h <= WINDOW_HEIGHT as f32);
-        }
-    }
-
-    #[test]
-    fn loadscreen_window_is_undecorated_and_draws_tiled_tables() {
-        let loadscreen = LoadScreen::new();
-        assert!(!loadscreen.window_decorations());
-        assert!(!loadscreen.cursor_visible());
-
-        let mut batch = SpriteBatch::new(WINDOW_WIDTH, WINDOW_HEIGHT);
-        let table = loadscreen_table_layout(WINDOW_WIDTH as f32, WINDOW_HEIGHT as f32)[0];
-        draw_wood_table(
-            &mut batch,
-            &loadscreen.wood_table,
-            table.x,
-            table.y,
-            table.w,
-            table.h,
-        );
-
-        assert!(!batch.bytes.is_empty());
-    }
-
-    #[test]
-    fn loadscreen_wood_table_corners_use_source_edge_offsets() {
-        assert_eq!(
-            WOOD_TABLE_TOP_LEFT_OUTSET_X,
-            (WOOD_TABLE_LEFT_EDGE.x - WOOD_TABLE_TOP_LEFT.x) as f32
-        );
-        assert_eq!(
-            WOOD_TABLE_BOTTOM_LEFT_OUTSET_X,
-            (WOOD_TABLE_LEFT_EDGE.x - WOOD_TABLE_BOTTOM_LEFT.x) as f32
-        );
-        assert_eq!(
-            WOOD_TABLE_TOP_RIGHT.width as f32
-                - WOOD_TABLE_TOP_RIGHT_OUTSET_X
-                - WOOD_TABLE_RIGHT_EDGE.width as f32,
-            (WOOD_TABLE_RIGHT_EDGE.x - WOOD_TABLE_TOP_RIGHT.x) as f32
-        );
-        assert_eq!(
-            WOOD_TABLE_BOTTOM_RIGHT.width as f32
-                - WOOD_TABLE_BOTTOM_RIGHT_OUTSET_X
-                - WOOD_TABLE_RIGHT_EDGE.width as f32,
-            (WOOD_TABLE_RIGHT_EDGE.x - WOOD_TABLE_BOTTOM_RIGHT.x) as f32
-        );
-        assert_eq!(
-            WOOD_TABLE_TOP_CORNER_OUTSET_Y,
-            (WOOD_TABLE_TOP_EDGE.y - WOOD_TABLE_TOP_LEFT.y) as f32
-        );
-    }
-
-    #[test]
-    fn building_hitboxes_are_shifted_down_from_sprite_anchor() {
-        let mut world = TileWorld::new(5, 5);
-
-        world.paint(0, 0, Brush::Building(BuildingKind::House1));
-        assert_eq!(building_footprint_rect(world.buildings[0]), (0, 1, 2, 2));
-
-        world.clear_foreground(0, 0);
-        assert_eq!(world.buildings.len(), 1);
-        world.clear_foreground(0, 1);
-        assert!(world.buildings.is_empty());
-
-        world.paint(2, 0, Brush::Building(BuildingKind::Tower));
-        assert_eq!(building_footprint_rect(world.buildings[0]), (2, 2, 2, 2));
-    }
-
-    #[test]
-    fn building_brush_anchor_centers_hitbox_on_cursor_cell() {
-        let game = Game::new();
-
-        assert_eq!(
-            game.building_anchor_half_cell(BuildingKind::House1, 6, 6),
-            (4, 2)
-        );
-        assert_eq!(
-            building_spec_footprint_rect2(building_spec(BuildingKind::House1), 4, 2),
-            (4, 4, 4, 4)
-        );
-        assert_eq!(
-            half_rect_to_tile_rect(building_spec_footprint_rect2(
-                building_spec(BuildingKind::House1),
-                4,
-                2
-            )),
-            (2, 2, 2, 2)
-        );
-        assert_eq!(
-            game.building_anchor_half_cell(BuildingKind::Archery, 9, 10),
-            (6, 5)
-        );
-        assert_eq!(
-            building_spec_footprint_rect2(building_spec(BuildingKind::Archery), 6, 5),
-            (6, 7, 6, 6)
-        );
-        assert_eq!(
-            game.building_anchor_half_cell(BuildingKind::Tower, 0, 0),
-            (-2, -6)
-        );
-    }
-
-    #[test]
-    fn half_tile_building_placement_rejects_any_water_under_the_footprint() {
-        let mut world = TileWorld::new(6, 5);
-
-        world.paint(2, 1, Brush::Background(BackgroundTile::Water));
-        assert!(!world.can_place_building_kind(BuildingKind::House1, 5, 0));
-        world.paint_building(BuildingKind::House1, 5, 0);
-        assert!(world.buildings.is_empty());
-
-        assert!(world.can_place_building_kind(BuildingKind::House1, 6, 0));
-        world.paint_building(BuildingKind::House1, 6, 0);
-        assert_eq!(world.buildings.len(), 1);
-        assert_eq!(world.buildings[0].x2, 6);
-        assert_eq!(world.buildings[0].y2, 0);
-        assert_eq!(
-            half_rect_to_tile_rect(building_spec_footprint_rect2(
-                building_spec(BuildingKind::House1),
-                6,
-                0
-            )),
-            (3, 1, 2, 2)
-        );
-    }
-
-    #[test]
-    fn editor_building_anchor_can_place_foundations_on_top_world_row() {
-        let game = Game::new();
-        let mut world = TileWorld::new(6, 5);
-        let anchor = game.building_anchor_half_cell(BuildingKind::House1, 2, 2);
-
-        assert_eq!(anchor, (0, -2));
-        assert!(world.can_place_building_kind(BuildingKind::House1, anchor.0, anchor.1));
-        world.paint_building(BuildingKind::House1, anchor.0, anchor.1);
-        assert_eq!(world.buildings.len(), 1);
-        assert_eq!(building_footprint_rect(world.buildings[0]), (0, 0, 2, 2));
-    }
-
-    #[test]
-    fn ramp_brush_places_both_vertical_halves_together() {
-        let mut world = TileWorld::new(3, 3);
-
-        world.paint(1, 1, Brush::Ramp(RAMP_A));
-        assert_eq!(world.foreground(1, 1), Some(RAMP_A.top));
-        assert_eq!(world.foreground(1, 2), Some(RAMP_A.bottom));
-    }
-
-    #[test]
-    fn ramp_brush_does_not_place_partial_ramp_on_bottom_row() {
-        let mut world = TileWorld::new(3, 3);
-
-        world.paint(1, 2, Brush::Ramp(RAMP_A));
-        assert_eq!(world.foreground(1, 2), None);
-    }
-
-    #[test]
-    fn foreground_can_place_on_water_but_ramps_need_grass() {
-        let mut world = TileWorld::new(3, 3);
-        let foreground = AtlasTile { col: 0, row: 0 };
-
-        world.paint(1, 1, Brush::Background(BackgroundTile::Water));
-        world.paint(1, 1, Brush::Foreground(foreground));
-        assert_eq!(world.foreground(1, 1), Some(foreground));
-
-        world.paint(0, 0, Brush::Background(BackgroundTile::Water));
-        world.paint(0, 0, Brush::Ramp(RAMP_A));
-        assert_eq!(world.foreground(0, 0), None);
-        assert_eq!(world.foreground(0, 1), None);
-
-        world.paint(2, 1, Brush::Background(BackgroundTile::Water));
-        world.paint(2, 0, Brush::Ramp(RAMP_A));
-        assert_eq!(world.foreground(2, 0), None);
-        assert_eq!(world.foreground(2, 1), None);
-    }
-
-    #[test]
-    fn water_background_does_not_auto_place_neighbor_foreground_tiles() {
-        let mut world = TileWorld::new(3, 3);
-
-        world.paint(1, 1, Brush::Background(BackgroundTile::Water));
-        assert_eq!(world.foreground(1, 0), None);
-        assert_eq!(world.foreground(2, 1), None);
-        assert_eq!(world.foreground(1, 2), None);
-        assert_eq!(world.foreground(0, 1), None);
-    }
-
-    #[test]
-    fn empty_water_tiles_can_hold_explicit_visual_states() {
-        let mut world = TileWorld::new(3, 3);
-        world.paint(1, 1, Brush::Background(BackgroundTile::Water));
-
-        assert_eq!(WaterState::ALL.len(), 6);
-        assert!(!WaterState::ALL.contains(&WaterState::Animation));
-        for state in WaterState::ALL {
-            world.set_water_state(1, 1, state);
-            assert_eq!(world.water_state(1, 1), Some(state));
-        }
-
-        world.paint(1, 1, Brush::Background(BackgroundTile::Grass));
-        assert_eq!(world.water_state(1, 1), None);
-
-        world.paint(1, 1, Brush::Background(BackgroundTile::Water));
-        world.set_water_state(1, 1, WaterState::Stone2);
-        world.paint(1, 1, Brush::Foreground(SHORE_SINGLE_IN_WATER));
-        assert_eq!(world.water_state(1, 1), None);
-        world.paint(1, 1, Brush::ClearForeground);
-        assert_eq!(world.water_state(1, 1), Some(WaterState::Nothing));
-    }
-
-    #[test]
-    fn water_brush_cycles_empty_water_tile_state_in_editor_path() {
-        let mut world = TileWorld::new(2, 2);
-
-        world.paint(0, 0, Brush::Background(BackgroundTile::Water));
-        assert_eq!(world.water_state(0, 0), Some(WaterState::Nothing));
-
-        for state in [
-            WaterState::Stone1,
-            WaterState::Stone2,
-            WaterState::Stone3,
-            WaterState::Stone4,
-            WaterState::Duck,
-            WaterState::Nothing,
-        ] {
-            world.paint(0, 0, Brush::Background(BackgroundTile::Water));
-            assert_eq!(world.water_state(0, 0), Some(state));
-        }
-
-        world.paint(0, 0, Brush::Foreground(SHORE_SINGLE_IN_WATER));
-        world.paint(0, 0, Brush::Background(BackgroundTile::Water));
-        assert_eq!(world.water_state(0, 0), None);
-    }
-
-    #[test]
-    fn fog_rect_marks_every_cell_inclusive() {
-        let mut world = TileWorld::new(5, 5);
-
-        world.add_fog_rect((3, 1), (1, 3));
-
-        assert!(world.fog(1, 1));
-        assert!(world.fog(2, 2));
-        assert!(world.fog(3, 3));
-        assert!(!world.fog(0, 2));
-        assert!(!world.fog(4, 2));
-    }
-
-    #[test]
-    fn fog_tool_is_a_palette_brush() {
-        let game = Game::new();
-
-        assert_eq!(game.palette_brush(5), Brush::FogRect);
-    }
-
-    #[test]
-    fn palette_hit_testing_uses_the_same_slots_as_palette_drawing() {
-        let game = Game::new();
-
-        for slot in [
-            6,
-            6 + BUILDING_COUNT - 1,
-            6 + BUILDING_COUNT,
-            6 + BUILDING_COUNT + PILLAR_TILES.len() - 1,
-            6 + BUILDING_COUNT + PILLAR_TILES.len(),
-            6 + BUILDING_COUNT + PILLAR_TILES.len() + PLANT_PROP_COUNT - 1,
-            6 + BUILDING_COUNT + PILLAR_TILES.len() + PLANT_PROP_COUNT,
-            game.palette_len() - 1,
-        ] {
-            let (x, y) = game.palette_slot_rect(slot);
-            assert_eq!(
-                game.palette_brush_at(x + PALETTE_TILE * 0.5, y + PALETTE_TILE * 0.5),
-                Some(game.palette_brush(slot))
-            );
-        }
-    }
-
-    #[test]
-    fn fog_tool_keeps_the_regular_cursor() {
-        let mut game = Game::new();
-        game.selected = Some(Brush::FogRect);
-        game.mouse = Point {
-            x: VIEW_X + TILE_SIZE,
-            y: VIEW_Y + TILE_SIZE,
-        };
-
-        assert_eq!(game.cursor_image().texture_id, CURSOR_DEFAULT_TEXTURE);
-    }
-
-    #[test]
-    fn small_cursor_pngs_are_cropped_but_selection_cursor_stays_full() {
-        for (texture_id, bytes) in [
-            (CURSOR_DEFAULT_TEXTURE, CURSOR_DEFAULT_BYTES),
-            (CURSOR_HOVER_TEXTURE, CURSOR_HOVER_BYTES),
-            (CURSOR_DELETE_TEXTURE, CURSOR_DELETE_BYTES),
-        ] {
-            let full = ImageAsset::from_png_bytes(texture_id, bytes);
-            let cropped = ImageAsset::from_png_bytes_cropped(texture_id, bytes);
-
-            assert!(cropped.width < full.width);
-            assert!(cropped.height < full.height);
-        }
-
-        let game = Game::new();
-        let cursor_select = ImageAsset::from_png_bytes(CURSOR_SELECT_TEXTURE, CURSOR_SELECT_BYTES);
-        assert_eq!(game.cursor_select.width, cursor_select.width);
-        assert_eq!(game.cursor_select.height, cursor_select.height);
-    }
-
-    #[test]
-    fn fog_shadow_png_is_cropped_before_stretching_to_tiles() {
-        let full = ImageAsset::from_png_bytes(FOG_TEXTURE, FOG_BYTES);
-        let game = Game::new();
-
-        assert!(game.fog.width < full.width);
-        assert!(game.fog.height < full.height);
-    }
-
-    #[test]
-    fn shoreline_collapse_places_edges_around_water_background() {
-        let mut world = TileWorld::new(5, 5);
-
-        world.paint(2, 2, Brush::Background(BackgroundTile::Water));
-        world.collapse_shorelines();
-
-        assert_eq!(world.foreground(2, 1), Some(SHORE_BOTTOM));
-        assert_eq!(world.foreground(3, 2), Some(SHORE_LEFT));
-        assert_eq!(world.foreground(2, 3), Some(SHORE_TOP));
-        assert_eq!(world.foreground(1, 2), Some(SHORE_RIGHT));
-        assert_eq!(world.foreground(2, 2), Some(SHORE_SINGLE_IN_GRASS));
-    }
-
-    #[test]
-    fn shoreline_collapse_uses_corners_and_never_full_grass_foreground() {
-        let mut world = TileWorld::new(3, 3);
-
-        world.paint(1, 0, Brush::Background(BackgroundTile::Water));
-        world.paint(0, 1, Brush::Background(BackgroundTile::Water));
-        world.collapse_shorelines();
-
-        assert_eq!(world.foreground(1, 1), Some(SHORE_TOP_LEFT));
-        assert!(!world.foregrounds.contains(&Some(GRASS_BG_TILE)));
-    }
-
-    #[test]
-    fn shoreline_collapse_uses_narrow_vertical_grass_strip_tiles() {
-        let mut world = TileWorld::new(3, 5);
-
-        for row in 0..5 {
-            world.paint(0, row, Brush::Background(BackgroundTile::Water));
-            world.paint(2, row, Brush::Background(BackgroundTile::Water));
-        }
-        world.paint(1, 0, Brush::Background(BackgroundTile::Water));
-        world.paint(1, 4, Brush::Background(BackgroundTile::Water));
-        world.collapse_shorelines();
-
-        assert_eq!(world.foreground(1, 1), Some(SHORE_NARROW_TOP));
-        assert_eq!(world.foreground(1, 2), Some(SHORE_NARROW_MIDDLE));
-        assert_eq!(world.foreground(1, 3), Some(SHORE_NARROW_BOTTOM));
-
-        world.paint(1, 2, Brush::Background(BackgroundTile::Water));
-        world.collapse_shorelines();
-        assert_eq!(world.foreground(1, 1), Some(SHORE_SINGLE_IN_WATER));
-        assert_eq!(world.foreground(1, 3), Some(SHORE_SINGLE_IN_WATER));
-    }
-
-    #[test]
-    fn shoreline_collapse_uses_narrow_horizontal_grass_strip_tiles() {
-        let mut world = TileWorld::new(5, 3);
-
-        for col in 0..5 {
-            world.paint(col, 0, Brush::Background(BackgroundTile::Water));
-            world.paint(col, 2, Brush::Background(BackgroundTile::Water));
-        }
-        world.paint(0, 1, Brush::Background(BackgroundTile::Water));
-        world.paint(4, 1, Brush::Background(BackgroundTile::Water));
-        world.collapse_shorelines();
-
-        assert_eq!(world.foreground(1, 1), Some(SHORE_NARROW_LEFT));
-        assert_eq!(world.foreground(2, 1), Some(SHORE_NARROW_CENTER));
-        assert_eq!(world.foreground(3, 1), Some(SHORE_NARROW_RIGHT));
-
-        world.paint(2, 1, Brush::Background(BackgroundTile::Water));
-        world.collapse_shorelines();
-        assert_eq!(world.foreground(1, 1), Some(SHORE_SINGLE_IN_WATER));
-        assert_eq!(world.foreground(3, 1), Some(SHORE_SINGLE_IN_WATER));
-    }
-
-    #[test]
-    fn shoreline_collapse_uses_distinct_single_tiles_for_water_and_grass_contexts() {
-        let mut grass_island = TileWorld::new(3, 3);
-        for row in 0..3 {
-            for col in 0..3 {
-                grass_island.paint(col, row, Brush::Background(BackgroundTile::Water));
-            }
-        }
-        grass_island.paint(1, 1, Brush::Background(BackgroundTile::Grass));
-        grass_island.collapse_shorelines();
-
-        assert_eq!(grass_island.foreground(1, 1), Some(SHORE_SINGLE_IN_WATER));
-
-        let mut water_hole = TileWorld::new(3, 3);
-        water_hole.paint(1, 1, Brush::Background(BackgroundTile::Water));
-        water_hole.collapse_shorelines();
-
-        assert_eq!(water_hole.foreground(1, 1), Some(SHORE_SINGLE_IN_GRASS));
-    }
-
-    #[test]
-    fn generated_shoreline_collapse_removes_single_grass_islands() {
-        let mut world = TileWorld::new(3, 3);
-        for row in 0..3 {
-            for col in 0..3 {
-                world.paint(col, row, Brush::Background(BackgroundTile::Water));
-            }
-        }
-        world.paint(1, 1, Brush::Background(BackgroundTile::Grass));
-
-        world.collapse_generated_shorelines();
-
-        assert_eq!(world.background(1, 1), BackgroundTile::Water);
-        assert_eq!(world.foreground(1, 1), None);
-        assert!(!world.foregrounds.contains(&Some(SHORE_SINGLE_IN_WATER)));
-    }
-
-    #[test]
-    fn generated_shoreline_collapse_removes_single_water_holes() {
-        let mut world = TileWorld::new(3, 3);
-        world.paint(1, 1, Brush::Background(BackgroundTile::Water));
-
-        world.collapse_generated_shorelines();
-
-        assert_eq!(world.background(1, 1), BackgroundTile::Grass);
-        assert_eq!(world.foreground(1, 1), None);
-        assert!(!world.foregrounds.contains(&Some(SHORE_SINGLE_IN_GRASS)));
-    }
-
-    #[test]
-    fn wave_environment_only_targets_water_heavy_shoreline_tiles() {
-        assert!(!shoreline_tile_accepts_wave(SHORE_TOP_LEFT));
-        assert!(!shoreline_tile_accepts_wave(SHORE_TOP));
-        assert!(!shoreline_tile_accepts_wave(SHORE_RIGHT));
-        assert!(shoreline_tile_accepts_wave(SHORE_NARROW_CENTER));
-        assert!(shoreline_tile_accepts_wave(SHORE_SINGLE_IN_WATER));
-        assert!(shoreline_tile_accepts_wave(SHORE_SINGLE_IN_GRASS));
-    }
-
-    #[test]
-    fn resize_expands_visible_world_without_scaling_layout_space() {
-        let mut game = Game::new();
-        let windowed_view_h = game.view_h();
-        let windowed_slots = game.palette_slots_per_row();
-
-        game.resize_view(1920, 1080);
-
-        assert_eq!(game.window_width, 1920);
-        assert_eq!(game.window_height, 1080);
-        assert_eq!(game.view_w(), 1920.0);
-        assert!(game.view_h() > windowed_view_h);
-        assert!(game.palette_slots_per_row() > windowed_slots);
-    }
-
-    #[test]
-    fn aseprite_explorer_groups_tagged_files_into_animation_clips() {
-        let explorer = AsepriteExplorer::new();
-        let bushes = &explorer.files[1];
-
-        assert_eq!(bushes.frames.len(), 32);
-        assert_eq!(bushes.clips.len(), 4);
-        assert_eq!(bushes.clips[0].name, "Bush 1");
-        assert_eq!(bushes.clips[0].frame_indices.len(), 8);
-    }
-
-    #[test]
-    fn aseprite_explorer_groups_untagged_duck_and_water_rocks_as_single_animations() {
-        let explorer = AsepriteExplorer::new();
-        let duck = &explorer.files[8];
-        let water_rock = &explorer.files[13];
-
-        assert_eq!(duck.frames.len(), 3);
-        assert_eq!(duck.clips.len(), 1);
-        assert_eq!(duck.clips[0].frame_indices.len(), 3);
-        assert_eq!(water_rock.frames.len(), 16);
-        assert_eq!(water_rock.clips.len(), 1);
-        assert_eq!(water_rock.clips[0].frame_indices.len(), 16);
-    }
-
-    #[test]
-    fn unit_walk_viewer_loads_one_clip_for_each_unit() {
-        let viewer = UnitWalkViewer::new();
-
-        assert_eq!(viewer.units.len(), UNIT_WALK_SPECS.len() + 23 + 8);
-        assert!(viewer.units.iter().all(|unit| !unit.frames.is_empty()));
-        assert!(viewer.units.iter().all(|unit| unit.total_duration_ms > 0));
-        assert!(viewer.units.iter().any(|unit| unit.source_tag == "Run"));
-        assert!(viewer.units.iter().any(|unit| unit.source_tag == "Move"));
-        assert_eq!(
-            viewer
-                .units
-                .iter()
-                .filter(|unit| unit.name.starts_with("Pawn"))
-                .count(),
-            23
-        );
-        assert!(
-            viewer
-                .units
-                .iter()
-                .any(|unit| unit.name == "Pawn Interact Pickaxe")
-        );
-        assert!(
-            viewer
-                .units
-                .iter()
-                .any(|unit| unit.name == "Pawn Run Pickaxe")
-        );
-        assert_eq!(
-            viewer
-                .units
-                .iter()
-                .filter(|unit| unit.name.starts_with("Archer"))
-                .count(),
-            3
-        );
-        assert_eq!(
-            viewer
-                .units
-                .iter()
-                .filter(|unit| unit.name.starts_with("Monk"))
-                .count(),
-            4
-        );
-        assert_eq!(
-            viewer
-                .units
-                .iter()
-                .filter(|unit| unit.name.starts_with("Warrior"))
-                .count(),
-            5
-        );
-        assert_eq!(
-            viewer
-                .units
-                .iter()
-                .filter(|unit| unit.name.starts_with("Particle"))
-                .count(),
-            8
-        );
-        assert!(
-            viewer
-                .units
-                .iter()
-                .any(|unit| unit.name == "Particle Explosion 1")
-        );
-        assert!(
-            viewer
-                .units
-                .iter()
-                .any(|unit| unit.name == "Particle Water Splash")
-        );
-        assert!(viewer.units.iter().any(|unit| unit.source_tag == "Shoot"));
-        assert!(
-            viewer
-                .units
-                .iter()
-                .any(|unit| unit.source_tag == "Heal Effect")
-        );
-        assert!(
-            viewer
-                .units
-                .iter()
-                .any(|unit| unit.source_tag == "Attack 2")
-        );
-        assert_eq!(
-            viewer
-                .units
-                .iter()
-                .find(|unit| unit.name == "Sheep")
-                .map(|unit| (unit.source_tag.as_str(), unit.offset_y)),
-            Some(("Move", 8.0))
-        );
-        assert_eq!(
-            viewer
-                .units
-                .iter()
-                .find(|unit| unit.name == "Lancer")
-                .map(|unit| unit.offset_y),
-            Some(-16.0)
-        );
-    }
-
-    #[test]
-    fn demo_unit_team_colors_cycle_by_unit_index() {
-        assert_eq!(DemoUnitTeam::for_unit_index(0), DemoUnitTeam::Player);
-        assert_eq!(DemoUnitTeam::for_unit_index(1), DemoUnitTeam::Ally);
-        assert_eq!(DemoUnitTeam::for_unit_index(2), DemoUnitTeam::Neutral);
-        assert_eq!(DemoUnitTeam::for_unit_index(3), DemoUnitTeam::Enemy);
-        assert_eq!(DemoUnitTeam::for_unit_index(4), DemoUnitTeam::Wild);
-        assert_eq!(DemoUnitTeam::for_unit_index(5), DemoUnitTeam::Player);
-    }
-
-    #[test]
-    fn lancer_animation_metadata_matches_aseprite_tags() {
-        let set = ase_assets::load_tinted_aseprite_set(
-            "ts_freepack/Lancer.aseprite",
-            [255, 255, 255, 255],
-            ase_assets::TintMode::Multiply,
-        )
-        .expect("lancer aseprite should decode");
-
-        assert_eq!(
-            set.tags.len(),
-            crate::game_object::LancerAnimation::ALL.len()
-        );
-        for animation in crate::game_object::LancerAnimation::ALL {
-            let expected = animation.aseprite_ref();
-            let actual = &set.tags[expected.tag_index];
-
-            assert_eq!(actual.name.trim(), expected.tag_name);
-        }
-    }
-
-    #[test]
-    fn unit_walk_viewer_flips_direction_every_five_seconds() {
-        assert!(!unit_viewer_flip_x(0));
-        assert!(!unit_viewer_flip_x(4_999));
-        assert!(unit_viewer_flip_x(5_000));
-        assert!(unit_viewer_flip_x(9_999));
-        assert!(!unit_viewer_flip_x(10_000));
-    }
-
-    #[test]
-    fn cloud_assets_load_as_static_variants() {
-        let clouds = load_cloud_assets();
-
-        assert_eq!(clouds.len(), 8);
-        assert!(
-            clouds
-                .iter()
-                .all(|cloud| cloud.width > 0 && cloud.height > 0)
-        );
-        assert!(
-            clouds
-                .iter()
-                .all(|cloud| cloud.rgba.chunks_exact(4).any(|pixel| pixel[3] != 0))
-        );
-    }
-
-    #[test]
-    fn water_state_visual_assets_load_for_all_non_empty_states() {
-        let water = load_water_visual_assets();
-
-        assert_eq!(water.stones.len(), 4);
-        assert!(
-            water
-                .stones
-                .iter()
-                .all(|stone| !stone.frames.is_empty() && stone.total_duration_ms > 0)
-        );
-        assert!(!water.animation.frames.is_empty());
-        assert_eq!(
-            water.animation.frames.len(),
-            water.animation.durations_ms.len()
-        );
-        assert!(water.animation.total_duration_ms > 0);
-        assert!(!water.duck.frames.is_empty());
-        assert_eq!(water.duck.frames.len(), water.duck.durations_ms.len());
-        assert!(water.duck.total_duration_ms > 0);
-    }
-
-    #[test]
-    fn water_visual_texture_ids_do_not_overlap_between_states() {
-        let water = load_water_visual_assets();
-        let mut ids = HashSet::new();
-        let all_frames = water
-            .stones
-            .iter()
-            .flat_map(|animation| animation.frames.iter())
-            .chain(water.animation.frames.iter())
-            .chain(water.duck.frames.iter());
-
-        for frame in all_frames {
-            assert!(
-                ids.insert(frame.texture_id),
-                "duplicate water visual texture id {}",
-                frame.texture_id
-            );
-        }
-    }
-
-    #[test]
-    fn water_state_animations_are_one_shots_with_still_frames() {
-        let water = load_water_visual_assets();
-        let stone = &water.stones[0];
-        let first = stone.first_frame().unwrap().texture_id;
-
-        assert_ne!(
-            stone
-                .frame_once(stone.durations_ms.first().copied().unwrap_or(1))
-                .unwrap()
-                .texture_id,
-            first
-        );
-        assert_eq!(
-            stone
-                .frame_once(stone.total_duration_ms + 100)
-                .unwrap()
-                .texture_id,
-            first
-        );
-        assert_eq!(
-            water
-                .animation
-                .frame_once(water.animation.total_duration_ms + 100)
-                .unwrap()
-                .texture_id,
-            water.animation.first_frame().unwrap().texture_id
-        );
-    }
-
-    #[test]
-    fn environment_animator_triggers_stone_and_wave_water_states_but_not_ducks() {
-        let mut game = Game::new();
-        game.world = TileWorld::new(2, 1);
-        game.world
-            .paint(0, 0, Brush::Background(BackgroundTile::Water));
-        game.world.set_water_state(0, 0, WaterState::Duck);
-        game.world
-            .paint(1, 0, Brush::Foreground(SHORE_SINGLE_IN_GRASS));
-        game.water_animation_timer = 0.0;
-
-        game.update_environment(1.0);
-
-        assert_eq!(game.water_animations.len(), 1);
-        assert_eq!(game.water_animations[0].state, WaterState::Animation);
-        assert_eq!(
-            (game.water_animations[0].col, game.water_animations[0].row),
-            (1, 0)
-        );
-    }
-
-    #[test]
-    fn environment_animator_does_not_trigger_waves_over_grass_shore_tiles() {
-        let mut game = Game::new();
-        game.world = TileWorld::new(2, 1);
-        game.world
-            .paint(0, 0, Brush::Background(BackgroundTile::Water));
-        game.world.collapse_shorelines();
-        assert_eq!(game.world.background(1, 0), BackgroundTile::Grass);
-        assert!(
-            game.world
-                .foreground(1, 0)
-                .is_some_and(shoreline_tile_accepts_wave)
-        );
-        game.water_animation_timer = 0.0;
-
-        game.update_environment(1.0);
-
-        assert!(game.water_animations.is_empty());
-    }
-
-    #[test]
-    fn environment_animation_timers_are_fast_enough_for_visible_feedback() {
-        let mut game = Game::new();
-        game.plant_animation_timer = 0.0;
-        game.water_animation_timer = 0.0;
-        game.gold_animation_timer = 0.0;
-
-        game.update_environment(1.0);
-
-        assert!(game.plant_animation_timer <= 1.0);
-        assert!(game.water_animation_timer <= 0.85);
-        assert!(game.gold_animation_timer <= 1.1);
-    }
-
-    #[test]
-    fn environment_animator_triggers_trees_and_bushes_but_not_stumps() {
-        let mut game = Game::new();
-        game.world = TileWorld::new(3, 3);
-        game.world
-            .paint(0, 0, Brush::Prop(PropKind::Plant(PlantKind::Tree1)));
-        game.world
-            .paint(1, 0, Brush::Prop(PropKind::Plant(PlantKind::Stump1)));
-        game.world
-            .paint(2, 0, Brush::Prop(PropKind::Plant(PlantKind::Bush1)));
-        game.plant_animation_timer = 0.0;
-
-        game.update_environment(1.0);
-
-        assert!(!game.plant_animations.is_empty());
-        assert!(game.plant_animations.len() <= 2);
-        assert!(
-            game.plant_animations
-                .iter()
-                .all(|animation| animation.kind == PlantKind::Tree1
-                    || animation.kind == PlantKind::Bush1)
-        );
-    }
-
-    #[test]
-    fn environment_animator_triggers_gold_props_as_one_shot_animations() {
-        let mut game = Game::new();
-        game.world = TileWorld::new(3, 1);
-        game.world.paint(0, 0, Brush::GoldResource);
-        game.world.paint(1, 0, Brush::GoldResource);
-        game.world.paint(1, 0, Brush::GoldResource);
-        game.gold_animation_timer = 0.0;
-
-        game.update_environment(1.0);
-
-        assert!(!game.gold_animations.is_empty());
-        assert!(game.gold_animations.len() <= 2);
-        assert!(
-            game.gold_animations
-                .iter()
-                .all(|animation| matches!(animation.kind, GoldKind::Stone1 | GoldKind::Stone2))
-        );
-
-        let active = game.gold_animations[0];
-        let first = game.gold_props[active.kind.index()]
-            .first_frame()
-            .unwrap()
-            .texture_id;
-        let duration = game.gold_props[active.kind.index()]
-            .durations_ms
-            .first()
-            .copied()
-            .unwrap_or(1);
-        assert_ne!(
-            game.gold_props[active.kind.index()]
-                .frame_once(duration)
-                .unwrap()
-                .texture_id,
-            first
-        );
-    }
-
-    #[test]
-    fn plant_prop_assets_load_for_tree_stump_and_bush_palette() {
-        let plants = load_plant_prop_assets();
-
-        assert_eq!(plants.len(), PLANT_PROP_COUNT);
-        assert!(
-            plants
-                .iter()
-                .all(|plant| !plant.frames.is_empty() && plant.total_duration_ms > 0)
-        );
-        assert!(plants[PlantKind::Tree1.index()].frames.len() > 1);
-        assert_eq!(plants[PlantKind::Stump1.index()].frames.len(), 1);
-        assert!(plants[PlantKind::Bush1.index()].frames.len() > 1);
-        assert!(
-            plants[PlantKind::Tree1.index()]
-                .first_frame()
-                .unwrap()
-                .height
-                > plants[PlantKind::Stump1.index()]
-                    .first_frame()
-                    .unwrap()
-                    .height
-        );
-    }
-
-    #[test]
-    fn plant_prop_texture_ids_do_not_overlap_between_kinds() {
-        let plants = load_plant_prop_assets();
-        let mut ids = HashSet::new();
-
-        for frame in plants.iter().flat_map(|animation| animation.frames.iter()) {
-            assert!(
-                ids.insert(frame.texture_id),
-                "duplicate plant prop texture id {}",
-                frame.texture_id
-            );
-        }
-    }
-
-    #[test]
-    fn gold_prop_assets_load_for_palette_and_cycle_states() {
-        let gold = load_gold_prop_assets();
-
-        assert_eq!(gold.len(), GOLD_PROP_COUNT);
-        assert!(
-            gold.iter()
-                .all(|animation| !animation.frames.is_empty() && animation.total_duration_ms > 0)
-        );
-        assert_eq!(gold[GoldKind::Stone1.index()].frames.len(), 7);
-        assert_eq!(gold[GoldKind::Nugget.index()].frames.len(), 7);
-    }
-
-    #[test]
-    fn gold_prop_texture_ids_do_not_overlap_between_kinds() {
-        let gold = load_gold_prop_assets();
-        let mut ids = HashSet::new();
-
-        for frame in gold.iter().flat_map(|animation| animation.frames.iter()) {
-            assert!(
-                ids.insert(frame.texture_id),
-                "duplicate gold prop texture id {}",
-                frame.texture_id
-            );
-        }
-    }
-
-    #[test]
-    fn rock_prop_assets_load_as_static_grass_props() {
-        let rocks = load_rock_prop_assets();
-
-        assert_eq!(rocks.len(), ROCK_PROP_COUNT);
-        assert!(rocks.iter().all(|rock| {
-            rock.width <= 64
-                && rock.height <= 64
-                && rock.rgba.chunks_exact(4).any(|pixel| pixel[3] != 0)
-        }));
-    }
-
-    #[test]
-    fn icon_viewer_loads_ui_tool_resource_and_arrow_icons() {
-        let viewer = IconViewer::new();
-        let labels = viewer
-            .icons
-            .iter()
-            .map(|icon| icon.label.as_str())
-            .collect::<Vec<_>>();
-
-        for index in 1..=12 {
-            assert!(labels.contains(&format!("Icon {index:02}").as_str()));
-        }
-        for expected in ["Tool 01", "Tool 02", "Tool 03", "Tool 04", "Meat", "Wood"] {
-            assert!(labels.contains(&expected));
-        }
-        assert!(labels.contains(&"Arrow"));
-    }
-
-    #[test]
-    fn event_editor_cycles_draft_selectors_and_adds_rules() {
-        let mut editor = EventEditor::new();
-        assert_eq!(editor.rules.len(), 1);
-
-        editor.mouse = Point { x: 32.0, y: 86.0 };
-        editor.handle_left_click();
-        assert_eq!(editor.draft_trigger, ScenarioTrigger::OnceAfterOneMinute);
-
-        editor.mouse = Point { x: 266.0, y: 86.0 };
-        editor.handle_left_click();
-        assert_eq!(editor.draft_condition, ScenarioCondition::PlayerHasWood);
-
-        editor.mouse = Point { x: 500.0, y: 86.0 };
-        editor.handle_left_click();
-        assert_eq!(editor.draft_action, ScenarioAction::SpawnEnemy);
-
-        editor.mouse = Point { x: 32.0, y: 150.0 };
-        editor.handle_left_click();
-
-        assert_eq!(editor.rules.len(), 2);
-        assert_eq!(editor.rules[1].trigger, ScenarioTrigger::OnceAfterOneMinute);
-        assert_eq!(editor.rules[1].condition, ScenarioCondition::PlayerHasWood);
-        assert_eq!(editor.rules[1].action, ScenarioAction::SpawnEnemy);
-    }
-
-    #[test]
-    fn event_editor_table_buttons_toggle_and_delete_rules() {
-        let mut editor = EventEditor::new();
-        editor.add_rule();
-        assert_eq!(editor.rules.len(), 2);
-        assert!(editor.rules[0].enabled);
-
-        editor.mouse = Point { x: 36.0, y: 224.0 };
-        editor.handle_left_click();
-        assert!(!editor.rules[0].enabled);
-
-        editor.mouse = Point {
-            x: EVENT_EDITOR_WIDTH as f32 - 56.0,
-            y: 224.0,
-        };
-        editor.handle_left_click();
-
-        assert_eq!(editor.rules.len(), 1);
-        assert_eq!(editor.rules[0].id, 2);
-    }
-
-    #[test]
-    fn tree_and_stump_props_render_offset_without_changing_hitboxes() {
-        assert_eq!(PlantKind::Tree1.render_offset_y(), -TILE_SIZE / 2.0);
-        assert_eq!(PlantKind::Tree2.render_offset_y(), -TILE_SIZE / 2.0);
-        assert_eq!(PlantKind::Tree3.render_offset_y(), -TILE_SIZE / 2.0);
-        assert_eq!(PlantKind::Tree4.render_offset_y(), -TILE_SIZE / 2.0);
-        assert_eq!(PlantKind::Stump1.render_offset_y(), -TILE_SIZE / 4.0);
-        assert_eq!(PlantKind::Stump2.render_offset_y(), -TILE_SIZE / 4.0);
-        assert_eq!(PlantKind::Stump3.render_offset_y(), -TILE_SIZE / 4.0);
-        assert_eq!(PlantKind::Stump4.render_offset_y(), -TILE_SIZE / 4.0);
-        assert_eq!(PlantKind::Bush1.render_offset_y(), 0.0);
-
-        assert_eq!(
-            prop_kind_footprint_rect2(PropKind::Plant(PlantKind::Tree1), 2, 4),
-            (2, 4, 2, 2)
-        );
-        assert_eq!(
-            prop_kind_footprint_rect2(PropKind::Plant(PlantKind::Stump1), 2, 4),
-            (2, 4, 2, 2)
-        );
-    }
-
-    #[test]
-    fn tall_pine_renders_slightly_smaller_without_changing_other_plants() {
-        assert_eq!(PlantKind::Tree2.render_scale(), 0.84);
-        assert_eq!(PlantKind::Tree1.render_scale(), 1.0);
-        assert_eq!(PlantKind::Tree3.render_scale(), 1.0);
-        assert_eq!(PlantKind::Stump2.render_scale(), 1.0);
-        assert_eq!(PlantKind::Bush1.render_scale(), 1.0);
-    }
-
-    #[test]
-    fn bush_props_can_render_as_static_combo_tiles() {
-        assert_eq!(PlantKind::Bush1.visual_instance_count_for_roll(24), 2);
-        assert_eq!(PlantKind::Bush1.visual_instance_count_for_roll(25), 1);
-        assert_eq!(PlantKind::Bush3.visual_instance_count_for_roll(0), 2);
-        assert_eq!(PlantKind::Bush3.visual_instance_count_for_roll(99), 1);
-
-        assert_eq!(PlantKind::Bush2.visual_instance_count_for_roll(24), 3);
-        assert_eq!(PlantKind::Bush2.visual_instance_count_for_roll(25), 2);
-        assert_eq!(PlantKind::Bush2.visual_instance_count_for_roll(69), 2);
-        assert_eq!(PlantKind::Bush2.visual_instance_count_for_roll(70), 1);
-        assert_eq!(PlantKind::Bush4.visual_instance_count_for_roll(0), 3);
-        assert_eq!(PlantKind::Bush4.visual_instance_count_for_roll(99), 1);
-
-        assert_eq!(PlantKind::Tree1.visual_instance_count_for_roll(0), 1);
-        assert_eq!(PlantKind::Stump1.visual_instance_count_for_roll(0), 1);
-
-        let offset = PlantKind::Bush2.visual_instance_offset(3, 1);
-        assert!(offset.x < 0.0);
-        assert!(PlantKind::Bush2.visual_instance_offset(3, 2).x > 0.0);
-    }
-
-    #[test]
-    fn seeded_cloud_generation_is_deterministic_and_subtle() {
-        let clouds = load_cloud_assets();
-        let a = generate_clouds(DEFAULT_SEED, &clouds, WORLD_COLS, WORLD_ROWS);
-        let b = generate_clouds(DEFAULT_SEED, &clouds, WORLD_COLS, WORLD_ROWS);
-        let c = generate_clouds(DEFAULT_SEED + 1, &clouds, WORLD_COLS, WORLD_ROWS);
-
-        assert_eq!(a, b);
-        assert_ne!(a, c);
-        assert!((MIN_CLOUDS..=MAX_CLOUDS).contains(&a.len()));
-        assert!(a.iter().all(|cloud| cloud.alpha_min >= 0.25));
-        assert!(a.iter().all(|cloud| cloud.alpha_max <= 0.75));
-        assert!(a.iter().all(|cloud| cloud.scale_wobble <= 0.055));
-    }
-
-    #[test]
-    fn aseprite_explorer_ignores_gold_stone_helper_tags() {
-        let explorer = AsepriteExplorer::new();
-        let gold_stones = &explorer.files[3];
-
-        assert_eq!(gold_stones.frames.len(), 49);
-        assert_eq!(gold_stones.clips.len(), 7);
-        assert_eq!(gold_stones.clips[0].name, "1");
-        assert!(
-            gold_stones
-                .clips
-                .iter()
-                .all(|clip| clip.name != "Still" && clip.name != "Highlight")
-        );
-    }
-
-    #[test]
-    fn doubled_palette_panel_contains_all_slots_at_default_size() {
-        let game = Game::new();
-        let last_slot = game.palette_len() - 1;
-        let (_, y) = game.palette_slot_rect(last_slot);
-
-        assert_eq!(PANEL_H, 320.0);
-        assert!(y + PALETTE_TILE <= game.window_h() - 10.0);
-    }
-
-    #[test]
-    fn world_generation_collapses_sparse_seed_to_full_raw_tiles() {
-        let a = wldgenerator::generate_world(100, 100, 123);
-        let b = wldgenerator::generate_world(100, 100, 123);
-        let c = wldgenerator::generate_world(100, 100, 124);
-
-        assert_eq!(a.cells, b.cells);
-        assert_ne!(a.cells, c.cells);
-        let water_count = a
-            .cells
-            .iter()
-            .filter(|&&cell| cell == wldgenerator::GeneratedCell::Water)
-            .count();
-        let grass_count = a
-            .cells
-            .iter()
-            .filter(|&&cell| cell == wldgenerator::GeneratedCell::Grass)
-            .count();
-        assert!(
-            a.cells
-                .iter()
-                .all(|&cell| cell != wldgenerator::GeneratedCell::Unknown)
-        );
-        assert!(water_count > 0);
-        assert!(grass_count > 0);
-        assert_eq!(water_count + grass_count, 100 * 100);
-        assert!(
-            a.cells
-                .iter()
-                .filter_map(|&cell| cell.background())
-                .all(|background| matches!(
-                    background,
-                    BackgroundTile::Grass | BackgroundTile::Water
-                ))
-        );
-    }
-
-    #[test]
-    fn seeded_generator_world_keeps_dimensions() {
-        let world = wldgenerator::generate_world(WORLD_COLS, WORLD_ROWS, DEFAULT_SEED);
-
-        assert_eq!(world.cols, WORLD_COLS);
-        assert_eq!(world.rows, WORLD_ROWS);
-        assert_eq!(world.cells.len(), WORLD_COLS * WORLD_ROWS);
-    }
 }

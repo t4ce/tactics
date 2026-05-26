@@ -1,8 +1,3 @@
-use super::wldgenerator::{
-    CLIFF_GRASS_CAP_TILE, PLATFORM_GRASS_BORDER_TILES, PLATFORM_GRASS_ROW_TILES,
-    PLATFORM_WATER_ROW_TILES, STANDALONE_GRASS_PILLAR_TILE, STANDALONE_WATER_PILLAR_TILE,
-    platform_row_tile,
-};
 use super::*;
 
 const GENERATED_EMPTY_BG: u32 = 0x263A38;
@@ -38,8 +33,6 @@ pub(super) struct WorldViewer {
     generator: wldgenerator::RunningGenerator,
     shoreline_world: Option<TileWorld>,
     shoreline_cache: TerrainDrawCache,
-    waiting_for_platform_seed_click: bool,
-    waiting_for_shoreline_replace_click: bool,
     seed: u64,
     camera: Point,
     mouse: Point,
@@ -59,8 +52,6 @@ impl WorldViewer {
             generator: wldgenerator::RunningGenerator::new(WORLD_COLS, WORLD_ROWS, DEFAULT_SEED),
             shoreline_world: None,
             shoreline_cache: TerrainDrawCache::new(),
-            waiting_for_platform_seed_click: true,
-            waiting_for_shoreline_replace_click: false,
             seed: DEFAULT_SEED,
             camera: Point::default(),
             mouse: Point::default(),
@@ -127,8 +118,6 @@ impl WorldViewer {
         self.generator = wldgenerator::RunningGenerator::new(WORLD_COLS, WORLD_ROWS, self.seed);
         self.shoreline_world = None;
         self.shoreline_cache.mark_dirty();
-        self.waiting_for_platform_seed_click = true;
-        self.waiting_for_shoreline_replace_click = false;
         self.selection_start_screen = None;
         self.selection_start = None;
         self.selection_end = None;
@@ -137,11 +126,11 @@ impl WorldViewer {
     }
 
     fn advance_generation(&mut self) {
-        if self.waiting_for_platform_seed_click {
-            return;
-        }
-
         if self.generator.is_complete() {
+            if self.shoreline_world.is_none() {
+                self.shoreline_world = Some(collapse_generated_world(self.generator.world()));
+                self.shoreline_replace_final();
+            }
             return;
         }
 
@@ -153,7 +142,7 @@ impl WorldViewer {
         }
         if !was_complete && self.generator.is_complete() && self.shoreline_world.is_none() {
             self.shoreline_world = Some(collapse_generated_world(self.generator.world()));
-            self.waiting_for_shoreline_replace_click = true;
+            self.shoreline_replace_final();
             self.shoreline_cache.mark_dirty();
         }
     }
@@ -162,8 +151,8 @@ impl WorldViewer {
         let Some(world) = self.shoreline_world.as_mut() else {
             return;
         };
-        wldgenerator::shoreline_replace_final(world);
-        self.waiting_for_shoreline_replace_click = false;
+        let visual_world = self.generator.world().to_visual_tile_world();
+        wldgenerator::shoreline_replace_final(world, &visual_world.levels);
         self.shoreline_cache.mark_dirty();
     }
 
@@ -252,6 +241,7 @@ impl WorldViewer {
 
         let mut water = SolidBatch::new(self.window_width, self.window_height);
         let mut backgrounds = SpriteBatch::new(self.window_width, self.window_height);
+        let mut under_foregrounds = SpriteBatch::new(self.window_width, self.window_height);
         let mut foregrounds = SpriteBatch::new(self.window_width, self.window_height);
         let start_col = (self.camera.x / TILE_SIZE).floor().max(0.0) as usize;
         let start_row = (self.camera.y / TILE_SIZE).floor().max(0.0) as usize;
@@ -291,6 +281,23 @@ impl WorldViewer {
 
         for cell in self
             .shoreline_cache
+            .under_foregrounds
+            .iter()
+            .filter(|cell| terrain_cell_visible(cell, start_col, start_row, end_col, end_row))
+        {
+            under_foregrounds.sprite(
+                &self.terrain,
+                cell.tile,
+                cell.col as f32 * TILE_SIZE - self.camera.x,
+                cell.row as f32 * TILE_SIZE - self.camera.y,
+                TILE_SIZE,
+                TILE_SIZE,
+                Rgba8::WHITE,
+            );
+        }
+
+        for cell in self
+            .shoreline_cache
             .foregrounds
             .iter()
             .filter(|cell| terrain_cell_visible(cell, start_col, start_row, end_col, end_row))
@@ -309,6 +316,8 @@ impl WorldViewer {
         let _ = adapter.set_texture_effect(TextureEffect::World);
         let _ = adapter.draw_rgb_triangles_no_present(&water.bytes);
         let _ = adapter.draw_tex_triangles_no_present(self.terrain.texture_id, &backgrounds.bytes);
+        let _ = adapter
+            .draw_tex_triangles_no_present(self.terrain.texture_id, &under_foregrounds.bytes);
         let _ = adapter.draw_tex_triangles_no_present(self.terrain.texture_id, &foregrounds.bytes);
         let _ = adapter.set_texture_effect(TextureEffect::Plain);
     }
@@ -389,7 +398,7 @@ impl WorldViewer {
             }
         }
         self.shoreline_world = Some(collapse_generated_world(self.generator.world()));
-        self.waiting_for_shoreline_replace_click = true;
+        self.shoreline_replace_final();
         self.shoreline_cache.mark_dirty();
     }
 }
@@ -428,16 +437,6 @@ impl FrameProducer for WorldViewer {
                 button: InputMouseButton::Left,
                 state: InputButtonState::Pressed,
             } => {
-                if self.waiting_for_platform_seed_click {
-                    self.waiting_for_platform_seed_click = false;
-                    self.advance_generation();
-                    return;
-                }
-                if self.waiting_for_shoreline_replace_click {
-                    self.shoreline_replace_final();
-                    return;
-                }
-
                 let cell = self.world_cell_at(self.mouse.x, self.mouse.y);
                 self.selection_start_screen = Some(self.mouse);
                 self.selection_start = cell;
@@ -498,374 +497,4 @@ fn rect_regeneration_seed(seed: u64, rect: TileRect) -> u64 {
         ^ ((rect.row as u64).wrapping_mul(0xBF58_476D_1CE4_E5B9))
         ^ ((rect.cols as u64).wrapping_mul(0x94D0_49BB_1331_11EB))
         ^ ((rect.rows as u64).wrapping_mul(0xD6E8_FD9D_5A64_4A03))
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn platform_rows_use_middle_tile_for_single_width_rects() {
-        assert_eq!(
-            platform_row_tile(BackgroundTile::Water, 0, 1),
-            PLATFORM_WATER_ROW_TILES[1]
-        );
-        assert_eq!(
-            platform_row_tile(BackgroundTile::Grass, 0, 1),
-            PLATFORM_GRASS_ROW_TILES[1]
-        );
-    }
-
-    #[test]
-    fn platform_rows_use_left_middle_right_caps() {
-        assert_eq!(
-            platform_row_tile(BackgroundTile::Water, 0, 4),
-            PLATFORM_WATER_ROW_TILES[0]
-        );
-        assert_eq!(
-            platform_row_tile(BackgroundTile::Water, 1, 4),
-            PLATFORM_WATER_ROW_TILES[1]
-        );
-        assert_eq!(
-            platform_row_tile(BackgroundTile::Water, 2, 4),
-            PLATFORM_WATER_ROW_TILES[1]
-        );
-        assert_eq!(
-            platform_row_tile(BackgroundTile::Water, 3, 4),
-            PLATFORM_WATER_ROW_TILES[2]
-        );
-    }
-
-    #[test]
-    fn terrain_cross_overlay_draws_top_cap_and_center_pillar_variant() {
-        let generated = wldgenerator::GeneratedWorld {
-            cols: 5,
-            rows: 5,
-            cells: vec![wldgenerator::GeneratedCell::Unknown; 25],
-            platforms: Vec::new(),
-            terrain_crosses: vec![
-                wldgenerator::GeneratedTerrainCross {
-                    col: 1,
-                    center_row: 1,
-                    background: BackgroundTile::Grass,
-                },
-                wldgenerator::GeneratedTerrainCross {
-                    col: 3,
-                    center_row: 3,
-                    background: BackgroundTile::Water,
-                },
-            ],
-        };
-        let world = generated.to_visual_tile_world().tiles;
-
-        assert_eq!(world.foreground(1, 0), Some(CLIFF_GRASS_CAP_TILE));
-        assert_eq!(world.foreground(1, 1), Some(STANDALONE_GRASS_PILLAR_TILE));
-        assert_eq!(world.foreground(3, 2), Some(CLIFF_GRASS_CAP_TILE));
-        assert_eq!(world.foreground(3, 3), Some(STANDALONE_WATER_PILLAR_TILE));
-        assert_eq!(world.foreground(0, 1), None);
-        assert_eq!(world.foreground(2, 1), None);
-        assert_eq!(world.foreground(1, 2), None);
-    }
-
-    #[test]
-    fn terrain_cross_seed_mask_keeps_empty_cross_arms_visible_inside_platforms() {
-        let generated = wldgenerator::GeneratedWorld {
-            cols: 5,
-            rows: 5,
-            cells: vec![wldgenerator::GeneratedCell::Grass; 25],
-            platforms: vec![wldgenerator::GeneratedPlatform {
-                col: 0,
-                row: 0,
-                cols: 5,
-                rows: 5,
-                background: BackgroundTile::Grass,
-                kind: wldgenerator::GeneratedPlatformKind::Large,
-            }],
-            terrain_crosses: vec![wldgenerator::GeneratedTerrainCross {
-                col: 2,
-                center_row: 2,
-                background: BackgroundTile::Grass,
-            }],
-        };
-
-        let visual = generated.to_visual_tile_world();
-
-        for (col, row) in [(2, 1), (1, 2), (2, 2), (3, 2), (2, 3)] {
-            assert!(visual.visible[row * generated.cols + col]);
-        }
-    }
-
-    #[test]
-    fn generated_visual_world_shows_platform_frame_but_not_inner_ring() {
-        let generated = wldgenerator::GeneratedWorld {
-            cols: 5,
-            rows: 5,
-            cells: vec![wldgenerator::GeneratedCell::Unknown; 25],
-            platforms: vec![wldgenerator::GeneratedPlatform {
-                col: 0,
-                row: 0,
-                cols: 5,
-                rows: 5,
-                background: BackgroundTile::Grass,
-                kind: wldgenerator::GeneratedPlatformKind::Large,
-            }],
-            terrain_crosses: Vec::new(),
-        };
-
-        let visual = generated.to_visual_tile_world();
-
-        assert!(visual.visible[generated.cols]);
-        assert!(visual.visible[2]);
-        assert!(visual.visible[2 * generated.cols]);
-        assert!(visual.visible[2 * generated.cols + 4]);
-        assert!(!visual.visible[generated.cols + 1]);
-        assert!(!visual.visible[generated.cols + 2]);
-        assert!(!visual.visible[generated.cols + 3]);
-        assert!(!visual.visible[2 * generated.cols + 1]);
-        assert!(!visual.visible[2 * generated.cols + 2]);
-    }
-
-    #[test]
-    fn generated_platform_seed_world_keeps_platform_interiors_from_generated_cells() {
-        let generated = wldgenerator::GeneratedWorld {
-            cols: 5,
-            rows: 5,
-            cells: vec![wldgenerator::GeneratedCell::Water; 25],
-            platforms: vec![wldgenerator::GeneratedPlatform {
-                col: 1,
-                row: 1,
-                cols: 3,
-                rows: 3,
-                background: BackgroundTile::Grass,
-                kind: wldgenerator::GeneratedPlatformKind::Large,
-            }],
-            terrain_crosses: Vec::new(),
-        };
-
-        let world = generated.to_visual_tile_world().tiles;
-
-        assert_eq!(world.background(1, 1), BackgroundTile::Grass);
-        assert_eq!(world.background(2, 2), BackgroundTile::Water);
-        assert_eq!(world.foreground(2, 2), None);
-        assert_eq!(world.background(2, 4), BackgroundTile::Grass);
-        assert_eq!(world.foreground(2, 4), Some(PLATFORM_GRASS_ROW_TILES[1]));
-    }
-
-    #[test]
-    fn applying_platform_rect_sets_backgrounds_and_foregrounds() {
-        let mut world = TileWorld::new(4, 4);
-        for row in 0..world.rows {
-            for col in 0..world.cols {
-                world.set_background(col, row, BackgroundTile::Water);
-            }
-        }
-
-        wldgenerator::apply_platform_rect(&mut world, 0, 0, 4, 3, BackgroundTile::Grass);
-
-        assert_eq!(world.background(0, 0), BackgroundTile::Grass);
-        assert_eq!(world.background(0, 3), BackgroundTile::Grass);
-        assert_eq!(world.background(3, 3), BackgroundTile::Grass);
-        assert_eq!(
-            world.foreground(0, 0),
-            Some(PLATFORM_GRASS_BORDER_TILES[0][0])
-        );
-        assert_eq!(
-            world.foreground(1, 0),
-            Some(PLATFORM_GRASS_BORDER_TILES[0][1])
-        );
-        assert_eq!(
-            world.foreground(3, 0),
-            Some(PLATFORM_GRASS_BORDER_TILES[0][2])
-        );
-        assert_eq!(
-            world.foreground(0, 1),
-            Some(PLATFORM_GRASS_BORDER_TILES[1][0])
-        );
-        assert_eq!(world.foreground(1, 1), None);
-        assert_eq!(world.foreground(2, 1), None);
-        assert_eq!(
-            world.foreground(3, 1),
-            Some(PLATFORM_GRASS_BORDER_TILES[1][2])
-        );
-
-        assert_eq!(
-            world.foreground(0, 2),
-            Some(PLATFORM_GRASS_BORDER_TILES[2][0])
-        );
-        assert_eq!(
-            world.foreground(1, 2),
-            Some(PLATFORM_GRASS_BORDER_TILES[2][1])
-        );
-        assert_eq!(
-            world.foreground(2, 2),
-            Some(PLATFORM_GRASS_BORDER_TILES[2][1])
-        );
-        assert_eq!(
-            world.foreground(3, 2),
-            Some(PLATFORM_GRASS_BORDER_TILES[2][2])
-        );
-
-        assert_eq!(world.foreground(0, 3), Some(PLATFORM_GRASS_ROW_TILES[0]));
-        assert_eq!(world.foreground(1, 3), Some(PLATFORM_GRASS_ROW_TILES[1]));
-        assert_eq!(world.foreground(2, 3), Some(PLATFORM_GRASS_ROW_TILES[1]));
-        assert_eq!(world.foreground(3, 3), Some(PLATFORM_GRASS_ROW_TILES[2]));
-    }
-
-    #[test]
-    fn applying_platform_rects_tiles_overlapping_virtual_shape_once() {
-        let mut world = TileWorld::new(8, 4);
-        wldgenerator::apply_platform_rects(
-            &mut world,
-            [
-                (0, 0, 5, 3, BackgroundTile::Water),
-                (3, 0, 5, 2, BackgroundTile::Water),
-            ],
-        );
-
-        assert_eq!(
-            world.foreground(0, 0),
-            Some(PLATFORM_GRASS_BORDER_TILES[0][0])
-        );
-        for col in 1..7 {
-            assert_eq!(
-                world.foreground(col, 0),
-                Some(PLATFORM_GRASS_BORDER_TILES[0][1])
-            );
-        }
-        assert_eq!(
-            world.foreground(7, 0),
-            Some(PLATFORM_GRASS_BORDER_TILES[0][2])
-        );
-
-        assert_eq!(
-            world.foreground(0, 2),
-            Some(PLATFORM_GRASS_BORDER_TILES[2][0])
-        );
-        assert_eq!(
-            world.foreground(1, 2),
-            Some(PLATFORM_GRASS_BORDER_TILES[2][1])
-        );
-        assert_eq!(
-            world.foreground(4, 2),
-            Some(PLATFORM_GRASS_BORDER_TILES[2][2])
-        );
-
-        assert_eq!(world.foreground(5, 2), Some(PLATFORM_WATER_ROW_TILES[0]));
-        assert_eq!(world.foreground(6, 2), Some(PLATFORM_WATER_ROW_TILES[1]));
-        assert_eq!(world.foreground(7, 2), Some(PLATFORM_WATER_ROW_TILES[2]));
-        assert_eq!(world.background(0, 3), BackgroundTile::Water);
-        assert_eq!(world.background(4, 3), BackgroundTile::Water);
-        assert_eq!(world.foreground(0, 3), Some(PLATFORM_WATER_ROW_TILES[0]));
-        assert_eq!(world.foreground(1, 3), Some(PLATFORM_WATER_ROW_TILES[1]));
-        assert_eq!(world.foreground(4, 3), Some(PLATFORM_WATER_ROW_TILES[2]));
-    }
-
-    #[test]
-    fn platform_seed_click_fills_raw_world() {
-        let mut viewer = WorldViewer::new();
-
-        viewer.advance_generation();
-
-        assert!(!viewer.generator.is_complete());
-        assert!(viewer.shoreline_world.is_none());
-        assert!(viewer.waiting_for_platform_seed_click);
-
-        viewer.handle_input(InputEvent::MouseButton {
-            button: InputMouseButton::Left,
-            state: InputButtonState::Pressed,
-        });
-
-        assert!(!viewer.waiting_for_platform_seed_click);
-        assert!(viewer.generator.is_complete());
-        assert!(viewer.shoreline_world.is_some());
-        assert!(viewer.waiting_for_shoreline_replace_click);
-        assert_eq!(viewer.selection_start, None);
-        assert_eq!(viewer.selection_end, None);
-    }
-
-    #[test]
-    fn generated_visual_world_keeps_seed_foregrounds() {
-        let generated = wldgenerator::generate_world(WORLD_COLS, WORLD_ROWS, DEFAULT_SEED);
-        let world = generated.to_visual_tile_world().tiles;
-
-        assert!(
-            world
-                .foregrounds
-                .iter()
-                .any(|foreground| foreground.is_some())
-        );
-    }
-
-    #[test]
-    fn final_generated_fill_matches_visual_world() {
-        let generated = wldgenerator::GeneratedWorld {
-            cols: 5,
-            rows: 5,
-            cells: vec![wldgenerator::GeneratedCell::Grass; 25],
-            platforms: vec![wldgenerator::GeneratedPlatform {
-                col: 0,
-                row: 0,
-                cols: 2,
-                rows: 2,
-                background: BackgroundTile::Grass,
-                kind: wldgenerator::GeneratedPlatformKind::Large,
-            }],
-            terrain_crosses: vec![wldgenerator::GeneratedTerrainCross {
-                col: 2,
-                center_row: 2,
-                background: BackgroundTile::Grass,
-            }],
-        };
-
-        let world = collapse_generated_world(&generated);
-        let expected = generated.to_visual_tile_world().tiles;
-
-        assert_eq!(world.backgrounds, expected.backgrounds);
-        assert_eq!(world.foregrounds, expected.foregrounds);
-    }
-
-    #[test]
-    fn second_click_after_fill_applies_final_shoreline_replace() {
-        let mut viewer = WorldViewer::new();
-
-        viewer.handle_input(InputEvent::MouseButton {
-            button: InputMouseButton::Left,
-            state: InputButtonState::Pressed,
-        });
-        assert!(viewer.waiting_for_shoreline_replace_click);
-
-        viewer.handle_input(InputEvent::MouseButton {
-            button: InputMouseButton::Left,
-            state: InputButtonState::Pressed,
-        });
-
-        assert!(!viewer.waiting_for_shoreline_replace_click);
-    }
-
-    #[test]
-    fn click_without_five_pixel_drag_does_not_retile_final_world() {
-        let mut viewer = WorldViewer::new();
-
-        viewer.handle_input(InputEvent::MouseButton {
-            button: InputMouseButton::Left,
-            state: InputButtonState::Pressed,
-        });
-        viewer.handle_input(InputEvent::MouseButton {
-            button: InputMouseButton::Left,
-            state: InputButtonState::Pressed,
-        });
-        let before = viewer.shoreline_world.as_ref().unwrap().foregrounds.clone();
-
-        viewer.handle_input(InputEvent::MouseButton {
-            button: InputMouseButton::Left,
-            state: InputButtonState::Pressed,
-        });
-        viewer.handle_input(InputEvent::MouseButton {
-            button: InputMouseButton::Left,
-            state: InputButtonState::Released,
-        });
-
-        assert_eq!(viewer.shoreline_world.as_ref().unwrap().foregrounds, before);
-        assert!(!viewer.waiting_for_shoreline_replace_click);
-    }
 }

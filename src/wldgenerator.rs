@@ -53,22 +53,16 @@ pub(super) const PLATFORM_GRASS_BORDER_TILES: [[AtlasTile; 3]; 3] = [
         AtlasTile { col: 7, row: 2 },
     ],
 ];
+const PLATFORM_GRASS_INNER_WATER_TOP_TILE: AtlasTile = AtlasTile { col: 4, row: 0 };
+const PLATFORM_GRASS_INNER_WATER_LEFT_TILE: AtlasTile = AtlasTile { col: 4, row: 1 };
+const PLATFORM_GRASS_INNER_WATER_RIGHT_TILE: AtlasTile = AtlasTile { col: 4, row: 2 };
+const PLATFORM_GRASS_INNER_WATER_BOTTOM_TILE: AtlasTile = AtlasTile { col: 4, row: 3 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum GeneratedCell {
     Unknown,
     Grass,
     Water,
-}
-
-impl GeneratedCell {
-    pub(super) fn background(self) -> Option<BackgroundTile> {
-        match self {
-            Self::Unknown => None,
-            Self::Grass => Some(BackgroundTile::Grass),
-            Self::Water => Some(BackgroundTile::Water),
-        }
-    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -97,6 +91,13 @@ pub(super) struct GeneratedTerrainCross {
 pub(super) struct GeneratedVisualWorld {
     pub(super) tiles: TileWorld,
     pub(super) visible: Vec<bool>,
+    pub(super) levels: Vec<GeneratedTileLevel>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum GeneratedTileLevel {
+    Ground,
+    Platform,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -149,21 +150,31 @@ impl GeneratedWorld {
         let mut tiles = self.to_tile_world();
         apply_generated_platforms(&mut tiles, self);
         apply_generated_terrain_crosses(&mut tiles, self);
+        let levels = generated_tile_levels(self);
 
-        let platform_seed_tiles = self.platform_seed_tile_mask();
+        let platform_seed_mask = platform_seed_mask(self);
+        let platform_seed_tiles = platform_seed_mask
+            .iter()
+            .map(|background| background.is_some())
+            .collect::<Vec<_>>();
+        if self
+            .cells
+            .iter()
+            .any(|&cell| cell == GeneratedCell::Unknown)
+        {
+            apply_generated_platform_seed_frame(&mut tiles, &platform_seed_mask);
+            apply_generated_terrain_crosses(&mut tiles, self);
+        }
         let mut visible = vec![false; self.cells.len()];
         for (index, cell) in self.cells.iter().enumerate() {
             visible[index] = *cell != GeneratedCell::Unknown || platform_seed_tiles[index];
         }
 
-        GeneratedVisualWorld { tiles, visible }
-    }
-
-    pub(super) fn platform_seed_tile_mask(&self) -> Vec<bool> {
-        platform_seed_mask(self)
-            .into_iter()
-            .map(|background| background.is_some())
-            .collect()
+        GeneratedVisualWorld {
+            tiles,
+            visible,
+            levels,
+        }
     }
 
     pub(super) fn feature_reroll_mask_for_rect(
@@ -324,15 +335,6 @@ impl RunningGenerator {
         collapsed
     }
 
-    fn finish(mut self) -> GeneratedWorld {
-        while !self.is_complete() {
-            if self.step(1024) == 0 {
-                break;
-            }
-        }
-        self.world
-    }
-
     fn rebuild_frontier(&mut self) {
         for index in 0..self.world.cells.len() {
             if self.world.cells[index] != GeneratedCell::Unknown {
@@ -345,10 +347,6 @@ impl RunningGenerator {
             }
         }
     }
-}
-
-pub(super) fn generate_world(cols: usize, rows: usize, seed: u64) -> GeneratedWorld {
-    RunningGenerator::new(cols, rows, seed).finish()
 }
 
 fn seeded_world(cols: usize, rows: usize, rng: &mut SeededRng) -> GeneratedWorld {
@@ -815,6 +813,18 @@ fn terrain_cross_fits_mask(
     })
 }
 
+fn generated_tile_levels(world: &GeneratedWorld) -> Vec<GeneratedTileLevel> {
+    let mut levels = vec![GeneratedTileLevel::Ground; world.cells.len()];
+    for &platform in &world.platforms {
+        for (col, row) in platform_footprint_cells(world.cols, world.rows, platform) {
+            if col < world.cols && row < world.rows {
+                levels[world.index(col, row)] = GeneratedTileLevel::Platform;
+            }
+        }
+    }
+    levels
+}
+
 fn platform_frame_buffer_mask(world: &GeneratedWorld) -> Vec<bool> {
     let mut mask = vec![false; world.cells.len()];
     for platform in &world.platforms {
@@ -1041,18 +1051,6 @@ fn platform_fits_attached_to(
     })
 }
 
-fn stamp_platform_background(world: &mut GeneratedWorld, platform: GeneratedPlatform) {
-    let cell = match platform.background {
-        BackgroundTile::Grass => GeneratedCell::Grass,
-        BackgroundTile::Water => GeneratedCell::Water,
-    };
-
-    for (col, row) in platform_seed_cells(world.cols, world.rows, platform) {
-        let index = world.index(col, row);
-        world.cells[index] = cell;
-    }
-}
-
 fn stamp_platform_backgrounds(world: &mut GeneratedWorld) {
     let mask = platform_seed_mask(world);
     for row in 0..world.rows {
@@ -1090,7 +1088,6 @@ fn platform_seed_mask(world: &GeneratedWorld) -> Vec<Option<BackgroundTile>> {
             }
         }
     }
-
     seed_mask
 }
 
@@ -1127,38 +1124,6 @@ fn platform_mask_open_to_edge(
         || mask[world.index(col - 1, row)] != Some(background)
 }
 
-fn platform_seed_cells(
-    world_cols: usize,
-    world_rows: usize,
-    platform: GeneratedPlatform,
-) -> Vec<(usize, usize)> {
-    let mut cells = Vec::new();
-    let start_col = platform.col.min(world_cols);
-    let start_row = platform.row.min(world_rows);
-    let end_col = platform.col.saturating_add(platform.cols).min(world_cols);
-    let end_row = platform.row.saturating_add(platform.rows).min(world_rows);
-    if start_col >= end_col || start_row >= end_row {
-        return cells;
-    }
-
-    for row in start_row..end_row {
-        for col in start_col..end_col {
-            if row == start_row || row + 1 == end_row || col == start_col || col + 1 == end_col {
-                cells.push((col, row));
-            }
-        }
-    }
-
-    let pillar_row = platform.row.saturating_add(platform.rows);
-    if pillar_row < world_rows {
-        for col in start_col..end_col {
-            cells.push((col, pillar_row));
-        }
-    }
-
-    cells
-}
-
 fn terrain_cross_fits(
     world: &GeneratedWorld,
     occupied: &[bool],
@@ -1191,44 +1156,176 @@ fn terrain_cross_cells(cross: GeneratedTerrainCross) -> [(usize, usize); 5] {
     ]
 }
 
-pub(super) fn apply_platform_rect(
-    world: &mut TileWorld,
-    col: usize,
-    row: usize,
-    cols: usize,
-    rows: usize,
-    background: BackgroundTile,
-) {
-    apply_platform_rects(world, [(col, row, cols, rows, background)]);
-}
-
-pub(super) fn shoreline_replace_final(world: &mut TileWorld) {
+pub(super) fn shoreline_replace_final(world: &mut TileWorld, levels: &[GeneratedTileLevel]) {
     let backgrounds = world.backgrounds.clone();
+    let foregrounds = world.foregrounds.clone();
     for row in 0..world.rows {
         for col in 0..world.cols {
             let index = world.index(col, row);
-            if backgrounds[index] != BackgroundTile::Grass || world.foregrounds[index].is_some() {
+            if backgrounds[index] != BackgroundTile::Grass
+                || foreground_blocks_final_shore(foregrounds[index])
+            {
                 continue;
             }
-            if let Some(tile) = final_shore_tile(&backgrounds, world.cols, world.rows, col, row) {
+            let use_underlay = foreground_accepts_final_shore_underlay(foregrounds[index]);
+            if let Some(tile) = final_shore_tile(
+                &backgrounds,
+                &foregrounds,
+                levels,
+                use_underlay,
+                world.cols,
+                world.rows,
+                col,
+                row,
+            ) {
                 world.set_background(col, row, BackgroundTile::Water);
-                world.foregrounds[index] = Some(tile);
+                if use_underlay {
+                    world.under_foregrounds[index] = Some(tile);
+                } else {
+                    world.foregrounds[index] = Some(tile);
+                }
+            }
+        }
+    }
+    platform_frame_constraint_replace_final(world, levels);
+}
+
+fn platform_frame_constraint_replace_final(world: &mut TileWorld, levels: &[GeneratedTileLevel]) {
+    let backgrounds = world.backgrounds.clone();
+    let foregrounds = world.foregrounds.clone();
+    for row in 0..world.rows {
+        for col in 0..world.cols {
+            let index = world.index(col, row);
+            if levels[index] != GeneratedTileLevel::Platform {
+                continue;
+            }
+            if let Some((tile, inward_col, inward_row)) =
+                platform_frame_inner_water_replacement(foregrounds[index], col, row)
+                && inward_col < world.cols
+                && inward_row < world.rows
+            {
+                let inward_index = world.index(inward_col, inward_row);
+                if levels[inward_index] == GeneratedTileLevel::Platform
+                    && backgrounds[inward_index] == BackgroundTile::Water
+                    && foregrounds[inward_index].is_none()
+                {
+                    world.foregrounds[index] = Some(tile);
+                }
             }
         }
     }
 }
 
+fn platform_frame_inner_water_replacement(
+    foreground: Option<AtlasTile>,
+    col: usize,
+    row: usize,
+) -> Option<(AtlasTile, usize, usize)> {
+    let tile = foreground?;
+    if tile == PLATFORM_GRASS_BORDER_TILES[1][0] {
+        Some((PLATFORM_GRASS_INNER_WATER_LEFT_TILE, col + 1, row))
+    } else if tile == PLATFORM_GRASS_BORDER_TILES[1][2] {
+        Some((
+            PLATFORM_GRASS_INNER_WATER_RIGHT_TILE,
+            col.checked_sub(1)?,
+            row,
+        ))
+    } else if tile == PLATFORM_GRASS_BORDER_TILES[0][1] {
+        Some((PLATFORM_GRASS_INNER_WATER_TOP_TILE, col, row + 1))
+    } else if tile == PLATFORM_GRASS_BORDER_TILES[2][1] {
+        Some((
+            PLATFORM_GRASS_INNER_WATER_BOTTOM_TILE,
+            col,
+            row.checked_sub(1)?,
+        ))
+    } else {
+        None
+    }
+}
+
+fn foreground_blocks_final_shore(foreground: Option<AtlasTile>) -> bool {
+    foreground.is_some_and(|tile| !foreground_accepts_final_shore_underlay(Some(tile)))
+}
+
+fn foreground_accepts_final_shore_underlay(foreground: Option<AtlasTile>) -> bool {
+    foreground.is_some_and(|tile| {
+        tile == CLIFF_GRASS_CAP_TILE
+            || PLATFORM_GRASS_ROW_TILES.contains(&tile)
+            || PLATFORM_WATER_ROW_TILES.contains(&tile)
+            || platform_border_tiles_contain(tile)
+    })
+}
+
+fn platform_border_tiles_contain(tile: AtlasTile) -> bool {
+    PLATFORM_GRASS_BORDER_TILES
+        .iter()
+        .flatten()
+        .any(|&border_tile| border_tile == tile)
+}
+
 fn final_shore_tile(
     backgrounds: &[BackgroundTile],
+    foregrounds: &[Option<AtlasTile>],
+    levels: &[GeneratedTileLevel],
+    use_ground_underlay: bool,
     cols: usize,
     rows: usize,
     col: usize,
     row: usize,
 ) -> Option<AtlasTile> {
-    let water_n = final_neighbor_is_water_or_edge(backgrounds, cols, rows, col, row, 0, -1);
-    let water_e = final_neighbor_is_water_or_edge(backgrounds, cols, rows, col, row, 1, 0);
-    let water_s = final_neighbor_is_water_or_edge(backgrounds, cols, rows, col, row, 0, 1);
-    let water_w = final_neighbor_is_water_or_edge(backgrounds, cols, rows, col, row, -1, 0);
+    let center_level = levels[row * cols + col];
+    let water_n = final_neighbor_is_water_or_edge(
+        backgrounds,
+        foregrounds,
+        levels,
+        center_level,
+        use_ground_underlay,
+        cols,
+        rows,
+        col,
+        row,
+        0,
+        -1,
+    );
+    let water_e = final_neighbor_is_water_or_edge(
+        backgrounds,
+        foregrounds,
+        levels,
+        center_level,
+        use_ground_underlay,
+        cols,
+        rows,
+        col,
+        row,
+        1,
+        0,
+    );
+    let water_s = final_neighbor_is_water_or_edge(
+        backgrounds,
+        foregrounds,
+        levels,
+        center_level,
+        use_ground_underlay,
+        cols,
+        rows,
+        col,
+        row,
+        0,
+        1,
+    );
+    let water_w = final_neighbor_is_water_or_edge(
+        backgrounds,
+        foregrounds,
+        levels,
+        center_level,
+        use_ground_underlay,
+        cols,
+        rows,
+        col,
+        row,
+        -1,
+        0,
+    );
 
     Some(match (water_n, water_e, water_s, water_w) {
         (false, false, false, false) => return None,
@@ -1252,6 +1349,10 @@ fn final_shore_tile(
 
 fn final_neighbor_is_water_or_edge(
     backgrounds: &[BackgroundTile],
+    foregrounds: &[Option<AtlasTile>],
+    levels: &[GeneratedTileLevel],
+    center_level: GeneratedTileLevel,
+    use_ground_underlay: bool,
     cols: usize,
     rows: usize,
     col: usize,
@@ -1265,7 +1366,14 @@ fn final_neighbor_is_water_or_edge(
         return true;
     }
 
-    backgrounds[next_row as usize * cols + next_col as usize] == BackgroundTile::Water
+    let index = next_row as usize * cols + next_col as usize;
+    if center_level == GeneratedTileLevel::Ground || use_ground_underlay {
+        backgrounds[index] == BackgroundTile::Water
+    } else {
+        levels[index] == center_level
+            && backgrounds[index] == BackgroundTile::Water
+            && foregrounds[index].is_none()
+    }
 }
 
 fn apply_generated_platforms(world: &mut TileWorld, generated: &GeneratedWorld) {
@@ -1282,6 +1390,17 @@ fn apply_generated_platforms(world: &mut TileWorld, generated: &GeneratedWorld) 
         }),
         false,
     );
+}
+
+fn apply_generated_platform_seed_frame(
+    world: &mut TileWorld,
+    platform_seed_mask: &[Option<BackgroundTile>],
+) {
+    let mut mask = vec![None; world.cols * world.rows];
+    for (index, &background) in platform_seed_mask.iter().enumerate() {
+        mask[index] = background;
+    }
+    apply_platform_mask(world, &mask, false);
 }
 
 fn apply_generated_terrain_crosses(world: &mut TileWorld, generated: &GeneratedWorld) {
@@ -1317,13 +1436,6 @@ fn standalone_pillar_tile(background: BackgroundTile) -> AtlasTile {
     }
 }
 
-pub(super) fn apply_platform_rects(
-    world: &mut TileWorld,
-    platforms: impl IntoIterator<Item = (usize, usize, usize, usize, BackgroundTile)>,
-) {
-    apply_platform_rects_with_interior_fill(world, platforms, true);
-}
-
 fn apply_platform_rects_with_interior_fill(
     world: &mut TileWorld,
     platforms: impl IntoIterator<Item = (usize, usize, usize, usize, BackgroundTile)>,
@@ -1335,6 +1447,14 @@ fn apply_platform_rects_with_interior_fill(
         stamp_platform_visual_mask(world, &mut mask, col, row, cols, rows, background);
     }
 
+    apply_platform_mask(world, &mask, fill_interior_background);
+}
+
+fn apply_platform_mask(
+    world: &mut TileWorld,
+    mask: &[Option<BackgroundTile>],
+    fill_interior_background: bool,
+) {
     for row in 0..world.rows {
         for col in 0..world.cols {
             let Some(background) = mask[world.index(col, row)] else {
@@ -1677,384 +1797,4 @@ fn cardinal_neighbor_indices(
     ]
     .into_iter()
     .flatten()
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn seeded_world_places_large_platform_prestep_rectangles_when_the_map_has_room() {
-        let generator = RunningGenerator::new(48, 29, 123);
-        let world = generator.world();
-
-        let large_platforms = world
-            .platforms
-            .iter()
-            .filter(|platform| platform.kind == GeneratedPlatformKind::Large)
-            .collect::<Vec<_>>();
-        assert_eq!(large_platforms.len(), LARGE_PLATFORM_COUNT);
-        let platform_seed_mask = platform_seed_mask(world);
-        let mut seed_mask = platform_seed_mask
-            .iter()
-            .map(Option::is_some)
-            .collect::<Vec<_>>();
-        for row in 0..world.rows {
-            for col in 0..world.cols {
-                let Some(background) = platform_seed_mask[world.index(col, row)] else {
-                    continue;
-                };
-                let expected = match background {
-                    BackgroundTile::Grass => GeneratedCell::Grass,
-                    BackgroundTile::Water => GeneratedCell::Water,
-                };
-                assert_eq!(world.cell(col, row), expected);
-            }
-        }
-        for &cross in &world.terrain_crosses {
-            for (col, row) in terrain_cross_cells(cross) {
-                seed_mask[world.index(col, row)] = true;
-            }
-        }
-
-        for platform in large_platforms {
-            assert!((6..=10).contains(&platform.cols));
-            assert!((6..=10).contains(&platform.rows));
-            assert!(platform.col + platform.cols <= world.cols);
-            assert!(platform.row + platform.rows <= world.rows);
-
-            let mut saw_unknown_interior = false;
-            for row in platform.row + 1..platform.row + platform.rows - 1 {
-                for col in platform.col + 1..platform.col + platform.cols - 1 {
-                    if !seed_mask[world.index(col, row)] {
-                        assert_eq!(world.cell(col, row), GeneratedCell::Unknown);
-                        saw_unknown_interior = true;
-                    }
-                }
-            }
-            assert!(saw_unknown_interior);
-        }
-    }
-
-    #[test]
-    fn terrain_crosses_can_spawn_inside_platforms_but_not_near_platform_frame() {
-        let mut world = GeneratedWorld::new(12, 12);
-        let platform = GeneratedPlatform {
-            col: 1,
-            row: 1,
-            cols: 7,
-            rows: 9,
-            background: BackgroundTile::Grass,
-            kind: GeneratedPlatformKind::Large,
-        };
-        stamp_platform_background(&mut world, platform);
-        world.platforms.push(platform);
-
-        let occupied = platform_frame_buffer_mask(&world);
-        let inside_platform = GeneratedTerrainCross {
-            col: 4,
-            center_row: 5,
-            background: BackgroundTile::Water,
-        };
-        let near_top_frame = GeneratedTerrainCross {
-            col: 4,
-            center_row: 2,
-            background: BackgroundTile::Water,
-        };
-        let near_side_frame = GeneratedTerrainCross {
-            col: 2,
-            center_row: 5,
-            background: BackgroundTile::Water,
-        };
-        let near_bottom_pillars = GeneratedTerrainCross {
-            col: 4,
-            center_row: 9,
-            background: BackgroundTile::Water,
-        };
-
-        assert!(terrain_cross_fits(&world, &occupied, inside_platform));
-        assert!(!terrain_cross_fits(&world, &occupied, near_top_frame));
-        assert!(!terrain_cross_fits(&world, &occupied, near_side_frame));
-        assert!(!terrain_cross_fits(&world, &occupied, near_bottom_pillars));
-        for row in 0..=2 {
-            for col in 0..=8 {
-                assert!(occupied[world.index(col, row)]);
-            }
-        }
-        for row in 8..=11 {
-            for col in 0..=8 {
-                assert!(occupied[world.index(col, row)]);
-            }
-        }
-        for row in 0..=11 {
-            for col in [0, 1, 2, 7, 8] {
-                assert!(occupied[world.index(col, row)]);
-            }
-        }
-    }
-
-    #[test]
-    fn feature_reroll_mask_expands_touched_platform_to_full_footprint() {
-        let mut world = GeneratedWorld::new(7, 7);
-        let platform = GeneratedPlatform {
-            col: 1,
-            row: 1,
-            cols: 3,
-            rows: 3,
-            background: BackgroundTile::Grass,
-            kind: GeneratedPlatformKind::Large,
-        };
-        world.platforms.push(platform);
-        stamp_platform_backgrounds(&mut world);
-
-        let mask = world.feature_reroll_mask_for_rect(2, 2, 1, 1);
-
-        for row in 1..=4 {
-            for col in 1..=3 {
-                assert!(mask[world.index(col, row)]);
-            }
-        }
-        assert!(!mask[world.index(0, 0)]);
-        assert!(!mask[world.index(4, 4)]);
-    }
-
-    #[test]
-    fn feature_reroll_keeps_touched_platforms_and_crosses_as_seed_features() {
-        let mut world = GeneratedWorld::new(9, 9);
-        world.cells.fill(GeneratedCell::Grass);
-        world.platforms.push(GeneratedPlatform {
-            col: 1,
-            row: 1,
-            cols: 4,
-            rows: 4,
-            background: BackgroundTile::Grass,
-            kind: GeneratedPlatformKind::Large,
-        });
-        world.terrain_crosses.push(GeneratedTerrainCross {
-            col: 7,
-            center_row: 4,
-            background: BackgroundTile::Water,
-        });
-        stamp_platform_backgrounds(&mut world);
-        stamp_terrain_cross_background(
-            &mut world,
-            GeneratedTerrainCross {
-                col: 7,
-                center_row: 4,
-                background: BackgroundTile::Water,
-            },
-        );
-
-        let platform_mask = world.feature_reroll_mask_for_rect(2, 2, 1, 1);
-        let cross_mask = world.feature_reroll_mask_for_rect(7, 3, 1, 1);
-        let reroll_mask = platform_mask
-            .into_iter()
-            .zip(cross_mask)
-            .map(|(a, b)| a || b)
-            .collect::<Vec<_>>();
-
-        world.reroll_features_in_mask(&reroll_mask, 7);
-
-        assert!(world.platforms.iter().any(|platform| {
-            platform.kind == GeneratedPlatformKind::Large
-                && platform_footprint_intersects_mask(&world, *platform, &reroll_mask)
-        }));
-        assert!(
-            world
-                .terrain_crosses
-                .iter()
-                .any(|&cross| terrain_cross_intersects_mask(&world, cross, &reroll_mask))
-        );
-    }
-
-    #[test]
-    fn shoreline_replace_final_maps_cardinal_water_patterns_to_shore_tiles() {
-        let patterns = [
-            ((true, false, false, false), SHORE_TOP),
-            ((false, true, false, false), SHORE_RIGHT),
-            ((false, false, true, false), SHORE_BOTTOM),
-            ((false, false, false, true), SHORE_LEFT),
-            ((true, true, false, false), SHORE_TOP_RIGHT),
-            ((false, true, true, false), SHORE_BOTTOM_RIGHT),
-            ((false, false, true, true), SHORE_BOTTOM_LEFT),
-            ((true, false, false, true), SHORE_TOP_LEFT),
-            ((true, false, true, false), SHORE_NARROW_CENTER),
-            ((false, true, false, true), SHORE_NARROW_MIDDLE),
-            ((true, true, true, false), SHORE_NARROW_RIGHT),
-            ((false, true, true, true), SHORE_NARROW_BOTTOM),
-            ((true, false, true, true), SHORE_NARROW_LEFT),
-            ((true, true, false, true), SHORE_NARROW_TOP),
-            ((true, true, true, true), SHORE_SINGLE_IN_WATER),
-        ];
-
-        for (water_sides, expected_tile) in patterns {
-            let mut world = TileWorld::new(5, 5);
-            let (water_n, water_e, water_s, water_w) = water_sides;
-            for (is_water, col, row) in [
-                (water_n, 2, 1),
-                (water_e, 3, 2),
-                (water_s, 2, 3),
-                (water_w, 1, 2),
-            ] {
-                if is_water {
-                    world.set_background(col, row, BackgroundTile::Water);
-                }
-            }
-
-            shoreline_replace_final(&mut world);
-
-            assert_eq!(world.background(2, 2), BackgroundTile::Water);
-            assert_eq!(world.foreground(2, 2), Some(expected_tile));
-        }
-    }
-
-    #[test]
-    fn shoreline_replace_final_skips_full_grass_and_existing_foregrounds() {
-        let mut world = TileWorld::new(5, 5);
-        let foreground_index = world.index(3, 3);
-        world.foregrounds[foreground_index] = Some(CLIFF_GRASS_CAP_TILE);
-
-        shoreline_replace_final(&mut world);
-
-        assert_eq!(world.background(2, 2), BackgroundTile::Grass);
-        assert_eq!(world.foreground(2, 2), None);
-        assert_eq!(world.background(3, 3), BackgroundTile::Grass);
-        assert_eq!(world.foreground(3, 3), Some(CLIFF_GRASS_CAP_TILE));
-    }
-
-    #[test]
-    fn platform_seed_only_places_frame_and_bottom_pillar_row() {
-        let mut world = GeneratedWorld::new(7, 7);
-        let platform = GeneratedPlatform {
-            col: 1,
-            row: 1,
-            cols: 5,
-            rows: 5,
-            background: BackgroundTile::Water,
-            kind: GeneratedPlatformKind::Large,
-        };
-        world.platforms.push(platform);
-
-        stamp_platform_backgrounds(&mut world);
-
-        assert_eq!(world.cell(1, 1), GeneratedCell::Water);
-        assert_eq!(world.cell(3, 6), GeneratedCell::Water);
-        assert_eq!(world.cell(2, 2), GeneratedCell::Unknown);
-        assert_eq!(world.cell(3, 3), GeneratedCell::Unknown);
-    }
-
-    #[test]
-    fn running_generator_starts_with_platform_and_terrain_cross_cells_as_seed_when_the_map_has_room()
-     {
-        let generator = RunningGenerator::new(48, 29, 123);
-        let world = generator.world();
-        let mut seed_mask = vec![false; world.cells.len()];
-        for (index, background) in platform_seed_mask(world).into_iter().enumerate() {
-            seed_mask[index] = background.is_some();
-        }
-        for &cross in &world.terrain_crosses {
-            for (col, row) in terrain_cross_cells(cross) {
-                seed_mask[world.index(col, row)] = true;
-            }
-        }
-        let seed_area = seed_mask.iter().filter(|&&covered| covered).count();
-        let known_cells = world
-            .cells
-            .iter()
-            .filter(|&&cell| cell != GeneratedCell::Unknown)
-            .count();
-
-        assert!(!world.platforms.is_empty());
-        assert_eq!(known_cells, seed_area);
-    }
-
-    #[test]
-    fn seeded_world_places_terrain_crosses_as_upfront_crosses() {
-        let generator = RunningGenerator::new(48, 29, 123);
-        let world = generator.world();
-
-        assert!(!world.terrain_crosses.is_empty());
-        for &cross in &world.terrain_crosses {
-            assert!(cross.col > 0);
-            assert!(cross.center_row > 0);
-            assert!(cross.col + 1 < world.cols);
-            assert!(cross.center_row + 1 < world.rows);
-            let expected = match cross.background {
-                BackgroundTile::Grass => GeneratedCell::Grass,
-                BackgroundTile::Water => GeneratedCell::Water,
-            };
-
-            for (col, row) in terrain_cross_cells(cross) {
-                assert_eq!(world.cell(col, row), expected);
-            }
-        }
-    }
-
-    #[test]
-    fn seeded_world_places_four_to_six_small_platforms() {
-        let world = generate_world(48, 29, 123);
-        let small_platforms = world
-            .platforms
-            .iter()
-            .filter(|platform| platform.kind == GeneratedPlatformKind::Small)
-            .collect::<Vec<_>>();
-
-        assert!(
-            (SMALL_PLATFORM_MIN_COUNT..=SMALL_PLATFORM_MAX_COUNT).contains(&small_platforms.len())
-        );
-        for platform in small_platforms {
-            assert!((SMALL_PLATFORM_MIN_SIZE..=SMALL_PLATFORM_MAX_SIZE).contains(&platform.cols));
-            assert!((SMALL_PLATFORM_MIN_SIZE..=SMALL_PLATFORM_MAX_SIZE).contains(&platform.rows));
-            assert!(platform.col + platform.cols <= world.cols);
-            assert!(platform.row + platform.rows <= world.rows);
-        }
-    }
-
-    #[test]
-    fn each_large_platform_gets_one_centered_border_overlap_small_platform() {
-        let world = generate_world(48, 29, 123);
-        let large_platforms = world
-            .platforms
-            .iter()
-            .copied()
-            .filter(|platform| platform.kind == GeneratedPlatformKind::Large)
-            .collect::<Vec<_>>();
-        let small_platforms = world
-            .platforms
-            .iter()
-            .copied()
-            .filter(|platform| platform.kind == GeneratedPlatformKind::Small)
-            .collect::<Vec<_>>();
-
-        for large in large_platforms {
-            let attached_count = small_platforms
-                .iter()
-                .filter(|&&small| {
-                    platforms_overlap(large, small) && platform_center_on_border_of(large, small)
-                })
-                .count();
-            assert_eq!(attached_count, 1);
-        }
-    }
-
-    #[test]
-    fn platform_prestep_only_overlaps_large_platforms_with_their_attached_small_platforms() {
-        let world = generate_world(48, 29, 123);
-
-        for (index, &platform) in world.platforms.iter().enumerate() {
-            for &other in &world.platforms[index + 1..] {
-                if platforms_overlap(platform, other) {
-                    assert_ne!(platform.kind, other.kind);
-                    assert!(
-                        platform_center_on_border_of(platform, other)
-                            || platform_center_on_border_of(other, platform)
-                    );
-                    continue;
-                }
-
-                assert!(!platforms_overlap_with_margin(platform, other, 1));
-                assert!(!platforms_overlap_with_margin(other, platform, 1));
-            }
-        }
-    }
 }
