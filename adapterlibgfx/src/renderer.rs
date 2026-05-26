@@ -1,5 +1,6 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
+use std::time::Instant;
 
 use futures::executor::block_on;
 use wgpu::util::DeviceExt;
@@ -23,6 +24,12 @@ struct RgbOut {
     @builtin(position) position: vec4<f32>,
     @location(0) color: vec4<f32>,
 };
+
+struct FrameParams {
+    data: vec4<f32>,
+};
+
+@group(0) @binding(0) var<uniform> frame_params: FrameParams;
 
 @vertex
 fn rgb_vs(in: RgbIn) -> RgbOut {
@@ -49,8 +56,8 @@ struct TexOut {
     @location(1) color: vec4<f32>,
 };
 
-@group(0) @binding(0) var tex_sampler: sampler;
-@group(0) @binding(1) var tex_image: texture_2d<f32>;
+@group(1) @binding(0) var tex_sampler: sampler;
+@group(1) @binding(1) var tex_image: texture_2d<f32>;
 
 @vertex
 fn tex_vs(in: TexIn) -> TexOut {
@@ -64,6 +71,11 @@ fn tex_vs(in: TexIn) -> TexOut {
 
 #[cfg(not(feature = "shaderson"))]
 const SHADER_TEX_FRAGMENT: &str = r#"
+@fragment
+fn world_rgb_fs(in: RgbOut) -> @location(0) vec4<f32> {
+    return in.color;
+}
+
 @fragment
 fn tex_fs(in: TexOut) -> @location(0) vec4<f32> {
     return textureSample(tex_image, tex_sampler, in.uv) * in.color;
@@ -81,14 +93,34 @@ fn tex_alpha(uv: vec2<f32>) -> f32 {
     return textureSample(tex_image, tex_sampler, uv).a;
 }
 
-@fragment
-fn tex_fs(in: TexOut) -> @location(0) vec4<f32> {
-    let base = textureSample(tex_image, tex_sampler, in.uv) * in.color;
-    return base;
+fn frame_time() -> f32 {
+    return frame_params.data.x;
 }
 
 fn hash21(pixel: vec2<f32>) -> f32 {
     return fract(sin(dot(pixel, vec2<f32>(12.9898, 78.233))) * 43758.5453);
+}
+
+fn day_night_tint(color: vec4<f32>) -> vec4<f32> {
+    let cycle = fract(frame_time() / 180.0);
+    let night = smoothstep(0.48, 0.72, cycle) * (1.0 - smoothstep(0.88, 1.0, cycle));
+    let dawn = smoothstep(0.88, 1.0, cycle) + (1.0 - smoothstep(0.0, 0.12, cycle));
+    let dusk = smoothstep(0.38, 0.52, cycle) * (1.0 - smoothstep(0.52, 0.66, cycle));
+    var rgb = color.rgb;
+    rgb = mix(rgb, rgb * vec3<f32>(0.58, 0.66, 0.88) + vec3<f32>(0.010, 0.018, 0.045), night * 0.42);
+    rgb = mix(rgb, rgb * vec3<f32>(1.08, 0.94, 0.78) + vec3<f32>(0.030, 0.018, 0.004), (dawn + dusk) * 0.16);
+    return vec4<f32>(clamp(rgb, vec3<f32>(0.0), vec3<f32>(1.0)), color.a);
+}
+
+@fragment
+fn world_rgb_fs(in: RgbOut) -> @location(0) vec4<f32> {
+    return day_night_tint(in.color);
+}
+
+@fragment
+fn tex_fs(in: TexOut) -> @location(0) vec4<f32> {
+    let base = textureSample(tex_image, tex_sampler, in.uv) * in.color;
+    return base;
 }
 
 @fragment
@@ -113,8 +145,6 @@ fn world_tex_fs(in: TexOut) -> @location(0) vec4<f32> {
     let coverage = smoothstep(0.02, 0.20, base.a);
     let luma = dot(base.rgb, vec3<f32>(0.299, 0.587, 0.114));
     let pixel = floor(in.position.xy);
-    let water = smoothstep(0.04, 0.20, base.b - base.r)
-        * smoothstep(0.02, 0.18, base.g - base.r);
     let foliage = smoothstep(0.03, 0.22, base.g - max(base.r, base.b));
     let gold = smoothstep(0.08, 0.34, base.r - base.b)
         * smoothstep(0.00, 0.22, base.g - base.b)
@@ -131,18 +161,15 @@ fn world_tex_fs(in: TexOut) -> @location(0) vec4<f32> {
     rgb += vec3<f32>(1.0, 0.86, 0.52) * top_light * (0.08 + gold * 0.12);
     rgb -= vec3<f32>(0.025, 0.040, 0.075) * foot_shadow * (0.30 + foliage * 0.16);
     rgb += vec3<f32>(0.030, 0.050, 0.020) * foliage * tile_band;
-    rgb += vec3<f32>(0.045, 0.075, 0.090) * water;
     rgb *= 1.0 + alpha_slope;
 
-    let ripple = sin((pixel.x + pixel.y * 0.45) * 0.42) * 0.018;
-    rgb += vec3<f32>(0.04, 0.07, 0.10) * water * ripple;
     rgb += vec3<f32>(1.0, 0.82, 0.30) * gold * step(0.965, hash21(pixel)) * 0.20;
 
     let grain = hash21(pixel) - 0.5;
     let dither = step(0.5, fract((pixel.x + pixel.y) * 0.5)) * 0.018 - 0.009;
     rgb *= 0.995 + grain * 0.018 + dither;
 
-    return vec4<f32>(clamp(rgb, vec3<f32>(0.0), vec3<f32>(1.0)), base.a);
+    return day_night_tint(vec4<f32>(clamp(rgb, vec3<f32>(0.0), vec3<f32>(1.0)), base.a));
 }
 "#;
 
@@ -184,6 +211,8 @@ pub struct WgpuRenderer {
     queue: wgpu::Queue,
     config: wgpu::SurfaceConfiguration,
     shader: wgpu::ShaderModule,
+    started_at: Instant,
+    frame_layout: wgpu::BindGroupLayout,
     texture_layout: wgpu::BindGroupLayout,
     pipelines: HashMap<PipelineKey, wgpu::RenderPipeline>,
     textures: HashMap<u32, GpuTexture>,
@@ -237,6 +266,19 @@ impl WgpuRenderer {
             label: Some("adapterlibgfx-shader"),
             source: wgpu::ShaderSource::Wgsl(shader_source.into()),
         });
+        let frame_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("adapterlibgfx-frame-layout"),
+            entries: &[wgpu::BindGroupLayoutEntry {
+                binding: 0,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Uniform,
+                    has_dynamic_offset: false,
+                    min_binding_size: None,
+                },
+                count: None,
+            }],
+        });
         let texture_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("adapterlibgfx-texture-layout"),
             entries: &[
@@ -266,6 +308,8 @@ impl WgpuRenderer {
             queue,
             config,
             shader,
+            started_at: Instant::now(),
+            frame_layout,
             texture_layout,
             pipelines: HashMap::new(),
             textures: HashMap::new(),
@@ -330,6 +374,27 @@ impl WgpuRenderer {
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
                 label: Some("adapterlibgfx-frame"),
             });
+        let frame_params = [
+            self.started_at.elapsed().as_secs_f32(),
+            frame.logical_width.max(1) as f32,
+            frame.logical_height.max(1) as f32,
+            0.0,
+        ];
+        let frame_buffer = self
+            .device
+            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("adapterlibgfx-frame-params"),
+                contents: bytemuck::cast_slice(&frame_params),
+                usage: wgpu::BufferUsages::UNIFORM,
+            });
+        let frame_bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("adapterlibgfx-frame-bind-group"),
+            layout: &self.frame_layout,
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: frame_buffer.as_entire_binding(),
+            }],
+        });
         let mut current_target = 0u32;
         let mut cleared_targets = HashSet::new();
 
@@ -364,9 +429,23 @@ impl WgpuRenderer {
                     let load = self.load_op_for_target(&mut cleared_targets, current_target, frame);
                     if current_target == 0 {
                         let vertices = self.surface_rgb_vertices(vertices, frame);
-                        self.draw_rgb(&mut encoder, &view, format, load, &vertices);
+                        self.draw_rgb(
+                            &mut encoder,
+                            &view,
+                            format,
+                            load,
+                            &frame_bind_group,
+                            &vertices,
+                        );
                     } else {
-                        self.draw_rgb(&mut encoder, &view, format, load, vertices);
+                        self.draw_rgb(
+                            &mut encoder,
+                            &view,
+                            format,
+                            load,
+                            &frame_bind_group,
+                            vertices,
+                        );
                     }
                 }
                 FrameCommand::DrawTex { tex_id, vertices } => {
@@ -382,9 +461,25 @@ impl WgpuRenderer {
                     let load = self.load_op_for_target(&mut cleared_targets, current_target, frame);
                     if current_target == 0 {
                         let vertices = self.surface_tex_vertices(vertices, frame);
-                        self.draw_tex(&mut encoder, &view, format, load, &source_view, &vertices);
+                        self.draw_tex(
+                            &mut encoder,
+                            &view,
+                            format,
+                            load,
+                            &frame_bind_group,
+                            &source_view,
+                            &vertices,
+                        );
                     } else {
-                        self.draw_tex(&mut encoder, &view, format, load, &source_view, vertices);
+                        self.draw_tex(
+                            &mut encoder,
+                            &view,
+                            format,
+                            load,
+                            &frame_bind_group,
+                            &source_view,
+                            vertices,
+                        );
                     }
                 }
             }
@@ -571,6 +666,7 @@ impl WgpuRenderer {
         view: &wgpu::TextureView,
         format: wgpu::TextureFormat,
         load: wgpu::LoadOp<wgpu::Color>,
+        frame_bind_group: &wgpu::BindGroup,
         vertices: &[crate::vertex::RgbVertex],
     ) {
         if vertices.is_empty() {
@@ -591,6 +687,7 @@ impl WgpuRenderer {
         let pipeline = self.pipeline(PipelineKind::Rgb, format).clone();
         let mut pass = self.begin_draw_pass(encoder, view, load);
         pass.set_pipeline(&pipeline);
+        pass.set_bind_group(0, frame_bind_group, &[]);
         if let Some(scissor) = self.scissor {
             pass.set_scissor_rect(scissor.x, scissor.y, scissor.width, scissor.height);
         }
@@ -604,6 +701,7 @@ impl WgpuRenderer {
         view: &wgpu::TextureView,
         format: wgpu::TextureFormat,
         load: wgpu::LoadOp<wgpu::Color>,
+        frame_bind_group: &wgpu::BindGroup,
         source_view: &wgpu::TextureView,
         vertices: &[crate::vertex::TexVertex],
     ) {
@@ -642,7 +740,8 @@ impl WgpuRenderer {
         let pipeline = self.pipeline(PipelineKind::Tex, format).clone();
         let mut pass = self.begin_draw_pass(encoder, view, load);
         pass.set_pipeline(&pipeline);
-        pass.set_bind_group(0, &bind_group, &[]);
+        pass.set_bind_group(0, frame_bind_group, &[]);
+        pass.set_bind_group(1, &bind_group, &[]);
         if let Some(scissor) = self.scissor {
             pass.set_scissor_rect(scissor.x, scissor.y, scissor.width, scissor.height);
         }
@@ -679,11 +778,7 @@ impl WgpuRenderer {
     ) -> &wgpu::RenderPipeline {
         let key = PipelineKey {
             kind,
-            texture_effect: if matches!(kind, PipelineKind::Tex) {
-                self.texture_effect
-            } else {
-                TextureEffect::Plain
-            },
+            texture_effect: self.texture_effect,
             blend: self.blend,
             format,
         };
@@ -698,12 +793,15 @@ impl WgpuRenderer {
         let (vs, fs, buffers, layout) = match key.kind {
             PipelineKind::Rgb => (
                 "rgb_vs",
-                "rgb_fs",
+                match key.texture_effect {
+                    TextureEffect::Plain => "rgb_fs",
+                    TextureEffect::World => "world_rgb_fs",
+                },
                 vec![GpuRgbVertex::layout()],
                 self.device
                     .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                         label: Some("adapterlibgfx-rgb-layout"),
-                        bind_group_layouts: &[],
+                        bind_group_layouts: &[&self.frame_layout],
                         push_constant_ranges: &[],
                     }),
             ),
@@ -717,7 +815,7 @@ impl WgpuRenderer {
                 self.device
                     .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                         label: Some("adapterlibgfx-tex-layout"),
-                        bind_group_layouts: &[&self.texture_layout],
+                        bind_group_layouts: &[&self.frame_layout, &self.texture_layout],
                         push_constant_ranges: &[],
                     }),
             ),

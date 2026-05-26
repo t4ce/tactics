@@ -3,12 +3,15 @@ use adapterlibgfx::vertex::{Rgba8, TexVertex};
 pub const BANNER_TEXTURE: u32 = 21;
 pub const BIG_RIBBONS_TEXTURE: u32 = 22;
 pub const SMALL_RIBBONS_TEXTURE: u32 = 23;
+pub const SMALL_BAR_BASE_TEXTURE: u32 = 24;
 pub const BANNER_BYTES: &[u8] =
     include_bytes!("../ts_freepack/UI Elements/UI Elements/Banners/Banner.png");
 pub const BIG_RIBBONS_BYTES: &[u8] =
     include_bytes!("../ts_freepack/UI Elements/UI Elements/Ribbons/BigRibbons.png");
 pub const SMALL_RIBBONS_BYTES: &[u8] =
     include_bytes!("../ts_freepack/UI Elements/UI Elements/Ribbons/SmallRibbons.png");
+pub const SMALL_BAR_BASE_BYTES: &[u8] =
+    include_bytes!("../ts_freepack/UI Elements/UI Elements/Bars/SmallBar_Base.png");
 
 const BANNER_SOURCE_PX: f32 = 448.0;
 const BANNER_TILE_PX: f32 = 64.0;
@@ -19,12 +22,181 @@ const BIG_RIBBON_W: f32 = 448.0;
 #[allow(dead_code)]
 const SMALL_RIBBON_W: f32 = 320.0;
 const RIBBON_H: f32 = 640.0;
+const SMALL_BAR_BASE_W: f32 = 320.0;
+const SMALL_BAR_TEXTURE_H: f32 = 64.0;
+const SMALL_BAR_FRAME_TOP: f32 = 22.0;
+const SMALL_BAR_FRAME_BOTTOM: f32 = 41.0;
+const SMALL_BAR_FRAME_H: f32 = SMALL_BAR_FRAME_BOTTOM - SMALL_BAR_FRAME_TOP;
+const SMALL_BAR_LEFT_X: f32 = 49.0;
+const SMALL_BAR_LEFT_W: f32 = 15.0;
+const SMALL_BAR_CENTER_X: f32 = 160.0;
+const SMALL_BAR_RIGHT_X: f32 = 256.0;
+const SMALL_BAR_RIGHT_W: f32 = 15.0;
+const SMALL_BAR_FILL_TOP: f32 = 30.0;
+const SMALL_BAR_FILL_BOTTOM: f32 = 33.0;
 
 pub struct UiBatch {
     window_width: u32,
     window_height: u32,
     pub texture_bytes: Vec<u8>,
     pub solid_bytes: Vec<u8>,
+}
+
+pub struct SmallBarBatch {
+    window_width: u32,
+    window_height: u32,
+    pub base_bytes: Vec<u8>,
+    pub fill_solid_bytes: Vec<u8>,
+}
+
+impl SmallBarBatch {
+    pub fn new(window_width: u32, window_height: u32) -> Self {
+        Self {
+            window_width,
+            window_height,
+            base_bytes: Vec::new(),
+            fill_solid_bytes: Vec::new(),
+        }
+    }
+
+    pub fn small_bar(
+        &mut self,
+        x: f32,
+        y: f32,
+        w: f32,
+        h: f32,
+        value: f32,
+        fill_color: Rgba8,
+        base_color: Rgba8,
+    ) {
+        let value = value.clamp(0.0, 1.0);
+        if value <= 0.0 || w <= 0.0 || h <= 0.0 {
+            return;
+        }
+
+        let scaled_w = w * value;
+        let scale = h / SMALL_BAR_FRAME_H;
+        let left_w = SMALL_BAR_LEFT_W * scale;
+        let right_w = SMALL_BAR_RIGHT_W * scale;
+        let cap_w = left_w.min(right_w).min(scaled_w * 0.5);
+        let center_w = (scaled_w - cap_w * 2.0).max(0.0);
+        let fill_h = (SMALL_BAR_FILL_BOTTOM - SMALL_BAR_FILL_TOP) * scale;
+        let fill_y = y + (SMALL_BAR_FILL_TOP - SMALL_BAR_FRAME_TOP) * scale;
+
+        if center_w > 0.0 && fill_h > 0.0 {
+            self.solid_rect(x + cap_w, fill_y, center_w, fill_h, fill_color);
+        }
+
+        self.base_piece(
+            SMALL_BAR_LEFT_X,
+            SMALL_BAR_LEFT_W,
+            x,
+            y,
+            cap_w,
+            h,
+            base_color,
+        );
+        if center_w > 0.0 {
+            self.base_piece(
+                SMALL_BAR_CENTER_X,
+                1.0,
+                x + cap_w,
+                y,
+                center_w,
+                h,
+                base_color,
+            );
+        }
+        self.base_piece(
+            SMALL_BAR_RIGHT_X,
+            SMALL_BAR_RIGHT_W,
+            x + scaled_w - cap_w,
+            y,
+            cap_w,
+            h,
+            base_color,
+        );
+    }
+
+    fn base_piece(
+        &mut self,
+        source_x: f32,
+        source_w: f32,
+        x: f32,
+        y: f32,
+        w: f32,
+        h: f32,
+        color: Rgba8,
+    ) {
+        if w <= 0.0 || h <= 0.0 {
+            return;
+        }
+
+        self.image_uv(
+            x,
+            y,
+            w,
+            h,
+            [
+                source_x / SMALL_BAR_BASE_W,
+                SMALL_BAR_FRAME_TOP / SMALL_BAR_TEXTURE_H,
+                (source_x + source_w) / SMALL_BAR_BASE_W,
+                SMALL_BAR_FRAME_BOTTOM / SMALL_BAR_TEXTURE_H,
+            ],
+            color,
+        );
+    }
+
+    fn image_uv(&mut self, x: f32, y: f32, w: f32, h: f32, uv: [f32; 4], color: Rgba8) {
+        let [u0, v0, u1, v1] = uv;
+        let (x0, y0) = self.to_clip(x, y);
+        let (x1, y1) = self.to_clip(x + w, y + h);
+        self.tex_vertex(x0, y0, u0, v0, color);
+        self.tex_vertex(x1, y0, u1, v0, color);
+        self.tex_vertex(x1, y1, u1, v1, color);
+        self.tex_vertex(x0, y0, u0, v0, color);
+        self.tex_vertex(x1, y1, u1, v1, color);
+        self.tex_vertex(x0, y1, u0, v1, color);
+    }
+
+    fn solid_rect(&mut self, x: f32, y: f32, w: f32, h: f32, color: Rgba8) {
+        let (x0, y0) = self.to_clip(x, y);
+        let (x1, y1) = self.to_clip(x + w, y + h);
+        self.solid_vertex(x0, y0, color);
+        self.solid_vertex(x1, y0, color);
+        self.solid_vertex(x1, y1, color);
+        self.solid_vertex(x0, y0, color);
+        self.solid_vertex(x1, y1, color);
+        self.solid_vertex(x0, y1, color);
+    }
+
+    fn tex_vertex(&mut self, x: f32, y: f32, u: f32, v: f32, color: Rgba8) {
+        let vertex = TexVertex { x, y, u, v, color };
+        push_f32(&mut self.base_bytes, vertex.x);
+        push_f32(&mut self.base_bytes, vertex.y);
+        push_f32(&mut self.base_bytes, vertex.u);
+        push_f32(&mut self.base_bytes, vertex.v);
+        self.base_bytes.extend_from_slice(&[
+            vertex.color.r,
+            vertex.color.g,
+            vertex.color.b,
+            vertex.color.a,
+        ]);
+    }
+
+    fn solid_vertex(&mut self, x: f32, y: f32, color: Rgba8) {
+        push_f32(&mut self.fill_solid_bytes, x);
+        push_f32(&mut self.fill_solid_bytes, y);
+        self.fill_solid_bytes
+            .extend_from_slice(&[color.r, color.g, color.b, color.a]);
+    }
+
+    fn to_clip(&self, x: f32, y: f32) -> (f32, f32) {
+        (
+            (x / self.window_width as f32) * 2.0 - 1.0,
+            1.0 - (y / self.window_height as f32) * 2.0,
+        )
+    }
 }
 
 impl UiBatch {
@@ -420,5 +592,15 @@ mod tests {
 
         assert_eq!(ui.texture_bytes.len(), 6 * 3 * 2 * 20);
         assert!(ui.solid_bytes.is_empty());
+    }
+
+    #[test]
+    fn small_bar_emits_base_and_fill_batches() {
+        let mut bars = SmallBarBatch::new(320, 200);
+
+        bars.small_bar(12.0, 18.0, 80.0, 16.0, 0.5, Rgba8::WHITE, Rgba8::WHITE);
+
+        assert_eq!(bars.base_bytes.len(), 6 * 3 * 20);
+        assert_eq!(bars.fill_solid_bytes.len(), 6 * 12);
     }
 }

@@ -673,13 +673,10 @@ impl PlantKind {
     }
 
     fn render_offset_y(self) -> f32 {
-        if matches!(
-            self,
-            Self::Stump1 | Self::Stump2 | Self::Stump3 | Self::Stump4
-        ) {
-            -TILE_SIZE / 2.0
-        } else {
-            0.0
+        match self {
+            Self::Tree1 | Self::Tree2 | Self::Tree3 | Self::Tree4 => -TILE_SIZE / 2.0,
+            Self::Stump1 | Self::Stump2 | Self::Stump3 | Self::Stump4 => -TILE_SIZE / 4.0,
+            Self::Bush1 | Self::Bush2 | Self::Bush3 | Self::Bush4 => 0.0,
         }
     }
 
@@ -1105,6 +1102,39 @@ struct UnitWalkClip {
     offset_y: f32,
     frames: Vec<ExplorerFrame>,
     total_duration_ms: u32,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum DemoUnitTeam {
+    Player,
+    Ally,
+    Neutral,
+    Enemy,
+    Wild,
+}
+
+impl DemoUnitTeam {
+    const ALL: [Self; 5] = [
+        Self::Player,
+        Self::Ally,
+        Self::Neutral,
+        Self::Enemy,
+        Self::Wild,
+    ];
+
+    fn for_unit_index(index: usize) -> Self {
+        Self::ALL[index % Self::ALL.len()]
+    }
+
+    fn health_bar_color(self) -> Rgba8 {
+        match self {
+            Self::Player => Rgba8::new(80, 182, 255, 255),
+            Self::Ally => Rgba8::new(94, 214, 127, 255),
+            Self::Neutral => Rgba8::new(228, 213, 143, 255),
+            Self::Enemy => Rgba8::new(238, 84, 73, 255),
+            Self::Wild => Rgba8::new(190, 116, 232, 255),
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -1697,11 +1727,7 @@ impl Game {
                         | WaterState::Stone3
                         | WaterState::Stone4),
                     ) => Some(state),
-                    _ if self
-                        .world
-                        .foreground(col, row)
-                        .is_some_and(shoreline_tile_accepts_wave) =>
-                    {
+                    _ if self.world.cell_accepts_wave_animation(col, row) => {
                         Some(WaterState::Animation)
                     }
                     _ => None,
@@ -1931,12 +1957,27 @@ impl Game {
     fn draw_world(&mut self, adapter: &mut Adapter) {
         let _ = adapter.set_texture_effect(TextureEffect::World);
         self.terrain_cache.rebuild_if_dirty(&self.world);
+        let mut water = SolidBatch::new(self.window_width, self.window_height);
         let mut backgrounds = SpriteBatch::new(self.window_width, self.window_height);
         let mut foregrounds = SpriteBatch::new(self.window_width, self.window_height);
         let start_col = (self.camera.x / TILE_SIZE).floor().max(0.0) as usize;
         let start_row = (self.camera.y / TILE_SIZE).floor().max(0.0) as usize;
         let end_col = ((self.camera.x + self.view_w()) / TILE_SIZE).ceil() as usize + 1;
         let end_row = ((self.camera.y + self.view_h()) / TILE_SIZE).ceil() as usize + 1;
+
+        for row in start_row..end_row.min(self.world.rows) {
+            for col in start_col..end_col.min(self.world.cols) {
+                if self.world.render_background(col, row) == BackgroundTile::Water {
+                    water.rect(
+                        VIEW_X + col as f32 * TILE_SIZE - self.camera.x,
+                        VIEW_Y + row as f32 * TILE_SIZE - self.camera.y,
+                        TILE_SIZE,
+                        TILE_SIZE,
+                        Rgba8::new(71, 171, 169, 255),
+                    );
+                }
+            }
+        }
 
         for cell in self
             .terrain_cache
@@ -2016,6 +2057,7 @@ impl Game {
             }
         }
 
+        let _ = adapter.draw_rgb_triangles_no_present(&water.bytes);
         let _ = adapter.draw_tex_triangles_no_present(self.terrain.texture_id, &backgrounds.bytes);
         self.draw_water_states(adapter);
         let _ = adapter.draw_tex_triangles_no_present(self.terrain.texture_id, &foregrounds.bytes);
@@ -2038,11 +2080,7 @@ impl Game {
 
         for row in start_row..end_row.min(self.world.rows) {
             for col in start_col..end_col.min(self.world.cols) {
-                if self
-                    .world
-                    .foreground(col, row)
-                    .is_some_and(shoreline_tile_accepts_wave)
-                {
+                if self.world.cell_accepts_wave_animation(col, row) {
                     if let Some(image) =
                         self.active_water_visual_frame(WaterState::Animation, col, row, elapsed_ms)
                     {
@@ -3249,6 +3287,7 @@ impl UnitWalkViewer {
         for image in [
             ImageAsset::from_png_bytes(ts_ui::BANNER_TEXTURE, ts_ui::BANNER_BYTES),
             ImageAsset::from_png_bytes(ts_ui::BIG_RIBBONS_TEXTURE, ts_ui::BIG_RIBBONS_BYTES),
+            ImageAsset::from_png_bytes(ts_ui::SMALL_BAR_BASE_TEXTURE, ts_ui::SMALL_BAR_BASE_BYTES),
         ] {
             let rc = adapter.upload_texture_rgba_image(
                 image.texture_id,
@@ -4372,6 +4411,8 @@ impl FrameProducer for UnitWalkViewer {
         let cell_h = grid_h / rows as f32;
         let label_scale = 1.0;
         let label_h = 22.0;
+        let mut health_bars = ts_ui::SmallBarBatch::new(self.window_width, self.window_height);
+        let mut labels = ts_ui::UiBatch::new(self.window_width, self.window_height);
 
         for (index, unit) in self.units.iter().enumerate() {
             let frame = unit_walk_frame(unit, elapsed_ms);
@@ -4402,18 +4443,36 @@ impl FrameProducer for UnitWalkViewer {
             );
             let _ = adapter.draw_tex_triangles_no_present(frame.texture_id, &image.bytes);
 
-            let mut label = ts_ui::UiBatch::new(self.window_width, self.window_height);
+            let bar_w = cell_w.min(42.0).max(1.0).floor();
+            let bar_h = (bar_w / 5.0).clamp(2.0, 8.0).floor().max(1.0);
+            let bar_x = (image_x + (cell_w - bar_w) * 0.5).floor();
+            let bar_y = (y - bar_h - 2.0).max(image_y + 2.0).floor();
+            let team = DemoUnitTeam::for_unit_index(index);
+            health_bars.small_bar(
+                bar_x,
+                bar_y,
+                bar_w,
+                bar_h,
+                1.0,
+                team.health_bar_color(),
+                Rgba8::new(255, 255, 255, 245),
+            );
+
             let label_text = unit_viewer_label(unit);
             let label_w = ui_text_width(&label_text, label_scale);
-            label.text(
+            labels.text(
                 &label_text,
                 image_x + (cell_w - label_w) * 0.5,
                 image_y + image_h + 2.0,
                 label_scale,
                 Rgba8::new(220, 238, 232, 255),
             );
-            let _ = adapter.draw_rgb_triangles_no_present(&label.solid_bytes);
         }
+
+        let _ = adapter
+            .draw_tex_triangles_no_present(ts_ui::SMALL_BAR_BASE_TEXTURE, &health_bars.base_bytes);
+        let _ = adapter.draw_rgb_triangles_no_present(&health_bars.fill_solid_bytes);
+        let _ = adapter.draw_rgb_triangles_no_present(&labels.solid_bytes);
 
         let mut caption = ts_ui::UiBatch::new(self.window_width, self.window_height);
         caption.banner_panel(
@@ -4938,15 +4997,26 @@ impl TileWorld {
         self.background(col, row) == BackgroundTile::Water && self.foreground(col, row).is_none()
     }
 
+    fn cell_accepts_wave_animation(&self, col: usize, row: usize) -> bool {
+        self.background(col, row) == BackgroundTile::Water
+            && self
+                .foreground(col, row)
+                .is_some_and(shoreline_tile_accepts_wave)
+    }
+
     fn foreground(&self, col: usize, row: usize) -> Option<AtlasTile> {
         self.foregrounds[self.index(col, row)]
     }
 
     fn render_background(&self, col: usize, row: usize) -> BackgroundTile {
-        if self.foreground(col, row).is_some_and(is_shoreline_tile) {
+        let background = self.background(col, row);
+        if self
+            .foreground(col, row)
+            .is_some_and(|tile| shoreline_tile_forces_water_background(tile, background))
+        {
             BackgroundTile::Water
         } else {
-            self.background(col, row)
+            background
         }
     }
 
@@ -5242,6 +5312,36 @@ impl TileWorld {
                 }
             }
         }
+    }
+
+    fn collapse_generated_shorelines(&mut self) {
+        self.remove_single_cell_shoreline_sources();
+        self.collapse_shorelines();
+    }
+
+    fn remove_single_cell_shoreline_sources(&mut self) {
+        let mut backgrounds = self.backgrounds.clone();
+
+        for row in 0..self.rows {
+            for col in 0..self.cols {
+                let index = self.index(col, row);
+                match self.backgrounds[index] {
+                    BackgroundTile::Grass
+                        if self.shoreline_tile(col, row) == Some(SHORE_SINGLE_IN_WATER) =>
+                    {
+                        backgrounds[index] = BackgroundTile::Water;
+                    }
+                    BackgroundTile::Water
+                        if self.is_surrounded_by(col, row, BackgroundTile::Grass) =>
+                    {
+                        backgrounds[index] = BackgroundTile::Grass;
+                    }
+                    _ => {}
+                }
+            }
+        }
+
+        self.backgrounds = backgrounds;
     }
 
     fn shoreline_tile(&self, col: usize, row: usize) -> Option<AtlasTile> {
@@ -6090,6 +6190,11 @@ fn is_shoreline_tile(tile: AtlasTile) -> bool {
     )
 }
 
+fn shoreline_tile_forces_water_background(tile: AtlasTile, background: BackgroundTile) -> bool {
+    is_shoreline_tile(tile)
+        && !(tile == SHORE_SINGLE_IN_GRASS && background == BackgroundTile::Grass)
+}
+
 fn shoreline_tile_accepts_wave(tile: AtlasTile) -> bool {
     matches!(
         tile,
@@ -6257,6 +6362,12 @@ mod tests {
         world.paint(0, 0, Brush::Background(BackgroundTile::Grass));
         assert_eq!(world.background(0, 0), BackgroundTile::Grass);
         assert_eq!(world.render_background(0, 0), BackgroundTile::Water);
+
+        world.paint(0, 0, Brush::Background(BackgroundTile::Grass));
+        let index = world.index(0, 0);
+        world.foregrounds[index] = Some(SHORE_SINGLE_IN_GRASS);
+        assert_eq!(world.background(0, 0), BackgroundTile::Grass);
+        assert_eq!(world.render_background(0, 0), BackgroundTile::Grass);
 
         world.paint(1, 1, Brush::Foreground(RAMP_A.top));
         assert_eq!(world.background(1, 1), BackgroundTile::Grass);
@@ -7156,6 +7267,35 @@ mod tests {
     }
 
     #[test]
+    fn generated_shoreline_collapse_removes_single_grass_islands() {
+        let mut world = TileWorld::new(3, 3);
+        for row in 0..3 {
+            for col in 0..3 {
+                world.paint(col, row, Brush::Background(BackgroundTile::Water));
+            }
+        }
+        world.paint(1, 1, Brush::Background(BackgroundTile::Grass));
+
+        world.collapse_generated_shorelines();
+
+        assert_eq!(world.background(1, 1), BackgroundTile::Water);
+        assert_eq!(world.foreground(1, 1), None);
+        assert!(!world.foregrounds.contains(&Some(SHORE_SINGLE_IN_WATER)));
+    }
+
+    #[test]
+    fn generated_shoreline_collapse_removes_single_water_holes() {
+        let mut world = TileWorld::new(3, 3);
+        world.paint(1, 1, Brush::Background(BackgroundTile::Water));
+
+        world.collapse_generated_shorelines();
+
+        assert_eq!(world.background(1, 1), BackgroundTile::Grass);
+        assert_eq!(world.foreground(1, 1), None);
+        assert!(!world.foregrounds.contains(&Some(SHORE_SINGLE_IN_GRASS)));
+    }
+
+    #[test]
     fn wave_environment_only_targets_water_heavy_shoreline_tiles() {
         assert!(!shoreline_tile_accepts_wave(SHORE_TOP_LEFT));
         assert!(!shoreline_tile_accepts_wave(SHORE_TOP));
@@ -7310,6 +7450,16 @@ mod tests {
     }
 
     #[test]
+    fn demo_unit_team_colors_cycle_by_unit_index() {
+        assert_eq!(DemoUnitTeam::for_unit_index(0), DemoUnitTeam::Player);
+        assert_eq!(DemoUnitTeam::for_unit_index(1), DemoUnitTeam::Ally);
+        assert_eq!(DemoUnitTeam::for_unit_index(2), DemoUnitTeam::Neutral);
+        assert_eq!(DemoUnitTeam::for_unit_index(3), DemoUnitTeam::Enemy);
+        assert_eq!(DemoUnitTeam::for_unit_index(4), DemoUnitTeam::Wild);
+        assert_eq!(DemoUnitTeam::for_unit_index(5), DemoUnitTeam::Player);
+    }
+
+    #[test]
     fn lancer_animation_metadata_matches_aseprite_tags() {
         let set = ase_assets::load_tinted_aseprite_set(
             "ts_freepack/Lancer.aseprite",
@@ -7447,6 +7597,26 @@ mod tests {
             (game.water_animations[0].col, game.water_animations[0].row),
             (1, 0)
         );
+    }
+
+    #[test]
+    fn environment_animator_does_not_trigger_waves_over_grass_shore_tiles() {
+        let mut game = Game::new();
+        game.world = TileWorld::new(2, 1);
+        game.world
+            .paint(0, 0, Brush::Background(BackgroundTile::Water));
+        game.world.collapse_shorelines();
+        assert_eq!(game.world.background(1, 0), BackgroundTile::Grass);
+        assert!(
+            game.world
+                .foreground(1, 0)
+                .is_some_and(shoreline_tile_accepts_wave)
+        );
+        game.water_animation_timer = 0.0;
+
+        game.update_environment(1.0);
+
+        assert!(game.water_animations.is_empty());
     }
 
     #[test]
@@ -7669,13 +7839,25 @@ mod tests {
     }
 
     #[test]
-    fn stump_props_render_half_tile_above_their_hitbox() {
-        assert_eq!(PlantKind::Stump1.render_offset_y(), -TILE_SIZE / 2.0);
-        assert_eq!(PlantKind::Stump2.render_offset_y(), -TILE_SIZE / 2.0);
-        assert_eq!(PlantKind::Stump3.render_offset_y(), -TILE_SIZE / 2.0);
-        assert_eq!(PlantKind::Stump4.render_offset_y(), -TILE_SIZE / 2.0);
-        assert_eq!(PlantKind::Tree1.render_offset_y(), 0.0);
+    fn tree_and_stump_props_render_offset_without_changing_hitboxes() {
+        assert_eq!(PlantKind::Tree1.render_offset_y(), -TILE_SIZE / 2.0);
+        assert_eq!(PlantKind::Tree2.render_offset_y(), -TILE_SIZE / 2.0);
+        assert_eq!(PlantKind::Tree3.render_offset_y(), -TILE_SIZE / 2.0);
+        assert_eq!(PlantKind::Tree4.render_offset_y(), -TILE_SIZE / 2.0);
+        assert_eq!(PlantKind::Stump1.render_offset_y(), -TILE_SIZE / 4.0);
+        assert_eq!(PlantKind::Stump2.render_offset_y(), -TILE_SIZE / 4.0);
+        assert_eq!(PlantKind::Stump3.render_offset_y(), -TILE_SIZE / 4.0);
+        assert_eq!(PlantKind::Stump4.render_offset_y(), -TILE_SIZE / 4.0);
         assert_eq!(PlantKind::Bush1.render_offset_y(), 0.0);
+
+        assert_eq!(
+            prop_kind_footprint_rect2(PropKind::Plant(PlantKind::Tree1), 2, 4),
+            (2, 4, 2, 2)
+        );
+        assert_eq!(
+            prop_kind_footprint_rect2(PropKind::Plant(PlantKind::Stump1), 2, 4),
+            (2, 4, 2, 2)
+        );
     }
 
     #[test]
