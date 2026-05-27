@@ -1,8 +1,9 @@
 use super::{
-    AtlasTile, BackgroundTile, SHORE_BOTTOM, SHORE_BOTTOM_LEFT, SHORE_BOTTOM_RIGHT, SHORE_LEFT,
-    SHORE_NARROW_BOTTOM, SHORE_NARROW_CENTER, SHORE_NARROW_LEFT, SHORE_NARROW_MIDDLE,
-    SHORE_NARROW_RIGHT, SHORE_NARROW_TOP, SHORE_RIGHT, SHORE_SINGLE_IN_WATER, SHORE_TOP,
-    SHORE_TOP_LEFT, SHORE_TOP_RIGHT, SeededRng, TILE_SIZE, TileWorld,
+    AtlasTile, BUILDING_GRID_DIVISIONS, BackgroundTile, PlacedProp, PlantKind, PropKind,
+    SHORE_BOTTOM, SHORE_BOTTOM_LEFT, SHORE_BOTTOM_RIGHT, SHORE_LEFT, SHORE_NARROW_BOTTOM,
+    SHORE_NARROW_CENTER, SHORE_NARROW_LEFT, SHORE_NARROW_MIDDLE, SHORE_NARROW_RIGHT,
+    SHORE_NARROW_TOP, SHORE_RIGHT, SHORE_SINGLE_IN_WATER, SHORE_TOP, SHORE_TOP_LEFT,
+    SHORE_TOP_RIGHT, SeededRng, TILE_SIZE, TileWorld, WaterState,
 };
 
 const INITIAL_SEED_NUMERATOR: usize = 1;
@@ -23,6 +24,28 @@ const SMALL_PLATFORM_MIN_SIZE: usize = 3;
 const SMALL_PLATFORM_MAX_SIZE: usize = 5;
 const PLATFORM_PLACEMENT_ATTEMPTS: usize = 64;
 const TERRAIN_CROSS_CHANCE: usize = 100;
+const GENERATED_BUSH_CHANCE_DENOMINATOR: u64 = 32;
+const GENERATED_BUSH_PAIR_CHANCE_NUMERATOR: u64 = 35;
+const GENERATED_WATER_VARIATION_CHANCE_DENOMINATOR: u64 = 15;
+const GENERATED_BUSH_KINDS: [PlantKind; 4] = [
+    PlantKind::Bush1,
+    PlantKind::Bush2,
+    PlantKind::Bush3,
+    PlantKind::Bush4,
+];
+const GENERATED_WATER_STATES: [WaterState; 5] = [
+    WaterState::Stone1,
+    WaterState::Stone2,
+    WaterState::Stone3,
+    WaterState::Stone4,
+    WaterState::Duck,
+];
+const GENERATED_BUSH_ADJACENT_OFFSETS: [(isize, isize); 4] = [
+    (BUILDING_GRID_DIVISIONS as isize, 0),
+    (-(BUILDING_GRID_DIVISIONS as isize), 0),
+    (0, 1),
+    (0, -1),
+];
 pub(super) const PLATFORM_WATER_ROW_TILES: [AtlasTile; 3] = [
     AtlasTile { col: 5, row: 5 },
     AtlasTile { col: 6, row: 5 },
@@ -32,6 +55,16 @@ pub(super) const PLATFORM_GRASS_ROW_TILES: [AtlasTile; 3] = [
     AtlasTile { col: 5, row: 4 },
     AtlasTile { col: 6, row: 4 },
     AtlasTile { col: 7, row: 4 },
+];
+pub(super) const PLATFORM_GRASS_CLIFF_CAP_TILES: [AtlasTile; 3] = [
+    AtlasTile { col: 5, row: 3 },
+    AtlasTile { col: 6, row: 3 },
+    AtlasTile { col: 7, row: 3 },
+];
+pub(super) const VERTICAL_GRASS_CLIFF_TILES: [AtlasTile; 3] = [
+    AtlasTile { col: 8, row: 0 },
+    AtlasTile { col: 8, row: 1 },
+    AtlasTile { col: 8, row: 2 },
 ];
 pub(super) const CLIFF_GRASS_CAP_TILE: AtlasTile = AtlasTile { col: 8, row: 3 };
 pub(super) const STANDALONE_GRASS_PILLAR_TILE: AtlasTile = AtlasTile { col: 8, row: 4 };
@@ -57,7 +90,24 @@ const PLATFORM_GRASS_INNER_WATER_TOP_TILE: AtlasTile = AtlasTile { col: 4, row: 
 const PLATFORM_GRASS_INNER_WATER_LEFT_TILE: AtlasTile = AtlasTile { col: 4, row: 1 };
 const PLATFORM_GRASS_INNER_WATER_RIGHT_TILE: AtlasTile = AtlasTile { col: 4, row: 2 };
 const PLATFORM_GRASS_INNER_WATER_BOTTOM_TILE: AtlasTile = AtlasTile { col: 4, row: 3 };
-
+const LEVEL0_SHORELINE_BY_OPEN_MASK: [Option<AtlasTile>; 16] = [
+    None,
+    Some(SHORE_TOP),
+    Some(SHORE_RIGHT),
+    Some(SHORE_TOP_RIGHT),
+    Some(SHORE_BOTTOM),
+    Some(SHORE_NARROW_CENTER),
+    Some(SHORE_BOTTOM_RIGHT),
+    Some(SHORE_NARROW_RIGHT),
+    Some(SHORE_LEFT),
+    Some(SHORE_TOP_LEFT),
+    Some(SHORE_NARROW_MIDDLE),
+    Some(SHORE_NARROW_TOP),
+    Some(SHORE_BOTTOM_LEFT),
+    Some(SHORE_NARROW_LEFT),
+    Some(SHORE_NARROW_BOTTOM),
+    Some(SHORE_SINGLE_IN_WATER),
+];
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum GeneratedCell {
     Unknown,
@@ -88,16 +138,31 @@ pub(super) struct GeneratedTerrainCross {
     pub(super) background: BackgroundTile,
 }
 
-pub(super) struct GeneratedVisualWorld {
-    pub(super) tiles: TileWorld,
-    pub(super) visible: Vec<bool>,
-    pub(super) levels: Vec<GeneratedTileLevel>,
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) struct GeneratedWallTile {
+    pub(super) col: usize,
+    pub(super) row: usize,
+    pub(super) cols: usize,
+    pub(super) rows: usize,
+    pub(super) orientation: GeneratedWallOrientation,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(super) enum GeneratedTileLevel {
-    Ground,
-    Platform,
+pub(super) enum GeneratedWallOrientation {
+    Horizontal,
+    Vertical,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) struct GeneratedWallPreviewTile {
+    pub(super) col: usize,
+    pub(super) row: usize,
+    pub(super) tile: AtlasTile,
+}
+
+pub(super) struct GeneratedVisualWorld {
+    pub(super) tiles: TileWorld,
+    pub(super) visible: Vec<bool>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -107,6 +172,7 @@ pub(super) struct GeneratedWorld {
     pub(super) cells: Vec<GeneratedCell>,
     pub(super) platforms: Vec<GeneratedPlatform>,
     pub(super) terrain_crosses: Vec<GeneratedTerrainCross>,
+    pub(super) wall_tiles: Vec<GeneratedWallTile>,
 }
 
 impl GeneratedWorld {
@@ -117,6 +183,7 @@ impl GeneratedWorld {
             cells: vec![GeneratedCell::Unknown; cols.saturating_mul(rows)],
             platforms: Vec::new(),
             terrain_crosses: Vec::new(),
+            wall_tiles: Vec::new(),
         }
     }
 
@@ -147,34 +214,64 @@ impl GeneratedWorld {
     }
 
     pub(super) fn to_visual_tile_world(&self) -> GeneratedVisualWorld {
+        self.to_visual_tile_world_with_shoreline(true)
+    }
+
+    fn to_visual_tile_world_with_shoreline(&self, replace_shoreline: bool) -> GeneratedVisualWorld {
         let mut tiles = self.to_tile_world();
         apply_generated_platforms(&mut tiles, self);
         apply_generated_terrain_crosses(&mut tiles, self);
-        let levels = generated_tile_levels(self);
+        apply_generated_wall_tiles(&mut tiles, self);
+        if replace_shoreline {
+            let pre_shoreline_backgrounds = tiles.backgrounds.clone();
+            apply_level0_shoreline_replace(&mut tiles);
+            apply_platform_cliffline_replace(&mut tiles, &pre_shoreline_backgrounds);
+            apply_generated_asset_pass(&mut tiles);
+        }
 
         let platform_seed_mask = platform_seed_mask(self);
         let platform_seed_tiles = platform_seed_mask
             .iter()
             .map(|background| background.is_some())
             .collect::<Vec<_>>();
-        if self
+        let mut visible = vec![false; self.cells.len()];
+        let has_unknown = self
             .cells
             .iter()
-            .any(|&cell| cell == GeneratedCell::Unknown)
-        {
-            apply_generated_platform_seed_frame(&mut tiles, &platform_seed_mask);
-            apply_generated_terrain_crosses(&mut tiles, self);
-        }
-        let mut visible = vec![false; self.cells.len()];
+            .any(|&cell| cell == GeneratedCell::Unknown);
+        let platform_inner_preview_tiles = if has_unknown {
+            platform_inner_preview_mask(self, &platform_seed_mask)
+        } else {
+            vec![false; self.cells.len()]
+        };
         for (index, cell) in self.cells.iter().enumerate() {
-            visible[index] = *cell != GeneratedCell::Unknown || platform_seed_tiles[index];
+            visible[index] = if has_unknown && platform_seed_tiles[index] {
+                tiles.foregrounds[index].is_some() || tiles.under_foregrounds[index].is_some()
+            } else if has_unknown && platform_inner_preview_tiles[index] {
+                true
+            } else {
+                *cell != GeneratedCell::Unknown
+                    || platform_seed_tiles[index]
+                    || tiles.foregrounds[index].is_some()
+                    || tiles.under_foregrounds[index].is_some()
+            };
         }
 
-        GeneratedVisualWorld {
-            tiles,
-            visible,
-            levels,
-        }
+        GeneratedVisualWorld { tiles, visible }
+    }
+
+    fn visual_void_fill_mask(&self) -> Vec<bool> {
+        let visual_world = self.to_visual_tile_world_with_shoreline(false);
+        self.cells
+            .iter()
+            .enumerate()
+            .map(|(index, &cell)| {
+                cell == GeneratedCell::Unknown
+                    && !visual_world.visible[index]
+                    && visual_world.tiles.foregrounds[index].is_none()
+                    && visual_world.tiles.under_foregrounds[index].is_none()
+            })
+            .collect()
     }
 
     pub(super) fn feature_reroll_mask_for_rect(
@@ -252,6 +349,221 @@ impl GeneratedWorld {
 
         seed_reroll_platforms(self, reroll_mask, &touched_platforms, &mut rng);
         seed_reroll_terrain_crosses(self, reroll_mask, &touched_crosses, &mut rng);
+        let cols = self.cols;
+        let rows = self.rows;
+        self.wall_tiles.retain(|wall| {
+            wall.row < rows
+                && wall.col.saturating_add(wall.cols) <= cols
+                && wall.row.saturating_add(wall.rows) <= rows
+                && !generated_wall_cells(wall).any(|(col, row)| reroll_mask[row * cols + col])
+        });
+    }
+
+    pub(super) fn can_add_horizontal_wall_centered(
+        &self,
+        col: usize,
+        row: usize,
+        cols: usize,
+    ) -> bool {
+        let Some(start_col) = horizontal_wall_start_col(self.cols, col, cols) else {
+            return false;
+        };
+        if row >= self.rows {
+            return false;
+        }
+        let platform_mask = platform_rect_mask(self);
+        if !generated_wall_run_has_same_level(&platform_mask, self, start_col, row, cols) {
+            return false;
+        }
+
+        let mut tiles = self.to_tile_world();
+        apply_generated_platforms(&mut tiles, self);
+        apply_generated_terrain_crosses(&mut tiles, self);
+        apply_generated_wall_tiles(&mut tiles, self);
+        generated_wall_run_has_pillar_clearance(&tiles, start_col, row, cols)
+    }
+
+    pub(super) fn add_horizontal_wall_centered(
+        &mut self,
+        col: usize,
+        row: usize,
+        cols: usize,
+    ) -> bool {
+        if !self.can_add_horizontal_wall_centered(col, row, cols) {
+            return false;
+        }
+        let start_col = horizontal_wall_start_col(self.cols, col, cols).unwrap();
+
+        let wall = GeneratedWallTile {
+            col: start_col,
+            row,
+            cols,
+            rows: 1,
+            orientation: GeneratedWallOrientation::Horizontal,
+        };
+        if !self.wall_tiles.contains(&wall) {
+            self.wall_tiles.push(wall);
+        }
+        true
+    }
+
+    #[cfg(test)]
+    pub(super) fn add_wall_run3_centered(&mut self, col: usize, row: usize) -> bool {
+        self.add_horizontal_wall_centered(col, row, 3)
+    }
+
+    pub(super) fn can_add_vertical_wall_centered(
+        &self,
+        col: usize,
+        row: usize,
+        cliff_rows: usize,
+    ) -> bool {
+        let Some(start_row) = vertical_wall_start_row(self.rows, row, cliff_rows) else {
+            return false;
+        };
+        if col >= self.cols {
+            return false;
+        }
+        let rows = cliff_rows + 1;
+        let platform_mask = platform_rect_mask(self);
+        if !generated_vertical_wall_run_has_same_level(&platform_mask, self, col, start_row, rows) {
+            return false;
+        }
+
+        let mut tiles = self.to_tile_world();
+        apply_generated_platforms(&mut tiles, self);
+        apply_generated_terrain_crosses(&mut tiles, self);
+        apply_generated_wall_tiles(&mut tiles, self);
+        generated_vertical_wall_run_has_pillar_clearance(&tiles, col, start_row, rows)
+    }
+
+    pub(super) fn add_vertical_wall_centered(
+        &mut self,
+        col: usize,
+        row: usize,
+        cliff_rows: usize,
+    ) -> bool {
+        if !self.can_add_vertical_wall_centered(col, row, cliff_rows) {
+            return false;
+        }
+        let start_row = vertical_wall_start_row(self.rows, row, cliff_rows).unwrap();
+
+        let wall = GeneratedWallTile {
+            col,
+            row: start_row,
+            cols: 1,
+            rows: cliff_rows + 1,
+            orientation: GeneratedWallOrientation::Vertical,
+        };
+        if !self.wall_tiles.contains(&wall) {
+            self.wall_tiles.push(wall);
+        }
+        true
+    }
+
+    #[cfg(test)]
+    pub(super) fn add_vertical_wall_run3_centered(&mut self, col: usize, row: usize) -> bool {
+        self.add_vertical_wall_centered(col, row, 3)
+    }
+
+    pub(super) fn horizontal_wall_preview_tiles_centered(
+        &self,
+        col: usize,
+        row: usize,
+        cols: usize,
+    ) -> Option<Vec<GeneratedWallPreviewTile>> {
+        if !self.can_add_horizontal_wall_centered(col, row, cols) {
+            return None;
+        }
+
+        let start_col = horizontal_wall_start_col(self.cols, col, cols).unwrap();
+        let mut tiles = self.to_tile_world();
+        apply_generated_platforms(&mut tiles, self);
+        apply_generated_terrain_crosses(&mut tiles, self);
+        apply_generated_wall_tiles(&mut tiles, self);
+        let platform_mask = platform_rect_mask(self);
+
+        let mut preview_tiles = Vec::with_capacity(cols * 2);
+        if row > 0 {
+            preview_tiles.extend((0..cols).map(|offset| GeneratedWallPreviewTile {
+                col: start_col + offset,
+                row: row - 1,
+                tile: wall_cliff_cap_tile(offset, cols),
+            }));
+        }
+        preview_tiles.extend((0..cols).map(|offset| {
+            let tile_col = start_col + offset;
+            let tile_background = wall_cap_tile_background(&tiles, &platform_mask, tile_col, row);
+            GeneratedWallPreviewTile {
+                col: tile_col,
+                row,
+                tile: platform_row_tile(
+                    tile_background,
+                    tile_background,
+                    &platform_mask,
+                    tiles.cols,
+                    row,
+                    start_col,
+                    tile_col,
+                    offset,
+                    cols,
+                ),
+            }
+        }));
+        Some(preview_tiles)
+    }
+
+    pub(super) fn vertical_wall_preview_tiles_centered(
+        &self,
+        col: usize,
+        row: usize,
+        cliff_rows: usize,
+    ) -> Option<Vec<GeneratedWallPreviewTile>> {
+        if !self.can_add_vertical_wall_centered(col, row, cliff_rows) {
+            return None;
+        }
+
+        let start_row = vertical_wall_start_row(self.rows, row, cliff_rows).unwrap();
+        let mut tiles = self.to_tile_world();
+        apply_generated_platforms(&mut tiles, self);
+        apply_generated_terrain_crosses(&mut tiles, self);
+        apply_generated_wall_tiles(&mut tiles, self);
+        let platform_mask = platform_rect_mask(self);
+
+        let mut preview_tiles = Vec::with_capacity(cliff_rows + 1);
+        preview_tiles.extend((0..cliff_rows).map(|offset| GeneratedWallPreviewTile {
+            col,
+            row: start_row + offset,
+            tile: vertical_cliff_tile(offset, cliff_rows),
+        }));
+        let pillar_row = start_row + cliff_rows;
+        preview_tiles.push({
+            let tile_background = wall_cap_tile_background(&tiles, &platform_mask, col, pillar_row);
+            GeneratedWallPreviewTile {
+                col,
+                row: pillar_row,
+                tile: standalone_pillar_tile(tile_background),
+            }
+        });
+        Some(preview_tiles)
+    }
+
+    #[cfg(test)]
+    pub(super) fn wall_run3_preview_tiles_centered(
+        &self,
+        col: usize,
+        row: usize,
+    ) -> Option<Vec<GeneratedWallPreviewTile>> {
+        self.horizontal_wall_preview_tiles_centered(col, row, 3)
+    }
+
+    #[cfg(test)]
+    pub(super) fn vertical_wall_run3_preview_tiles_centered(
+        &self,
+        col: usize,
+        row: usize,
+    ) -> Option<Vec<GeneratedWallPreviewTile>> {
+        self.vertical_wall_preview_tiles_centered(col, row, 3)
     }
 
     fn index(&self, col: usize, row: usize) -> usize {
@@ -264,102 +576,143 @@ impl GeneratedWorld {
 pub(super) struct RunningGenerator {
     world: GeneratedWorld,
     rng: SeededRng,
-    buckets: [Vec<usize>; 5],
-    in_frontier: Vec<bool>,
-    remaining_unknown: usize,
+    initial_seeds_complete: bool,
 }
 
 impl RunningGenerator {
     pub(super) fn new(cols: usize, rows: usize, seed: u64) -> Self {
         let mut rng = SeededRng::new(seed);
-        let world = seeded_world(cols, rows, &mut rng);
-        Self::from_world_with_rng(world, rng)
+        let mut world = GeneratedWorld::new(cols, rows);
+        seed_large_platforms(&mut world, &mut rng);
+        seed_remaining_platforms(&mut world, &mut rng);
+        seed_terrain_crosses(&mut world, &mut rng);
+        Self::from_world_with_rng_and_stage(world, rng, false)
     }
 
     pub(super) fn from_world(world: GeneratedWorld, seed: u64) -> Self {
-        Self::from_world_with_rng(world, SeededRng::new(seed))
+        Self::from_world_with_rng_and_stage(world, SeededRng::new(seed), true)
     }
 
-    fn from_world_with_rng(world: GeneratedWorld, rng: SeededRng) -> Self {
-        let mut generator = Self {
-            remaining_unknown: world
-                .cells
-                .iter()
-                .filter(|&&cell| cell == GeneratedCell::Unknown)
-                .count(),
-            in_frontier: vec![false; world.cells.len()],
-            buckets: std::array::from_fn(|_| Vec::new()),
+    fn from_world_with_rng_and_stage(
+        world: GeneratedWorld,
+        rng: SeededRng,
+        initial_seeds_complete: bool,
+    ) -> Self {
+        Self {
             world,
             rng,
-        };
-        generator.rebuild_frontier();
-        generator
+            initial_seeds_complete,
+        }
     }
 
     pub(super) fn world(&self) -> &GeneratedWorld {
         &self.world
     }
 
-    pub(super) fn is_complete(&self) -> bool {
-        self.remaining_unknown == 0
+    pub(super) fn add_horizontal_wall_centered(
+        &mut self,
+        col: usize,
+        row: usize,
+        cols: usize,
+    ) -> bool {
+        self.world.add_horizontal_wall_centered(col, row, cols)
     }
 
-    pub(super) fn step(&mut self, max_cells: usize) -> usize {
-        let mut collapsed = 0;
-        while collapsed < max_cells && self.remaining_unknown > 0 {
-            let Some(index) = next_frontier_cell(
-                &self.world,
-                &mut self.buckets,
-                &mut self.in_frontier,
-                &mut self.rng,
-            )
-            .or_else(|| {
-                self.world
-                    .cells
-                    .iter()
-                    .position(|&cell| cell == GeneratedCell::Unknown)
-            }) else {
-                self.remaining_unknown = 0;
-                break;
-            };
-            self.world.cells[index] = affinity_fitting_cell(&self.world, index, &mut self.rng);
-            self.remaining_unknown -= 1;
-            collapsed += 1;
-            add_unknown_neighbors_to_frontier(
-                &self.world,
-                index,
-                &mut self.buckets,
-                &mut self.in_frontier,
-            );
+    pub(super) fn add_vertical_wall_centered(
+        &mut self,
+        col: usize,
+        row: usize,
+        cliff_rows: usize,
+    ) -> bool {
+        self.world.add_vertical_wall_centered(col, row, cliff_rows)
+    }
+
+    pub(super) fn horizontal_wall_preview_tiles_centered(
+        &self,
+        col: usize,
+        row: usize,
+        cols: usize,
+    ) -> Option<Vec<GeneratedWallPreviewTile>> {
+        self.world
+            .horizontal_wall_preview_tiles_centered(col, row, cols)
+    }
+
+    pub(super) fn vertical_wall_preview_tiles_centered(
+        &self,
+        col: usize,
+        row: usize,
+        cliff_rows: usize,
+    ) -> Option<Vec<GeneratedWallPreviewTile>> {
+        self.world
+            .vertical_wall_preview_tiles_centered(col, row, cliff_rows)
+    }
+
+    pub(super) fn complete_initial_seeds(&mut self) {
+        if self.initial_seeds_complete {
+            return;
         }
-        collapsed
+
+        seed_fallback_cells_if_needed(&mut self.world, &mut self.rng);
+        self.initial_seeds_complete = true;
     }
 
-    fn rebuild_frontier(&mut self) {
+    pub(super) fn fill_visual_voids_once(&mut self, max_cells: usize) -> usize {
+        let fillable = self.world.visual_void_fill_mask();
+        let mut buckets = std::array::from_fn(|_| Vec::new());
+        let mut in_frontier = vec![false; self.world.cells.len()];
+
         for index in 0..self.world.cells.len() {
             if self.world.cells[index] != GeneratedCell::Unknown {
-                add_unknown_neighbors_to_frontier(
+                add_fillable_unknown_neighbors_to_frontier(
                     &self.world,
+                    &fillable,
                     index,
-                    &mut self.buckets,
-                    &mut self.in_frontier,
+                    &mut buckets,
+                    &mut in_frontier,
                 );
             }
         }
+
+        let mut collapsed = 0;
+        while collapsed < max_cells {
+            let Some(index) = next_fillable_frontier_cell(
+                &self.world,
+                &fillable,
+                &mut buckets,
+                &mut in_frontier,
+                &mut self.rng,
+            )
+            .or_else(|| {
+                fillable
+                    .iter()
+                    .enumerate()
+                    .find(|&(index, &fillable)| {
+                        fillable && self.world.cells[index] == GeneratedCell::Unknown
+                    })
+                    .map(|(index, _)| index)
+            }) else {
+                break;
+            };
+
+            self.world.cells[index] = affinity_fitting_cell(&self.world, index, &mut self.rng);
+            collapsed += 1;
+            add_fillable_unknown_neighbors_to_frontier(
+                &self.world,
+                &fillable,
+                index,
+                &mut buckets,
+                &mut in_frontier,
+            );
+        }
+
+        collapsed
     }
 }
 
-fn seeded_world(cols: usize, rows: usize, rng: &mut SeededRng) -> GeneratedWorld {
-    let mut world = GeneratedWorld::new(cols, rows);
+fn seed_fallback_cells_if_needed(world: &mut GeneratedWorld, rng: &mut SeededRng) {
     let cell_count = world.cells.len();
-    if cell_count == 0 {
-        return world;
-    }
-
-    seed_platforms(&mut world, rng);
-    seed_terrain_crosses(&mut world, rng);
-    if !world.platforms.is_empty() {
-        return world;
+    if cell_count == 0 || !world.platforms.is_empty() {
+        return;
     }
 
     let seed_count = cell_count
@@ -382,11 +735,9 @@ fn seeded_world(cols: usize, rows: usize, rng: &mut SeededRng) -> GeneratedWorld
             GeneratedCell::Grass
         };
     }
-
-    world
 }
 
-fn seed_platforms(world: &mut GeneratedWorld, rng: &mut SeededRng) {
+fn seed_large_platforms(world: &mut GeneratedWorld, rng: &mut SeededRng) {
     if world.cols < LARGE_PLATFORM_BASE_SIZE || world.rows < LARGE_PLATFORM_BASE_SIZE {
         return;
     }
@@ -412,7 +763,9 @@ fn seed_platforms(world: &mut GeneratedWorld, rng: &mut SeededRng) {
         };
         world.platforms.push(platform);
     }
+}
 
+fn seed_remaining_platforms(world: &mut GeneratedWorld, rng: &mut SeededRng) {
     if world.cols < SMALL_PLATFORM_MIN_SIZE || world.rows < SMALL_PLATFORM_MIN_SIZE {
         stamp_platform_backgrounds(world);
         return;
@@ -813,18 +1166,6 @@ fn terrain_cross_fits_mask(
     })
 }
 
-fn generated_tile_levels(world: &GeneratedWorld) -> Vec<GeneratedTileLevel> {
-    let mut levels = vec![GeneratedTileLevel::Ground; world.cells.len()];
-    for &platform in &world.platforms {
-        for (col, row) in platform_footprint_cells(world.cols, world.rows, platform) {
-            if col < world.cols && row < world.rows {
-                levels[world.index(col, row)] = GeneratedTileLevel::Platform;
-            }
-        }
-    }
-    levels
-}
-
 fn platform_frame_buffer_mask(world: &GeneratedWorld) -> Vec<bool> {
     let mut mask = vec![false; world.cells.len()];
     for platform in &world.platforms {
@@ -1052,6 +1393,7 @@ fn platform_fits_attached_to(
 }
 
 fn stamp_platform_backgrounds(world: &mut GeneratedWorld) {
+    let rect_mask = platform_rect_mask(world);
     let mask = platform_seed_mask(world);
     for row in 0..world.rows {
         for col in 0..world.cols {
@@ -1059,7 +1401,12 @@ fn stamp_platform_backgrounds(world: &mut GeneratedWorld) {
                 continue;
             };
             let index = world.index(col, row);
-            world.cells[index] = match background {
+            let seeded_background = if rect_mask[index].is_some() {
+                BackgroundTile::Grass
+            } else {
+                background
+            };
+            world.cells[index] = match seeded_background {
                 BackgroundTile::Grass => GeneratedCell::Grass,
                 BackgroundTile::Water => GeneratedCell::Water,
             };
@@ -1089,6 +1436,72 @@ fn platform_seed_mask(world: &GeneratedWorld) -> Vec<Option<BackgroundTile>> {
         }
     }
     seed_mask
+}
+
+fn platform_inner_preview_mask(
+    world: &GeneratedWorld,
+    seed_mask: &[Option<BackgroundTile>],
+) -> Vec<bool> {
+    let platform_mask = platform_rect_mask(world);
+    let large_mask = platform_kind_rect_mask(world, GeneratedPlatformKind::Large);
+    let small_mask = platform_kind_rect_mask(world, GeneratedPlatformKind::Small);
+    let mut inner_mask = vec![false; world.cells.len()];
+
+    for row in 0..world.rows {
+        for col in 0..world.cols {
+            let index = world.index(col, row);
+            if platform_mask[index].is_none()
+                || seed_mask[index].is_some()
+                || !large_mask[index]
+                || !small_mask[index]
+            {
+                continue;
+            }
+
+            let seeded_frame_neighbors = [(0, -1), (1, 0), (0, 1), (-1, 0)]
+                .iter()
+                .filter(|&&(dc, dr)| {
+                    let next_col = col as isize + dc;
+                    let next_row = row as isize + dr;
+                    if next_col < 0
+                        || next_row < 0
+                        || next_col >= world.cols as isize
+                        || next_row >= world.rows as isize
+                    {
+                        return false;
+                    }
+
+                    let next_index = world.index(next_col as usize, next_row as usize);
+                    platform_mask[next_index].is_some() && seed_mask[next_index].is_some()
+                })
+                .count();
+            if seeded_frame_neighbors >= 2 {
+                inner_mask[index] = true;
+            }
+        }
+    }
+
+    inner_mask
+}
+
+fn platform_kind_rect_mask(world: &GeneratedWorld, kind: GeneratedPlatformKind) -> Vec<bool> {
+    let mut mask = vec![false; world.cells.len()];
+    for platform in world
+        .platforms
+        .iter()
+        .filter(|platform| platform.kind == kind)
+    {
+        let start_col = platform.col.min(world.cols);
+        let start_row = platform.row.min(world.rows);
+        let end_col = platform.col.saturating_add(platform.cols).min(world.cols);
+        let end_row = platform.row.saturating_add(platform.rows).min(world.rows);
+        for row in start_row..end_row {
+            for col in start_col..end_col {
+                mask[world.index(col, row)] = true;
+            }
+        }
+    }
+    mask
 }
 
 fn platform_rect_mask(world: &GeneratedWorld) -> Vec<Option<BackgroundTile>> {
@@ -1156,61 +1569,331 @@ fn terrain_cross_cells(cross: GeneratedTerrainCross) -> [(usize, usize); 5] {
     ]
 }
 
-pub(super) fn shoreline_replace_final(world: &mut TileWorld, levels: &[GeneratedTileLevel]) {
-    let backgrounds = world.backgrounds.clone();
-    let foregrounds = world.foregrounds.clone();
-    for row in 0..world.rows {
-        for col in 0..world.cols {
-            let index = world.index(col, row);
-            if backgrounds[index] != BackgroundTile::Grass
-                || foreground_blocks_final_shore(foregrounds[index])
-            {
-                continue;
+fn apply_generated_platforms(world: &mut TileWorld, generated: &GeneratedWorld) {
+    apply_platform_rects_with_interior_fill(
+        world,
+        generated.platforms.iter().map(|platform| {
+            (
+                platform.col,
+                platform.row,
+                platform.cols,
+                platform.rows,
+                platform.background,
+            )
+        }),
+        false,
+    );
+}
+
+fn apply_generated_terrain_crosses(world: &mut TileWorld, generated: &GeneratedWorld) {
+    for cross in &generated.terrain_crosses {
+        if cross.col >= world.cols || cross.center_row >= world.rows {
+            continue;
+        }
+        apply_generated_terrain_cross_background(world, *cross);
+        if cross.center_row > 0 {
+            let cap_index = world.index(cross.col, cross.center_row - 1);
+            world.foregrounds[cap_index] = Some(CLIFF_GRASS_CAP_TILE);
+        }
+        let index = world.index(cross.col, cross.center_row);
+        world.foregrounds[index] = Some(standalone_pillar_tile(cross.background));
+    }
+}
+
+fn apply_generated_terrain_cross_background(world: &mut TileWorld, cross: GeneratedTerrainCross) {
+    for (col, row) in terrain_cross_cells(cross) {
+        if col >= world.cols || row >= world.rows {
+            continue;
+        }
+        let index = world.index(col, row);
+        world.set_background(col, row, cross.background);
+        world.foregrounds[index] = None;
+    }
+}
+
+fn apply_generated_wall_tiles(world: &mut TileWorld, generated: &GeneratedWorld) {
+    let platform_mask = platform_rect_mask(generated);
+    for wall in &generated.wall_tiles {
+        match wall.orientation {
+            GeneratedWallOrientation::Horizontal => {
+                apply_wall_cliff_cap_run(world, wall.row, wall.col, wall.cols);
+                apply_wall_cap_run(world, &platform_mask, wall.row, wall.col, wall.cols);
             }
-            let use_underlay = foreground_accepts_final_shore_underlay(foregrounds[index]);
-            if let Some(tile) = final_shore_tile(
-                &backgrounds,
-                &foregrounds,
-                levels,
-                use_underlay,
-                world.cols,
-                world.rows,
-                col,
-                row,
-            ) {
-                world.set_background(col, row, BackgroundTile::Water);
-                if use_underlay {
-                    world.under_foregrounds[index] = Some(tile);
-                } else {
-                    world.foregrounds[index] = Some(tile);
-                }
+            GeneratedWallOrientation::Vertical => {
+                apply_vertical_wall_run(world, &platform_mask, wall.row, wall.col, wall.rows);
             }
         }
     }
-    platform_frame_constraint_replace_final(world, levels);
 }
 
-fn platform_frame_constraint_replace_final(world: &mut TileWorld, levels: &[GeneratedTileLevel]) {
-    let backgrounds = world.backgrounds.clone();
-    let foregrounds = world.foregrounds.clone();
+fn apply_generated_asset_pass(world: &mut TileWorld) {
+    apply_generated_bushes(world);
+    apply_generated_water_variations(world);
+}
+
+fn apply_generated_bushes(world: &mut TileWorld) {
+    for row in 0..world.rows {
+        for col in 0..world.cols {
+            if !generated_asset_tile_is_plain_grass(world, col, row) {
+                continue;
+            }
+
+            for half_row in 0..BUILDING_GRID_DIVISIONS {
+                let roll = generated_asset_roll(col, row, half_row, 0xB05C_BA55_2026);
+                if roll % GENERATED_BUSH_CHANCE_DENOMINATOR != 0 {
+                    continue;
+                }
+
+                let x2 = col * BUILDING_GRID_DIVISIONS;
+                let y2 = row * BUILDING_GRID_DIVISIONS + half_row;
+                let kind = generated_bush_kind(roll >> 8);
+                if !try_push_generated_bush(world, kind, x2, y2) {
+                    continue;
+                }
+
+                if ((roll >> 16) % 100) >= GENERATED_BUSH_PAIR_CHANCE_NUMERATOR {
+                    continue;
+                }
+
+                let (dx2, dy2) = GENERATED_BUSH_ADJACENT_OFFSETS
+                    [((roll >> 24) as usize) % GENERATED_BUSH_ADJACENT_OFFSETS.len()];
+                let Some(adjacent_x2) = x2.checked_add_signed(dx2) else {
+                    continue;
+                };
+                let Some(adjacent_y2) = y2.checked_add_signed(dy2) else {
+                    continue;
+                };
+                let adjacent_kind = generated_bush_kind(roll >> 32);
+                let _ = try_push_generated_bush(world, adjacent_kind, adjacent_x2, adjacent_y2);
+            }
+        }
+    }
+
+    world.props.sort_by_key(|prop| (prop.y2, prop.x2));
+}
+
+fn apply_generated_water_variations(world: &mut TileWorld) {
     for row in 0..world.rows {
         for col in 0..world.cols {
             let index = world.index(col, row);
-            if levels[index] != GeneratedTileLevel::Platform {
+            if world.backgrounds[index] != BackgroundTile::Water
+                || world.foregrounds[index].is_some()
+                || world.under_foregrounds[index].is_some()
+                || world.water_states[index] != WaterState::Nothing
+            {
                 continue;
             }
-            if let Some((tile, inward_col, inward_row)) =
-                platform_frame_inner_water_replacement(foregrounds[index], col, row)
-                && inward_col < world.cols
-                && inward_row < world.rows
-            {
-                let inward_index = world.index(inward_col, inward_row);
-                if levels[inward_index] == GeneratedTileLevel::Platform
-                    && backgrounds[inward_index] == BackgroundTile::Water
-                    && foregrounds[inward_index].is_none()
-                {
+
+            let roll = generated_asset_roll(col, row, 0, 0x0A7E_51A7_E202_6);
+            if roll % GENERATED_WATER_VARIATION_CHANCE_DENOMINATOR != 0 {
+                continue;
+            }
+
+            world.water_states[index] =
+                GENERATED_WATER_STATES[((roll >> 8) as usize) % GENERATED_WATER_STATES.len()];
+        }
+    }
+}
+
+fn generated_asset_tile_is_plain_grass(world: &TileWorld, col: usize, row: usize) -> bool {
+    let index = world.index(col, row);
+    world.backgrounds[index] == BackgroundTile::Grass
+        && world.foregrounds[index].is_none()
+        && world.under_foregrounds[index].is_none()
+}
+
+fn generated_bush_kind(roll: u64) -> PlantKind {
+    GENERATED_BUSH_KINDS[(roll as usize) % GENERATED_BUSH_KINDS.len()]
+}
+
+fn try_push_generated_bush(world: &mut TileWorld, kind: PlantKind, x2: usize, y2: usize) -> bool {
+    let prop = PropKind::Plant(kind);
+    if !world.can_place_prop_half(prop, x2, y2)
+        || !generated_bush_foundation_is_plain_grass(world, kind, x2, y2)
+    {
+        return false;
+    }
+
+    world.props.push(PlacedProp { kind: prop, x2, y2 });
+    true
+}
+
+fn generated_bush_foundation_is_plain_grass(
+    world: &TileWorld,
+    kind: PlantKind,
+    x2: usize,
+    y2: usize,
+) -> bool {
+    let footprint = generated_bush_footprint_rect2(kind, x2, y2);
+    let Some((start_col, start_row, cols, rows)) = generated_half_rect_to_tile_rect(footprint)
+    else {
+        return false;
+    };
+    if start_col + cols > world.cols || start_row + rows > world.rows {
+        return false;
+    }
+
+    for row in start_row..start_row + rows {
+        for col in start_col..start_col + cols {
+            if !generated_asset_tile_is_plain_grass(world, col, row) {
+                return false;
+            }
+        }
+    }
+
+    true
+}
+
+fn generated_bush_footprint_rect2(
+    kind: PlantKind,
+    x2: usize,
+    y2: usize,
+) -> (isize, isize, usize, usize) {
+    if kind.uses_half_height_footprint() {
+        (x2 as isize, y2 as isize + 1, BUILDING_GRID_DIVISIONS, 1)
+    } else {
+        (
+            x2 as isize,
+            y2 as isize,
+            BUILDING_GRID_DIVISIONS,
+            BUILDING_GRID_DIVISIONS,
+        )
+    }
+}
+
+fn generated_half_rect_to_tile_rect(
+    rect: (isize, isize, usize, usize),
+) -> Option<(usize, usize, usize, usize)> {
+    let (x2, y2, w2, h2) = rect;
+    if x2 < 0 || y2 < 0 {
+        return None;
+    }
+
+    let x2 = x2 as usize;
+    let y2 = y2 as usize;
+    let start_col = x2 / BUILDING_GRID_DIVISIONS;
+    let start_row = y2 / BUILDING_GRID_DIVISIONS;
+    let end_col = (x2 + w2).div_ceil(BUILDING_GRID_DIVISIONS);
+    let end_row = (y2 + h2).div_ceil(BUILDING_GRID_DIVISIONS);
+    Some((
+        start_col,
+        start_row,
+        end_col - start_col,
+        end_row - start_row,
+    ))
+}
+
+fn generated_asset_roll(col: usize, row: usize, slot: usize, salt: u64) -> u64 {
+    let mut value = salt
+        ^ ((col as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15))
+        ^ ((row as u64).wrapping_mul(0xBF58_476D_1CE4_E5B9))
+        ^ ((slot as u64).wrapping_mul(0x94D0_49BB_1331_11EB));
+    value = (value ^ (value >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+    value = (value ^ (value >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+    value ^ (value >> 31)
+}
+
+fn apply_level0_shoreline_replace(world: &mut TileWorld) {
+    let backgrounds = world.backgrounds.clone();
+    let under_foregrounds = world.under_foregrounds.clone();
+    let foregrounds = world.foregrounds.clone();
+
+    for row in 0..world.rows {
+        for col in 0..world.cols {
+            let index = world.index(col, row);
+            if backgrounds[index] != BackgroundTile::Grass || under_foregrounds[index].is_some() {
+                continue;
+            }
+
+            let grass_n =
+                level0_background_is_grass(&backgrounds, world.cols, world.rows, col, row, 0, -1);
+            let grass_e =
+                level0_background_is_grass(&backgrounds, world.cols, world.rows, col, row, 1, 0);
+            let grass_s =
+                level0_background_is_grass(&backgrounds, world.cols, world.rows, col, row, 0, 1);
+            let grass_w =
+                level0_background_is_grass(&backgrounds, world.cols, world.rows, col, row, -1, 0);
+
+            let Some(tile) = level0_shoreline_tile(grass_n, grass_e, grass_s, grass_w) else {
+                continue;
+            };
+
+            match foregrounds[index] {
+                None => {
+                    world.set_background(col, row, BackgroundTile::Water);
                     world.foregrounds[index] = Some(tile);
                 }
+                Some(foreground) if foreground_accepts_level0_shoreline_underlay(foreground) => {
+                    world.set_background(col, row, BackgroundTile::Water);
+                    world.under_foregrounds[index] = Some(tile);
+                }
+                Some(_) => {}
+            }
+        }
+    }
+}
+
+fn foreground_accepts_level0_shoreline_underlay(foreground: AtlasTile) -> bool {
+    PLATFORM_GRASS_ROW_TILES.contains(&foreground)
+        || PLATFORM_WATER_ROW_TILES.contains(&foreground)
+        || PLATFORM_GRASS_BORDER_TILES
+            .iter()
+            .flatten()
+            .any(|&tile| tile == foreground)
+}
+
+fn level0_background_is_grass(
+    backgrounds: &[BackgroundTile],
+    cols: usize,
+    rows: usize,
+    col: usize,
+    row: usize,
+    dc: isize,
+    dr: isize,
+) -> bool {
+    let next_col = col as isize + dc;
+    let next_row = row as isize + dr;
+    if next_col < 0 || next_row < 0 || next_col >= cols as isize || next_row >= rows as isize {
+        return false;
+    }
+
+    backgrounds[next_row as usize * cols + next_col as usize] == BackgroundTile::Grass
+}
+
+fn level0_shoreline_tile(
+    grass_n: bool,
+    grass_e: bool,
+    grass_s: bool,
+    grass_w: bool,
+) -> Option<AtlasTile> {
+    let open_mask = usize::from(!grass_n)
+        | (usize::from(!grass_e) << 1)
+        | (usize::from(!grass_s) << 2)
+        | (usize::from(!grass_w) << 3);
+    LEVEL0_SHORELINE_BY_OPEN_MASK[open_mask]
+}
+
+fn apply_platform_cliffline_replace(
+    world: &mut TileWorld,
+    pre_shoreline_backgrounds: &[BackgroundTile],
+) {
+    let foregrounds = world.foregrounds.clone();
+
+    for row in 0..world.rows {
+        for col in 0..world.cols {
+            let index = world.index(col, row);
+            let Some((tile, inward_col, inward_row)) =
+                platform_frame_inner_water_replacement(foregrounds[index], col, row)
+            else {
+                continue;
+            };
+            if inward_col >= world.cols || inward_row >= world.rows {
+                continue;
+            }
+
+            let inward_index = world.index(inward_col, inward_row);
+            if pre_shoreline_backgrounds[inward_index] == BackgroundTile::Water {
+                world.foregrounds[index] = Some(tile);
             }
         }
     }
@@ -1240,192 +1923,6 @@ fn platform_frame_inner_water_replacement(
         ))
     } else {
         None
-    }
-}
-
-fn foreground_blocks_final_shore(foreground: Option<AtlasTile>) -> bool {
-    foreground.is_some_and(|tile| !foreground_accepts_final_shore_underlay(Some(tile)))
-}
-
-fn foreground_accepts_final_shore_underlay(foreground: Option<AtlasTile>) -> bool {
-    foreground.is_some_and(|tile| {
-        tile == CLIFF_GRASS_CAP_TILE
-            || PLATFORM_GRASS_ROW_TILES.contains(&tile)
-            || PLATFORM_WATER_ROW_TILES.contains(&tile)
-            || platform_border_tiles_contain(tile)
-    })
-}
-
-fn platform_border_tiles_contain(tile: AtlasTile) -> bool {
-    PLATFORM_GRASS_BORDER_TILES
-        .iter()
-        .flatten()
-        .any(|&border_tile| border_tile == tile)
-}
-
-fn final_shore_tile(
-    backgrounds: &[BackgroundTile],
-    foregrounds: &[Option<AtlasTile>],
-    levels: &[GeneratedTileLevel],
-    use_ground_underlay: bool,
-    cols: usize,
-    rows: usize,
-    col: usize,
-    row: usize,
-) -> Option<AtlasTile> {
-    let center_level = levels[row * cols + col];
-    let water_n = final_neighbor_is_water_or_edge(
-        backgrounds,
-        foregrounds,
-        levels,
-        center_level,
-        use_ground_underlay,
-        cols,
-        rows,
-        col,
-        row,
-        0,
-        -1,
-    );
-    let water_e = final_neighbor_is_water_or_edge(
-        backgrounds,
-        foregrounds,
-        levels,
-        center_level,
-        use_ground_underlay,
-        cols,
-        rows,
-        col,
-        row,
-        1,
-        0,
-    );
-    let water_s = final_neighbor_is_water_or_edge(
-        backgrounds,
-        foregrounds,
-        levels,
-        center_level,
-        use_ground_underlay,
-        cols,
-        rows,
-        col,
-        row,
-        0,
-        1,
-    );
-    let water_w = final_neighbor_is_water_or_edge(
-        backgrounds,
-        foregrounds,
-        levels,
-        center_level,
-        use_ground_underlay,
-        cols,
-        rows,
-        col,
-        row,
-        -1,
-        0,
-    );
-
-    Some(match (water_n, water_e, water_s, water_w) {
-        (false, false, false, false) => return None,
-        (true, true, false, true) => SHORE_NARROW_TOP,
-        (false, true, false, true) => SHORE_NARROW_MIDDLE,
-        (false, true, true, true) => SHORE_NARROW_BOTTOM,
-        (true, false, true, true) => SHORE_NARROW_LEFT,
-        (true, false, true, false) => SHORE_NARROW_CENTER,
-        (true, true, true, false) => SHORE_NARROW_RIGHT,
-        (true, true, true, true) => SHORE_SINGLE_IN_WATER,
-        (true, false, false, true) => SHORE_TOP_LEFT,
-        (true, true, false, false) => SHORE_TOP_RIGHT,
-        (false, false, true, true) => SHORE_BOTTOM_LEFT,
-        (false, true, true, false) => SHORE_BOTTOM_RIGHT,
-        (true, _, _, _) => SHORE_TOP,
-        (_, _, true, _) => SHORE_BOTTOM,
-        (_, true, _, _) => SHORE_RIGHT,
-        (_, _, _, true) => SHORE_LEFT,
-    })
-}
-
-fn final_neighbor_is_water_or_edge(
-    backgrounds: &[BackgroundTile],
-    foregrounds: &[Option<AtlasTile>],
-    levels: &[GeneratedTileLevel],
-    center_level: GeneratedTileLevel,
-    use_ground_underlay: bool,
-    cols: usize,
-    rows: usize,
-    col: usize,
-    row: usize,
-    dc: isize,
-    dr: isize,
-) -> bool {
-    let next_col = col as isize + dc;
-    let next_row = row as isize + dr;
-    if next_col < 0 || next_row < 0 || next_col >= cols as isize || next_row >= rows as isize {
-        return true;
-    }
-
-    let index = next_row as usize * cols + next_col as usize;
-    if center_level == GeneratedTileLevel::Ground || use_ground_underlay {
-        backgrounds[index] == BackgroundTile::Water
-    } else {
-        levels[index] == center_level
-            && backgrounds[index] == BackgroundTile::Water
-            && foregrounds[index].is_none()
-    }
-}
-
-fn apply_generated_platforms(world: &mut TileWorld, generated: &GeneratedWorld) {
-    apply_platform_rects_with_interior_fill(
-        world,
-        generated.platforms.iter().map(|platform| {
-            (
-                platform.col,
-                platform.row,
-                platform.cols,
-                platform.rows,
-                platform.background,
-            )
-        }),
-        false,
-    );
-}
-
-fn apply_generated_platform_seed_frame(
-    world: &mut TileWorld,
-    platform_seed_mask: &[Option<BackgroundTile>],
-) {
-    let mut mask = vec![None; world.cols * world.rows];
-    for (index, &background) in platform_seed_mask.iter().enumerate() {
-        mask[index] = background;
-    }
-    apply_platform_mask(world, &mask, false);
-}
-
-fn apply_generated_terrain_crosses(world: &mut TileWorld, generated: &GeneratedWorld) {
-    for cross in &generated.terrain_crosses {
-        if cross.col >= world.cols || cross.center_row >= world.rows {
-            continue;
-        }
-        apply_generated_terrain_cross_background(world, *cross);
-        if cross.center_row > 0 {
-            let cap_index = world.index(cross.col, cross.center_row - 1);
-            world.foregrounds[cap_index] = Some(CLIFF_GRASS_CAP_TILE);
-        }
-        let index = world.index(cross.col, cross.center_row);
-        world.foregrounds[index] = Some(standalone_pillar_tile(cross.background));
-    }
-}
-
-fn apply_generated_terrain_cross_background(world: &mut TileWorld, cross: GeneratedTerrainCross) {
-    for (col, row) in terrain_cross_cells(cross) {
-        if col >= world.cols || row >= world.rows {
-            continue;
-        }
-        let index = world.index(col, row);
-        world.set_background(col, row, cross.background);
-        world.foregrounds[index] = None;
     }
 }
 
@@ -1464,7 +1961,7 @@ fn apply_platform_mask(
                 platform_border_tile(&mask, world.cols, world.rows, col, row, background);
             if fill_interior_background || border_tile.is_some() {
                 let index = world.index(col, row);
-                world.set_background(col, row, background);
+                world.set_background(col, row, BackgroundTile::Grass);
                 world.foregrounds[index] = None;
             }
             if let Some(tile) = border_tile {
@@ -1497,17 +1994,172 @@ fn stamp_platform_visual_mask(
 
 fn tile_platform_row_run(
     world: &mut TileWorld,
+    mask: &[Option<BackgroundTile>],
     row: usize,
     start_col: usize,
     cols: usize,
     background: BackgroundTile,
 ) {
+    apply_wall_run(
+        world,
+        mask,
+        row,
+        start_col,
+        cols,
+        WallRunStyle::PlatformBottom { background },
+    );
+}
+
+fn apply_wall_run(
+    world: &mut TileWorld,
+    foundation_mask: &[Option<BackgroundTile>],
+    row: usize,
+    start_col: usize,
+    cols: usize,
+    style: WallRunStyle,
+) {
     for offset in 0..cols {
         let col = start_col + offset;
+        if col >= world.cols || row >= world.rows {
+            continue;
+        }
         let index = world.index(col, row);
-        world.foregrounds[index] = Some(platform_row_tile(background, offset, cols));
-        world.set_background(col, row, background);
+        if world.foregrounds[index].is_some_and(is_wall_pillar_tile) {
+            continue;
+        }
+
+        let foundation = wall_foundation_background(world, foundation_mask, col, row);
+        let tile = match style {
+            WallRunStyle::PlatformBottom { background } => platform_row_tile(
+                foundation,
+                background,
+                foundation_mask,
+                world.cols,
+                row,
+                start_col,
+                col,
+                offset,
+                cols,
+            ),
+        };
+        world.set_background(col, row, foundation);
+        world.foregrounds[index] = Some(tile);
     }
+}
+
+fn apply_wall_cap_run(
+    world: &mut TileWorld,
+    foundation_mask: &[Option<BackgroundTile>],
+    row: usize,
+    start_col: usize,
+    cols: usize,
+) {
+    for offset in 0..cols {
+        let col = start_col + offset;
+        if col >= world.cols || row >= world.rows {
+            continue;
+        }
+        let index = world.index(col, row);
+        if world.foregrounds[index].is_some_and(is_wall_pillar_tile) {
+            continue;
+        }
+
+        let foundation = wall_foundation_background(world, foundation_mask, col, row);
+        let tile_background = wall_cap_tile_background(world, foundation_mask, col, row);
+        world.set_background(col, row, foundation);
+        world.foregrounds[index] = Some(platform_row_tile(
+            tile_background,
+            tile_background,
+            foundation_mask,
+            world.cols,
+            row,
+            start_col,
+            col,
+            offset,
+            cols,
+        ));
+    }
+}
+
+fn apply_wall_cliff_cap_run(world: &mut TileWorld, row: usize, start_col: usize, cols: usize) {
+    let Some(cap_row) = row.checked_sub(1) else {
+        return;
+    };
+
+    for offset in 0..cols {
+        let col = start_col + offset;
+        if col >= world.cols {
+            continue;
+        }
+        let index = world.index(col, cap_row);
+        if world.foregrounds[index].is_some_and(is_wall_pillar_tile) {
+            continue;
+        }
+        world.foregrounds[index] = Some(wall_cliff_cap_tile(offset, cols));
+    }
+}
+
+fn apply_vertical_wall_run(
+    world: &mut TileWorld,
+    foundation_mask: &[Option<BackgroundTile>],
+    start_row: usize,
+    col: usize,
+    rows: usize,
+) {
+    let cliff_rows = rows.saturating_sub(1);
+    for offset in 0..rows {
+        let row = start_row + offset;
+        if col >= world.cols || row >= world.rows {
+            continue;
+        }
+        let index = world.index(col, row);
+        if world.foregrounds[index].is_some_and(is_wall_pillar_tile) {
+            continue;
+        }
+
+        if offset < cliff_rows {
+            world.foregrounds[index] = Some(vertical_cliff_tile(offset, cliff_rows));
+        } else {
+            let foundation = wall_foundation_background(world, foundation_mask, col, row);
+            let tile_background = wall_cap_tile_background(world, foundation_mask, col, row);
+            world.set_background(col, row, foundation);
+            world.foregrounds[index] = Some(standalone_pillar_tile(tile_background));
+        }
+    }
+}
+
+fn wall_cliff_cap_tile(offset: usize, cols: usize) -> AtlasTile {
+    match cols {
+        1 => CLIFF_GRASS_CAP_TILE,
+        2 => PLATFORM_GRASS_CLIFF_CAP_TILES[[0, 2][offset.min(1)]],
+        _ => PLATFORM_GRASS_CLIFF_CAP_TILES[offset.min(2)],
+    }
+}
+
+fn vertical_cliff_tile(offset: usize, cliff_rows: usize) -> AtlasTile {
+    match cliff_rows {
+        1 => VERTICAL_GRASS_CLIFF_TILES[2],
+        2 => VERTICAL_GRASS_CLIFF_TILES[[0, 2][offset.min(1)]],
+        _ => VERTICAL_GRASS_CLIFF_TILES[offset.min(2)],
+    }
+}
+
+fn wall_cap_tile_background(
+    world: &TileWorld,
+    foundation_mask: &[Option<BackgroundTile>],
+    col: usize,
+    row: usize,
+) -> BackgroundTile {
+    if foundation_mask[world.index(col, row)].is_some() {
+        BackgroundTile::Grass
+    } else {
+        wall_foundation_background(world, foundation_mask, col, row)
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum WallRunStyle {
+    PlatformBottom { background: BackgroundTile },
 }
 
 fn tile_platform_bottom_pillars(world: &mut TileWorld, mask: &[Option<BackgroundTile>]) {
@@ -1529,7 +2181,7 @@ fn tile_platform_bottom_pillars(world: &mut TileWorld, mask: &[Option<Background
                 col += 1;
             }
             if row + 1 < world.rows {
-                tile_platform_row_run(world, row + 1, start_col, col - start_col, background);
+                tile_platform_row_run(world, mask, row + 1, start_col, col - start_col, background);
             }
         }
     }
@@ -1578,21 +2230,219 @@ fn platform_border_tile(
 }
 
 pub(super) fn platform_row_tile(
-    background: BackgroundTile,
+    tile_background: BackgroundTile,
+    run_background: BackgroundTile,
+    mask: &[Option<BackgroundTile>],
+    cols_total: usize,
+    row: usize,
+    start_col: usize,
+    col: usize,
     offset: usize,
     cols: usize,
 ) -> AtlasTile {
-    let tiles = match background {
+    let tiles = match tile_background {
         BackgroundTile::Grass => PLATFORM_GRASS_ROW_TILES,
         BackgroundTile::Water => PLATFORM_WATER_ROW_TILES,
     };
 
+    if cols == 2 && short_platform_row_uses_standalone_pair(row, start_col, run_background) {
+        return standalone_pillar_tile(tile_background);
+    }
+
     match (offset, cols) {
-        (_, 1) => tiles[1],
+        (_, 1) => single_platform_row_tile(
+            tiles,
+            mask,
+            cols_total,
+            row,
+            col,
+            tile_background,
+            run_background,
+        ),
         (0, _) => tiles[0],
         (offset, cols) if offset + 1 == cols => tiles[2],
         _ => tiles[1],
     }
+}
+
+fn single_platform_row_tile(
+    tiles: [AtlasTile; 3],
+    mask: &[Option<BackgroundTile>],
+    cols_total: usize,
+    row: usize,
+    col: usize,
+    tile_background: BackgroundTile,
+    run_background: BackgroundTile,
+) -> AtlasTile {
+    if single_platform_row_uses_standalone(row, col, run_background) {
+        return standalone_pillar_tile(tile_background);
+    }
+
+    let source_row = row.saturating_sub(1);
+    let same_left = col > 0 && mask[source_row * cols_total + col - 1] == Some(run_background);
+    let same_right =
+        col + 1 < cols_total && mask[source_row * cols_total + col + 1] == Some(run_background);
+
+    match (same_left, same_right) {
+        (true, false) => tiles[2],
+        (false, true) => tiles[0],
+        _ => tiles[1],
+    }
+}
+
+fn wall_foundation_background(
+    world: &TileWorld,
+    foundation_mask: &[Option<BackgroundTile>],
+    col: usize,
+    row: usize,
+) -> BackgroundTile {
+    foundation_mask
+        .get(world.index(col, row))
+        .copied()
+        .flatten()
+        .unwrap_or_else(|| world.background(col, row))
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum WallFoundationLevel {
+    Level0,
+    Level1,
+}
+
+fn generated_wall_foundation_level(
+    platform_mask: &[Option<BackgroundTile>],
+    world: &GeneratedWorld,
+    col: usize,
+    row: usize,
+) -> WallFoundationLevel {
+    if platform_mask[world.index(col, row)].is_some() {
+        WallFoundationLevel::Level1
+    } else {
+        WallFoundationLevel::Level0
+    }
+}
+
+fn generated_wall_run_has_same_level(
+    platform_mask: &[Option<BackgroundTile>],
+    world: &GeneratedWorld,
+    start_col: usize,
+    row: usize,
+    cols: usize,
+) -> bool {
+    let first_level = generated_wall_foundation_level(platform_mask, world, start_col, row);
+    (start_col + 1..start_col + cols)
+        .all(|col| generated_wall_foundation_level(platform_mask, world, col, row) == first_level)
+}
+
+fn generated_vertical_wall_run_has_same_level(
+    platform_mask: &[Option<BackgroundTile>],
+    world: &GeneratedWorld,
+    col: usize,
+    start_row: usize,
+    rows: usize,
+) -> bool {
+    let first_level = generated_wall_foundation_level(platform_mask, world, col, start_row);
+    (start_row + 1..start_row + rows)
+        .all(|row| generated_wall_foundation_level(platform_mask, world, col, row) == first_level)
+}
+
+fn horizontal_wall_start_col(world_cols: usize, col: usize, cols: usize) -> Option<usize> {
+    if !(1..=3).contains(&cols) {
+        return None;
+    }
+    let start_col = match cols {
+        3 => col.checked_sub(1)?,
+        _ => col,
+    };
+    (start_col.saturating_add(cols) <= world_cols).then_some(start_col)
+}
+
+fn vertical_wall_start_row(world_rows: usize, row: usize, cliff_rows: usize) -> Option<usize> {
+    if !(1..=3).contains(&cliff_rows) {
+        return None;
+    }
+    let start_row = row.checked_add(1)?.checked_sub(cliff_rows)?;
+    (start_row.saturating_add(cliff_rows + 1) <= world_rows).then_some(start_row)
+}
+
+fn generated_wall_run_has_pillar_clearance(
+    world: &TileWorld,
+    start_col: usize,
+    row: usize,
+    cols: usize,
+) -> bool {
+    let check_start_col = start_col;
+    let check_end_col = start_col.saturating_add(cols).min(world.cols);
+    let check_start_row = row.saturating_sub(1);
+    let check_end_row = row.saturating_add(2).min(world.rows);
+
+    for check_row in check_start_row..check_end_row {
+        for check_col in check_start_col..check_end_col {
+            let index = world.index(check_col, check_row);
+            if world.foregrounds[index].is_some_and(is_wall_pillar_tile) {
+                return false;
+            }
+        }
+    }
+
+    true
+}
+
+fn generated_vertical_wall_run_has_pillar_clearance(
+    world: &TileWorld,
+    col: usize,
+    start_row: usize,
+    rows: usize,
+) -> bool {
+    let check_start_col = col.saturating_sub(1);
+    let check_end_col = col.saturating_add(2).min(world.cols);
+    let check_start_row = start_row;
+    let check_end_row = start_row.saturating_add(rows).min(world.rows);
+
+    for check_row in check_start_row..check_end_row {
+        for check_col in check_start_col..check_end_col {
+            let index = world.index(check_col, check_row);
+            if world.foregrounds[index].is_some_and(is_wall_pillar_tile) {
+                return false;
+            }
+        }
+    }
+
+    true
+}
+
+fn generated_wall_cells(wall: &GeneratedWallTile) -> impl Iterator<Item = (usize, usize)> + '_ {
+    (0..wall.rows).flat_map(move |row_offset| {
+        (0..wall.cols).map(move |col_offset| (wall.col + col_offset, wall.row + row_offset))
+    })
+}
+
+fn is_wall_pillar_tile(tile: AtlasTile) -> bool {
+    PLATFORM_GRASS_ROW_TILES.contains(&tile)
+        || PLATFORM_WATER_ROW_TILES.contains(&tile)
+        || VERTICAL_GRASS_CLIFF_TILES.contains(&tile)
+        || tile == STANDALONE_GRASS_PILLAR_TILE
+        || tile == STANDALONE_WATER_PILLAR_TILE
+}
+
+fn single_platform_row_uses_standalone(row: usize, col: usize, background: BackgroundTile) -> bool {
+    let background_bit = match background {
+        BackgroundTile::Grass => 0,
+        BackgroundTile::Water => 1,
+    };
+    (row + col + background_bit) % 2 == 0
+}
+
+fn short_platform_row_uses_standalone_pair(
+    row: usize,
+    start_col: usize,
+    background: BackgroundTile,
+) -> bool {
+    let background_bit = match background {
+        BackgroundTile::Grass => 0,
+        BackgroundTile::Water => 1,
+    };
+    (row + start_col + background_bit) % 4 == 0
 }
 
 fn platforms_overlap_with_margin(
@@ -1635,14 +2485,18 @@ fn platform_center_on_border_of(anchor: GeneratedPlatform, platform: GeneratedPl
             && center_col2 <= right2)
 }
 
-fn add_unknown_neighbors_to_frontier(
+fn add_fillable_unknown_neighbors_to_frontier(
     world: &GeneratedWorld,
+    fillable: &[bool],
     index: usize,
     buckets: &mut [Vec<usize>; 5],
     in_frontier: &mut [bool],
 ) {
     for neighbor in cardinal_neighbor_indices(world, index) {
-        if world.cells[neighbor] != GeneratedCell::Unknown || in_frontier[neighbor] {
+        if !fillable[neighbor]
+            || world.cells[neighbor] != GeneratedCell::Unknown
+            || in_frontier[neighbor]
+        {
             continue;
         }
         let known_neighbors = known_neighbor_count(world, neighbor);
@@ -1654,8 +2508,9 @@ fn add_unknown_neighbors_to_frontier(
     }
 }
 
-fn next_frontier_cell(
+fn next_fillable_frontier_cell(
     world: &GeneratedWorld,
+    fillable: &[bool],
     buckets: &mut [Vec<usize>; 5],
     in_frontier: &mut [bool],
     rng: &mut SeededRng,
@@ -1668,7 +2523,7 @@ fn next_frontier_cell(
         let index = buckets[bucket_id].swap_remove(pick);
         in_frontier[index] = false;
 
-        if world.cells[index] != GeneratedCell::Unknown {
+        if !fillable[index] || world.cells[index] != GeneratedCell::Unknown {
             continue;
         }
 
@@ -1797,4 +2652,693 @@ fn cardinal_neighbor_indices(
     ]
     .into_iter()
     .flatten()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn visual_void_fill_does_not_write_existing_platform_tiles() {
+        let mut world = GeneratedWorld::new(5, 5);
+        world.platforms.push(GeneratedPlatform {
+            col: 1,
+            row: 1,
+            cols: 3,
+            rows: 3,
+            background: BackgroundTile::Grass,
+            kind: GeneratedPlatformKind::Large,
+        });
+
+        let visual_world = world.to_visual_tile_world_with_shoreline(false);
+        let protected = visual_world
+            .tiles
+            .foregrounds
+            .iter()
+            .enumerate()
+            .filter_map(|(index, foreground)| foreground.is_some().then_some(index))
+            .collect::<Vec<_>>();
+        assert!(!protected.is_empty());
+
+        let mut generator = RunningGenerator::from_world(world, 1);
+        generator.fill_visual_voids_once(25);
+
+        for index in protected {
+            assert_eq!(generator.world.cells[index], GeneratedCell::Unknown);
+        }
+        assert_ne!(
+            generator.world.cell(2, 2),
+            GeneratedCell::Unknown,
+            "platform interior without a tile should still be fillable"
+        );
+    }
+
+    #[test]
+    fn shoreline_replace_maps_only_plain_level0_grass_edges() {
+        let mut world = GeneratedWorld::new(3, 3);
+        world.cells = vec![GeneratedCell::Grass; 9];
+        let north_index = world.index(1, 0);
+        world.cells[north_index] = GeneratedCell::Water;
+
+        let visual_world = world.to_visual_tile_world();
+        let center = visual_world.tiles.index(1, 1);
+        assert_eq!(visual_world.tiles.foregrounds[center], Some(SHORE_TOP));
+        assert_eq!(
+            visual_world.tiles.backgrounds[center],
+            BackgroundTile::Water
+        );
+    }
+
+    #[test]
+    fn shoreline_replace_leaves_center_grass_plain() {
+        let mut world = GeneratedWorld::new(3, 3);
+        world.cells = vec![GeneratedCell::Grass; 9];
+        for (col, row) in [(0, 0), (2, 0), (0, 2), (2, 2)] {
+            let index = world.index(col, row);
+            world.cells[index] = GeneratedCell::Water;
+        }
+
+        let visual_world = world.to_visual_tile_world();
+        let center = visual_world.tiles.index(1, 1);
+        assert_eq!(visual_world.tiles.foregrounds[center], None);
+        assert_eq!(
+            visual_world.tiles.backgrounds[center],
+            BackgroundTile::Grass
+        );
+    }
+
+    #[test]
+    fn shoreline_replace_maps_every_non_center_side_mask() {
+        for open_mask in 1..LEVEL0_SHORELINE_BY_OPEN_MASK.len() {
+            assert!(
+                LEVEL0_SHORELINE_BY_OPEN_MASK[open_mask].is_some(),
+                "open side mask {open_mask:04b} should map to a shore tile"
+            );
+        }
+    }
+
+    #[test]
+    fn shoreline_replace_uses_narrow_tiles_for_opposite_and_three_side_masks() {
+        assert_eq!(
+            LEVEL0_SHORELINE_BY_OPEN_MASK[0b0101],
+            Some(SHORE_NARROW_CENTER)
+        );
+        assert_eq!(
+            LEVEL0_SHORELINE_BY_OPEN_MASK[0b1010],
+            Some(SHORE_NARROW_MIDDLE)
+        );
+        assert_eq!(
+            LEVEL0_SHORELINE_BY_OPEN_MASK[0b0111],
+            Some(SHORE_NARROW_RIGHT)
+        );
+        assert_eq!(
+            LEVEL0_SHORELINE_BY_OPEN_MASK[0b1111],
+            Some(SHORE_SINGLE_IN_WATER)
+        );
+    }
+
+    #[test]
+    fn cliffline_replace_polishes_platform_frame_against_inner_water() {
+        let mut world = GeneratedWorld::new(5, 5);
+        world.cells = vec![GeneratedCell::Grass; 25];
+        world.platforms.push(GeneratedPlatform {
+            col: 1,
+            row: 1,
+            cols: 3,
+            rows: 3,
+            background: BackgroundTile::Grass,
+            kind: GeneratedPlatformKind::Large,
+        });
+        let center_index = world.index(2, 2);
+        world.cells[center_index] = GeneratedCell::Water;
+
+        let visual_world = world.to_visual_tile_world();
+        let top_frame = visual_world.tiles.index(2, 1);
+        let left_frame = visual_world.tiles.index(1, 2);
+        let right_frame = visual_world.tiles.index(3, 2);
+        let bottom_frame = visual_world.tiles.index(2, 3);
+
+        assert_eq!(
+            visual_world.tiles.foregrounds[top_frame],
+            Some(PLATFORM_GRASS_INNER_WATER_TOP_TILE)
+        );
+        assert_eq!(
+            visual_world.tiles.foregrounds[left_frame],
+            Some(PLATFORM_GRASS_INNER_WATER_LEFT_TILE)
+        );
+        assert_eq!(
+            visual_world.tiles.foregrounds[right_frame],
+            Some(PLATFORM_GRASS_INNER_WATER_RIGHT_TILE)
+        );
+        assert_eq!(
+            visual_world.tiles.foregrounds[bottom_frame],
+            Some(PLATFORM_GRASS_INNER_WATER_BOTTOM_TILE)
+        );
+    }
+
+    #[test]
+    fn cliffline_replace_ignores_water_created_by_shoreline_pass() {
+        let mut world = GeneratedWorld::new(4, 3);
+        world.cells = vec![GeneratedCell::Grass; 12];
+        world.platforms.push(GeneratedPlatform {
+            col: 0,
+            row: 0,
+            cols: 2,
+            rows: 3,
+            background: BackgroundTile::Grass,
+            kind: GeneratedPlatformKind::Large,
+        });
+        let east_water = world.index(3, 1);
+        world.cells[east_water] = GeneratedCell::Water;
+
+        let visual_world = world.to_visual_tile_world();
+        let right_frame = visual_world.tiles.index(1, 1);
+
+        assert_eq!(
+            visual_world.tiles.foregrounds[right_frame],
+            Some(PLATFORM_GRASS_BORDER_TILES[1][2])
+        );
+        assert_eq!(
+            visual_world.tiles.foregrounds[visual_world.tiles.index(2, 1)],
+            Some(SHORE_RIGHT)
+        );
+    }
+
+    #[test]
+    fn shoreline_replace_underlays_platform_row_tiles() {
+        let mut world = TileWorld::new(3, 3);
+        let center = world.index(1, 1);
+        world.foregrounds[center] = Some(PLATFORM_GRASS_ROW_TILES[1]);
+        world.set_background(1, 2, BackgroundTile::Water);
+
+        apply_level0_shoreline_replace(&mut world);
+
+        assert_eq!(world.backgrounds[center], BackgroundTile::Water);
+        assert_eq!(world.foregrounds[center], Some(PLATFORM_GRASS_ROW_TILES[1]));
+        assert_eq!(world.under_foregrounds[center], Some(SHORE_BOTTOM));
+    }
+
+    #[test]
+    fn wall_helper_uses_level0_foundation_when_no_level1_mask_exists() {
+        let mut world = TileWorld::new(3, 2);
+        let mask = vec![None; 6];
+        world.set_background(1, 1, BackgroundTile::Water);
+
+        apply_wall_run(
+            &mut world,
+            &mask,
+            1,
+            1,
+            1,
+            WallRunStyle::PlatformBottom {
+                background: BackgroundTile::Grass,
+            },
+        );
+
+        assert_eq!(world.backgrounds[world.index(1, 1)], BackgroundTile::Water);
+        assert_eq!(
+            world.foregrounds[world.index(1, 1)],
+            Some(STANDALONE_WATER_PILLAR_TILE)
+        );
+    }
+
+    #[test]
+    fn wall_helper_prefers_level1_foundation_mask() {
+        let mut world = TileWorld::new(3, 2);
+        let mut mask = vec![None; 6];
+        mask[world.index(1, 1)] = Some(BackgroundTile::Water);
+
+        apply_wall_run(
+            &mut world,
+            &mask,
+            1,
+            1,
+            1,
+            WallRunStyle::PlatformBottom {
+                background: BackgroundTile::Grass,
+            },
+        );
+
+        assert_eq!(world.backgrounds[world.index(1, 1)], BackgroundTile::Water);
+        assert_eq!(
+            world.foregrounds[world.index(1, 1)],
+            Some(STANDALONE_WATER_PILLAR_TILE)
+        );
+    }
+
+    #[test]
+    fn wall_helper_does_not_overwrite_existing_pillar_tile() {
+        let mut world = TileWorld::new(3, 2);
+        let mask = vec![None; 6];
+        let index = world.index(1, 1);
+        world.foregrounds[index] = Some(PLATFORM_GRASS_ROW_TILES[0]);
+
+        apply_wall_run(
+            &mut world,
+            &mask,
+            1,
+            1,
+            1,
+            WallRunStyle::PlatformBottom {
+                background: BackgroundTile::Water,
+            },
+        );
+
+        assert_eq!(world.backgrounds[index], BackgroundTile::Grass);
+        assert_eq!(world.foregrounds[index], Some(PLATFORM_GRASS_ROW_TILES[0]));
+    }
+
+    #[test]
+    fn generated_wall_tile_is_visible_and_uses_foundation_art() {
+        let mut world = GeneratedWorld::new(5, 4);
+        for col in 1..=3 {
+            let index = world.index(col, 1);
+            world.cells[index] = GeneratedCell::Water;
+        }
+        assert!(world.add_wall_run3_centered(2, 1));
+
+        let visual_world = world.to_visual_tile_world();
+
+        for (offset, col) in (1..=3).enumerate() {
+            let cap_index = visual_world.tiles.index(col, 1);
+            assert!(visual_world.visible[cap_index]);
+            assert_eq!(
+                visual_world.tiles.backgrounds[cap_index],
+                BackgroundTile::Water
+            );
+            assert_eq!(
+                visual_world.tiles.foregrounds[cap_index],
+                Some(PLATFORM_WATER_ROW_TILES[offset])
+            );
+        }
+    }
+
+    #[test]
+    fn generated_wall_tile_places_matching_cliff_caps_above() {
+        let mut world = GeneratedWorld::new(5, 4);
+
+        assert!(world.add_wall_run3_centered(2, 1));
+
+        let visual_world = world.to_visual_tile_world_with_shoreline(false);
+
+        for (offset, col) in (1..=3).enumerate() {
+            let cap_index = visual_world.tiles.index(col, 0);
+            assert_eq!(
+                visual_world.tiles.foregrounds[cap_index],
+                Some(PLATFORM_GRASS_CLIFF_CAP_TILES[offset])
+            );
+        }
+    }
+
+    #[test]
+    fn generated_wall_preview_includes_cliff_caps_and_pillars() {
+        let world = GeneratedWorld::new(5, 4);
+
+        let preview = world.wall_run3_preview_tiles_centered(2, 1).unwrap();
+
+        assert_eq!(preview.len(), 6);
+        assert_eq!(
+            &preview[0..3],
+            &[
+                GeneratedWallPreviewTile {
+                    col: 1,
+                    row: 0,
+                    tile: PLATFORM_GRASS_CLIFF_CAP_TILES[0],
+                },
+                GeneratedWallPreviewTile {
+                    col: 2,
+                    row: 0,
+                    tile: PLATFORM_GRASS_CLIFF_CAP_TILES[1],
+                },
+                GeneratedWallPreviewTile {
+                    col: 3,
+                    row: 0,
+                    tile: PLATFORM_GRASS_CLIFF_CAP_TILES[2],
+                },
+            ]
+        );
+        assert_eq!(
+            &preview[3..6],
+            &[
+                GeneratedWallPreviewTile {
+                    col: 1,
+                    row: 1,
+                    tile: PLATFORM_GRASS_ROW_TILES[0],
+                },
+                GeneratedWallPreviewTile {
+                    col: 2,
+                    row: 1,
+                    tile: PLATFORM_GRASS_ROW_TILES[1],
+                },
+                GeneratedWallPreviewTile {
+                    col: 3,
+                    row: 1,
+                    tile: PLATFORM_GRASS_ROW_TILES[2],
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn generated_horizontal_wall_supports_one_and_two_tile_variants() {
+        let mut one_tile_world = GeneratedWorld::new(5, 4);
+        assert!(one_tile_world.add_horizontal_wall_centered(2, 1, 1));
+        let one_tile_visual = one_tile_world.to_visual_tile_world_with_shoreline(false);
+        assert_eq!(
+            one_tile_visual.tiles.foregrounds[one_tile_visual.tiles.index(2, 0)],
+            Some(CLIFF_GRASS_CAP_TILE)
+        );
+        assert!(
+            one_tile_visual.tiles.foregrounds[one_tile_visual.tiles.index(2, 1)]
+                .is_some_and(is_wall_pillar_tile)
+        );
+
+        let mut two_tile_world = GeneratedWorld::new(5, 4);
+        assert!(two_tile_world.add_horizontal_wall_centered(1, 1, 2));
+        let two_tile_visual = two_tile_world.to_visual_tile_world_with_shoreline(false);
+        assert_eq!(
+            two_tile_visual.tiles.foregrounds[two_tile_visual.tiles.index(1, 0)],
+            Some(PLATFORM_GRASS_CLIFF_CAP_TILES[0])
+        );
+        assert_eq!(
+            two_tile_visual.tiles.foregrounds[two_tile_visual.tiles.index(2, 0)],
+            Some(PLATFORM_GRASS_CLIFF_CAP_TILES[2])
+        );
+    }
+
+    #[test]
+    fn generated_vertical_wall_tile_places_three_cliff_tiles_and_bottom_pillar() {
+        let mut world = GeneratedWorld::new(5, 6);
+
+        assert!(world.add_vertical_wall_run3_centered(2, 2));
+
+        let visual_world = world.to_visual_tile_world_with_shoreline(false);
+
+        for (offset, row) in (0..=2).enumerate() {
+            assert_eq!(
+                visual_world.tiles.foregrounds[visual_world.tiles.index(2, row)],
+                Some(VERTICAL_GRASS_CLIFF_TILES[offset])
+            );
+        }
+        assert_eq!(
+            visual_world.tiles.foregrounds[visual_world.tiles.index(2, 3)],
+            Some(STANDALONE_GRASS_PILLAR_TILE)
+        );
+    }
+
+    #[test]
+    fn generated_vertical_wall_preview_is_centered_on_clicked_tile() {
+        let world = GeneratedWorld::new(5, 6);
+
+        let preview = world
+            .vertical_wall_run3_preview_tiles_centered(2, 2)
+            .unwrap();
+
+        assert_eq!(
+            preview,
+            vec![
+                GeneratedWallPreviewTile {
+                    col: 2,
+                    row: 0,
+                    tile: VERTICAL_GRASS_CLIFF_TILES[0],
+                },
+                GeneratedWallPreviewTile {
+                    col: 2,
+                    row: 1,
+                    tile: VERTICAL_GRASS_CLIFF_TILES[1],
+                },
+                GeneratedWallPreviewTile {
+                    col: 2,
+                    row: 2,
+                    tile: VERTICAL_GRASS_CLIFF_TILES[2],
+                },
+                GeneratedWallPreviewTile {
+                    col: 2,
+                    row: 3,
+                    tile: STANDALONE_GRASS_PILLAR_TILE,
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn generated_vertical_wall_supports_one_and_two_cliff_tile_variants() {
+        let mut one_tile_world = GeneratedWorld::new(5, 6);
+        assert!(one_tile_world.add_vertical_wall_centered(2, 2, 1));
+        let one_tile_visual = one_tile_world.to_visual_tile_world_with_shoreline(false);
+        assert_eq!(
+            one_tile_visual.tiles.foregrounds[one_tile_visual.tiles.index(2, 2)],
+            Some(VERTICAL_GRASS_CLIFF_TILES[2])
+        );
+        assert_eq!(
+            one_tile_visual.tiles.foregrounds[one_tile_visual.tiles.index(2, 3)],
+            Some(STANDALONE_GRASS_PILLAR_TILE)
+        );
+
+        let mut two_tile_world = GeneratedWorld::new(5, 6);
+        assert!(two_tile_world.add_vertical_wall_centered(2, 2, 2));
+        let two_tile_visual = two_tile_world.to_visual_tile_world_with_shoreline(false);
+        assert_eq!(
+            two_tile_visual.tiles.foregrounds[two_tile_visual.tiles.index(2, 1)],
+            Some(VERTICAL_GRASS_CLIFF_TILES[0])
+        );
+        assert_eq!(
+            two_tile_visual.tiles.foregrounds[two_tile_visual.tiles.index(2, 2)],
+            Some(VERTICAL_GRASS_CLIFF_TILES[2])
+        );
+        assert_eq!(
+            two_tile_visual.tiles.foregrounds[two_tile_visual.tiles.index(2, 3)],
+            Some(STANDALONE_GRASS_PILLAR_TILE)
+        );
+    }
+
+    #[test]
+    fn generated_vertical_wall_rejects_mixed_level_foundations() {
+        let mut world = GeneratedWorld::new(5, 6);
+        world.platforms.push(GeneratedPlatform {
+            col: 2,
+            row: 2,
+            cols: 1,
+            rows: 2,
+            background: BackgroundTile::Grass,
+            kind: GeneratedPlatformKind::Small,
+        });
+
+        assert!(!world.add_vertical_wall_run3_centered(2, 2));
+        assert!(world.wall_tiles.is_empty());
+    }
+
+    #[test]
+    fn generated_vertical_wall_bottom_pillar_uses_level1_surface_art_on_platform() {
+        let mut world = GeneratedWorld::new(5, 7);
+        world.platforms.push(GeneratedPlatform {
+            col: 2,
+            row: 1,
+            cols: 1,
+            rows: 4,
+            background: BackgroundTile::Water,
+            kind: GeneratedPlatformKind::Small,
+        });
+
+        assert!(world.add_vertical_wall_run3_centered(2, 3));
+
+        let visual_world = world.to_visual_tile_world_with_shoreline(false);
+
+        assert_eq!(
+            visual_world.tiles.foregrounds[visual_world.tiles.index(2, 4)],
+            Some(STANDALONE_GRASS_PILLAR_TILE)
+        );
+    }
+
+    #[test]
+    fn generated_wall_tile_uses_own_foundation_art_not_tile_below() {
+        let mut world = GeneratedWorld::new(5, 4);
+        for col in 1..=3 {
+            let index = world.index(col, 2);
+            world.cells[index] = GeneratedCell::Water;
+        }
+        assert!(world.add_wall_run3_centered(2, 1));
+
+        let visual_world = world.to_visual_tile_world_with_shoreline(false);
+
+        for (offset, col) in (1..=3).enumerate() {
+            let cap_index = visual_world.tiles.index(col, 1);
+            assert_eq!(
+                visual_world.tiles.backgrounds[cap_index],
+                BackgroundTile::Grass
+            );
+            assert_eq!(
+                visual_world.tiles.foregrounds[cap_index],
+                Some(PLATFORM_GRASS_ROW_TILES[offset])
+            );
+        }
+    }
+
+    #[test]
+    fn generated_wall_tile_uses_own_foundation_over_platform_below() {
+        let mut world = GeneratedWorld::new(5, 4);
+        world.platforms.push(GeneratedPlatform {
+            col: 1,
+            row: 2,
+            cols: 3,
+            rows: 1,
+            background: BackgroundTile::Water,
+            kind: GeneratedPlatformKind::Small,
+        });
+
+        assert!(world.add_wall_run3_centered(2, 1));
+
+        let visual_world = world.to_visual_tile_world_with_shoreline(false);
+
+        for (offset, col) in (1..=3).enumerate() {
+            let cap_index = visual_world.tiles.index(col, 1);
+            assert_eq!(
+                visual_world.tiles.foregrounds[cap_index],
+                Some(PLATFORM_GRASS_ROW_TILES[offset])
+            );
+        }
+    }
+
+    #[test]
+    fn generated_wall_tile_uses_level1_surface_art_on_platform() {
+        let mut world = GeneratedWorld::new(5, 6);
+        world.platforms.push(GeneratedPlatform {
+            col: 1,
+            row: 1,
+            cols: 3,
+            rows: 3,
+            background: BackgroundTile::Water,
+            kind: GeneratedPlatformKind::Small,
+        });
+
+        assert!(world.add_wall_run3_centered(2, 2));
+
+        let visual_world = world.to_visual_tile_world_with_shoreline(false);
+
+        for (offset, col) in (1..=3).enumerate() {
+            let cap_index = visual_world.tiles.index(col, 2);
+            assert_eq!(
+                visual_world.tiles.foregrounds[cap_index],
+                Some(PLATFORM_GRASS_ROW_TILES[offset])
+            );
+        }
+    }
+
+    #[test]
+    fn generated_wall_run_allows_existing_pillar_next_to_side() {
+        let mut world = GeneratedWorld::new(6, 4);
+        world.platforms.push(GeneratedPlatform {
+            col: 0,
+            row: 0,
+            cols: 1,
+            rows: 1,
+            background: BackgroundTile::Grass,
+            kind: GeneratedPlatformKind::Small,
+        });
+
+        assert!(world.add_wall_run3_centered(2, 1));
+        assert_eq!(world.wall_tiles.len(), 1);
+    }
+
+    #[test]
+    fn generated_wall_run_rejects_existing_pillar_inside_columns() {
+        let mut world = GeneratedWorld::new(6, 4);
+        world.platforms.push(GeneratedPlatform {
+            col: 1,
+            row: 0,
+            cols: 1,
+            rows: 1,
+            background: BackgroundTile::Grass,
+            kind: GeneratedPlatformKind::Small,
+        });
+
+        assert!(!world.add_wall_run3_centered(2, 1));
+        assert!(world.wall_tiles.is_empty());
+    }
+
+    #[test]
+    fn single_pillar_run_can_use_standalone_pillar() {
+        let mut world = TileWorld::new(3, 2);
+        let mut mask = vec![None; 6];
+        mask[world.index(0, 0)] = Some(BackgroundTile::Grass);
+        mask[world.index(1, 0)] = Some(BackgroundTile::Grass);
+        mask[world.index(0, 1)] = Some(BackgroundTile::Grass);
+
+        tile_platform_bottom_pillars(&mut world, &mask);
+
+        assert_eq!(
+            world.foregrounds[world.index(1, 1)],
+            Some(STANDALONE_GRASS_PILLAR_TILE)
+        );
+    }
+
+    #[test]
+    fn generated_wall_run_rejects_mixed_level_foundations() {
+        let mut world = GeneratedWorld::new(5, 3);
+        world.platforms.push(GeneratedPlatform {
+            col: 2,
+            row: 1,
+            cols: 2,
+            rows: 1,
+            background: BackgroundTile::Grass,
+            kind: GeneratedPlatformKind::Small,
+        });
+
+        assert!(!world.add_wall_run3_centered(2, 1));
+        assert!(world.wall_tiles.is_empty());
+    }
+
+    #[test]
+    fn single_pillar_run_falls_back_to_visible_source_side_end_cap() {
+        let mut world = TileWorld::new(3, 3);
+        let mut mask = vec![None; 9];
+        mask[world.index(0, 1)] = Some(BackgroundTile::Grass);
+        mask[world.index(1, 1)] = Some(BackgroundTile::Grass);
+        mask[world.index(0, 2)] = Some(BackgroundTile::Grass);
+
+        tile_platform_bottom_pillars(&mut world, &mask);
+
+        assert_eq!(
+            world.foregrounds[world.index(1, 2)],
+            Some(PLATFORM_GRASS_ROW_TILES[2])
+        );
+    }
+
+    #[test]
+    fn two_pillar_run_can_use_standalone_pair() {
+        let mut world = TileWorld::new(3, 4);
+        let mut mask = vec![None; 12];
+        mask[world.index(1, 2)] = Some(BackgroundTile::Grass);
+        mask[world.index(2, 2)] = Some(BackgroundTile::Grass);
+
+        tile_platform_bottom_pillars(&mut world, &mask);
+
+        assert_eq!(
+            world.foregrounds[world.index(1, 3)],
+            Some(STANDALONE_GRASS_PILLAR_TILE)
+        );
+        assert_eq!(
+            world.foregrounds[world.index(2, 3)],
+            Some(STANDALONE_GRASS_PILLAR_TILE)
+        );
+    }
+
+    #[test]
+    fn two_pillar_run_falls_back_to_end_caps() {
+        let mut world = TileWorld::new(3, 3);
+        let mut mask = vec![None; 9];
+        mask[world.index(0, 1)] = Some(BackgroundTile::Grass);
+        mask[world.index(1, 1)] = Some(BackgroundTile::Grass);
+
+        tile_platform_bottom_pillars(&mut world, &mask);
+
+        assert_eq!(
+            world.foregrounds[world.index(0, 2)],
+            Some(PLATFORM_GRASS_ROW_TILES[0])
+        );
+        assert_eq!(
+            world.foregrounds[world.index(1, 2)],
+            Some(PLATFORM_GRASS_ROW_TILES[2])
+        );
+    }
 }

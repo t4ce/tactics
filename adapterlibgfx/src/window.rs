@@ -1,4 +1,7 @@
-use std::sync::Arc;
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, Ordering},
+};
 
 use winit::application::ApplicationHandler;
 use winit::event::{ElementState, MouseButton, MouseScrollDelta, WindowEvent};
@@ -254,6 +257,8 @@ pub struct WgpuSevenWindowApp<P, S, T, U, V, W, X> {
     quinary_renderer: Option<WgpuRenderer>,
     senary_renderer: Option<WgpuRenderer>,
     septenary_renderer: Option<WgpuRenderer>,
+    tertiary_create_request: Option<Arc<AtomicBool>>,
+    septenary_create_request: Option<Arc<AtomicBool>>,
     last_error: Option<RenderError>,
 }
 
@@ -626,8 +631,20 @@ impl<P, S, T, U, V, W, X> WgpuSevenWindowApp<P, S, T, U, V, W, X> {
             quinary_renderer: None,
             senary_renderer: None,
             septenary_renderer: None,
+            tertiary_create_request: None,
+            septenary_create_request: None,
             last_error: None,
         }
+    }
+
+    pub fn defer_tertiary_until(mut self, request: Arc<AtomicBool>) -> Self {
+        self.tertiary_create_request = Some(request);
+        self
+    }
+
+    pub fn defer_septenary_until(mut self, request: Arc<AtomicBool>) -> Self {
+        self.septenary_create_request = Some(request);
+        self
     }
 
     pub fn run(mut self) -> Result<(), winit::error::EventLoopError>
@@ -1395,7 +1412,7 @@ impl<
             self.secondary_renderer = Some(renderer);
         }
 
-        if self.tertiary_window.is_none() {
+        if self.tertiary_create_request.is_none() && self.tertiary_window.is_none() {
             let Some((window, renderer)) = create_window_renderer(
                 event_loop,
                 &self.tertiary_title,
@@ -1455,7 +1472,7 @@ impl<
             self.senary_renderer = Some(renderer);
         }
 
-        if self.septenary_window.is_none() {
+        if self.septenary_create_request.is_none() && self.septenary_window.is_none() {
             let Some((window, renderer)) = create_window_renderer(
                 event_loop,
                 &self.septenary_title,
@@ -1477,6 +1494,18 @@ impl<
         window_id: WindowId,
         event: WindowEvent,
     ) {
+        if self.tertiary_window.as_ref().map(|w| w.id()) == Some(window_id)
+            && matches!(event, WindowEvent::CloseRequested)
+            && self.tertiary_create_request.is_some()
+        {
+            self.tertiary_window = None;
+            self.tertiary_renderer = None;
+            if let Some(request) = &self.tertiary_create_request {
+                request.store(false, Ordering::Relaxed);
+            }
+            return;
+        }
+
         if self.primary_window.as_ref().map(|w| w.id()) == Some(window_id) {
             handle_window_event(
                 event_loop,
@@ -1532,6 +1561,16 @@ impl<
                 &mut self.last_error,
             );
         } else if self.septenary_window.as_ref().map(|w| w.id()) == Some(window_id) {
+            if matches!(event, WindowEvent::CloseRequested)
+                && self.septenary_create_request.is_some()
+            {
+                self.septenary_window = None;
+                self.septenary_renderer = None;
+                if let Some(request) = &self.septenary_create_request {
+                    request.store(false, Ordering::Relaxed);
+                }
+                return;
+            }
             handle_window_event(
                 event_loop,
                 event,
@@ -1543,7 +1582,47 @@ impl<
         }
     }
 
-    fn about_to_wait(&mut self, _event_loop: &ActiveEventLoop) {
+    fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
+        if self.tertiary_window.is_none()
+            && self
+                .tertiary_create_request
+                .as_ref()
+                .is_some_and(|request| request.load(Ordering::Relaxed))
+        {
+            let Some((window, renderer)) = create_window_renderer(
+                event_loop,
+                &self.tertiary_title,
+                self.tertiary_config,
+                self.tertiary_producer.cursor_visible(),
+                self.tertiary_producer.window_decorations(),
+            ) else {
+                event_loop.exit();
+                return;
+            };
+            self.tertiary_window = Some(window);
+            self.tertiary_renderer = Some(renderer);
+        }
+
+        if self.septenary_window.is_none()
+            && self
+                .septenary_create_request
+                .as_ref()
+                .is_some_and(|request| request.load(Ordering::Relaxed))
+        {
+            let Some((window, renderer)) = create_window_renderer(
+                event_loop,
+                &self.septenary_title,
+                self.septenary_config,
+                self.septenary_producer.cursor_visible(),
+                self.septenary_producer.window_decorations(),
+            ) else {
+                event_loop.exit();
+                return;
+            };
+            self.septenary_window = Some(window);
+            self.septenary_renderer = Some(renderer);
+        }
+
         if let Some(window) = &self.primary_window {
             window.request_redraw();
         }

@@ -9,8 +9,13 @@ use adapterlibgfx::window::{
 use std::collections::{BTreeMap, HashSet};
 use std::fs;
 use std::path::Path;
+use std::sync::{Arc, atomic::AtomicBool};
 use std::time::Instant;
 
+#[path = "cli.rs"]
+mod cli;
+#[path = "loadscreen.rs"]
+mod loadscreen;
 #[path = "wldgenerator.rs"]
 mod wldgenerator;
 #[path = "worldviewer.rs"]
@@ -38,7 +43,6 @@ const BUILDING_HOUSE2_TEXTURE: u32 = 11;
 const BUILDING_HOUSE3_TEXTURE: u32 = 12;
 const BUILDING_MONASTERY_TEXTURE: u32 = 13;
 const BUILDING_TOWER_TEXTURE: u32 = 14;
-const WOOD_TABLE_TEXTURE: u32 = 15;
 const CLOUD_TEXTURE_BASE: u32 = 100;
 const WATER_STATE_TEXTURE_BASE: u32 = 140;
 const WATER_STATE_TEXTURE_STRIDE: u32 = 64;
@@ -51,7 +55,11 @@ const GOLD_PROP_TEXTURE_STRIDE: u32 = 64;
 const ROCK_PROP_TEXTURE_BASE: u32 = 1900;
 const UNIT_VIEWER_TEXTURE_BASE: u32 = 5000;
 const ICON_VIEWER_TEXTURE_BASE: u32 = 7000;
+const IDLE_WORLD_HOUSE_ICON_TEXTURE_BASE: u32 = 8800;
+const IDLE_WORLD_TOOL_CURSOR_TEXTURE_BASE: u32 = 8850;
 const IDLE_WORLD_TEXTURE_BASE: u32 = 9000;
+const IDLE_RIGHT_CLICK_INDICATOR_MS: u128 = 250;
+const IDLE_RIGHT_CLICK_INDICATOR_SIZE: f32 = 42.0;
 const TERRAIN_TILE_PX: u32 = 64;
 const TERRAIN_BYTES: &[u8] = include_bytes!("../ts_freepack/Terrain/Tileset/Tilemap_color2.png");
 const CURSOR_DEFAULT_BYTES: &[u8] =
@@ -74,8 +82,6 @@ const RED_HOUSE3_BYTES: &[u8] = include_bytes!("../ts_freepack/Buildings/Red Bui
 const RED_MONASTERY_BYTES: &[u8] =
     include_bytes!("../ts_freepack/Buildings/Red Buildings/Monastery.png");
 const RED_TOWER_BYTES: &[u8] = include_bytes!("../ts_freepack/Buildings/Red Buildings/Tower.png");
-const WOOD_TABLE_BYTES: &[u8] =
-    include_bytes!("../ts_freepack/UI Elements/UI Elements/Wood Table/WoodTable.png");
 const ROCK1_BYTES: &[u8] = include_bytes!("../ts_freepack/Rocks/Rock1.png");
 const ROCK2_BYTES: &[u8] = include_bytes!("../ts_freepack/Rocks/Rock2.png");
 const ROCK3_BYTES: &[u8] = include_bytes!("../ts_freepack/Rocks/Rock3.png");
@@ -120,20 +126,6 @@ const SELECT_CORNER_SOURCES: [ImageRegion; 4] = [
     ImageRegion::new(3, 100, 21, 25),
     ImageRegion::new(104, 100, 21, 25),
 ];
-const WOOD_TABLE_TOP_LEFT: ImageRegion = ImageRegion::new(45, 43, 83, 85);
-const WOOD_TABLE_TOP_EDGE: ImageRegion = ImageRegion::new(192, 49, 64, 24);
-const WOOD_TABLE_TOP_RIGHT: ImageRegion = ImageRegion::new(320, 43, 83, 85);
-const WOOD_TABLE_LEFT_EDGE: ImageRegion = ImageRegion::new(49, 192, 18, 64);
-const WOOD_TABLE_FILL: ImageRegion = ImageRegion::new(192, 196, 64, 56);
-const WOOD_TABLE_RIGHT_EDGE: ImageRegion = ImageRegion::new(383, 192, 16, 64);
-const WOOD_TABLE_BOTTOM_LEFT: ImageRegion = ImageRegion::new(44, 384, 84, 39);
-const WOOD_TABLE_BOTTOM_EDGE: ImageRegion = ImageRegion::new(192, 384, 64, 39);
-const WOOD_TABLE_BOTTOM_RIGHT: ImageRegion = ImageRegion::new(320, 384, 84, 39);
-const WOOD_TABLE_TOP_LEFT_OUTSET_X: f32 = 4.0;
-const WOOD_TABLE_TOP_RIGHT_OUTSET_X: f32 = 4.0;
-const WOOD_TABLE_BOTTOM_LEFT_OUTSET_X: f32 = 5.0;
-const WOOD_TABLE_BOTTOM_RIGHT_OUTSET_X: f32 = 5.0;
-const WOOD_TABLE_TOP_CORNER_OUTSET_Y: f32 = 6.0;
 const GRASS_BG_TILE: AtlasTile = AtlasTile { col: 1, row: 1 };
 const SHORE_TOP_LEFT: AtlasTile = AtlasTile { col: 0, row: 0 };
 const SHORE_TOP: AtlasTile = AtlasTile { col: 1, row: 0 };
@@ -196,6 +188,62 @@ const DEFAULT_SEED: u64 = 0x5EED_2026;
 const IDLE_WORLD_VIRTUAL_WIDTH: f32 = WINDOW_WIDTH as f32;
 const IDLE_WORLD_VIRTUAL_HEIGHT: f32 = WINDOW_HEIGHT as f32;
 const IDLE_WORLD_MIN_SELECTION_DRAG_PX: f32 = 5.0;
+const IDLE_WORLD_UNIT_SPEED: f32 = 150.0;
+const IDLE_WORLD_RUN_COMMAND_DISTANCE_PX: f32 = 5.0;
+const IDLE_RESOURCE_WORK_MS: u32 = 5_000;
+const IDLE_WORLD_HOUSE_PREVIEW_TEXTURE_BASE: u32 = 8700;
+const IDLE_HOTKEY_ENTRIES: [ts_ui::HotkeyEntry<'static>; 10] = [
+    ts_ui::HotkeyEntry {
+        prefix: None,
+        key: "1",
+        label: "HOUSE",
+    },
+    ts_ui::HotkeyEntry {
+        prefix: None,
+        key: "2",
+        label: "BARRACKS",
+    },
+    ts_ui::HotkeyEntry {
+        prefix: None,
+        key: "3",
+        label: "ARCHERY",
+    },
+    ts_ui::HotkeyEntry {
+        prefix: None,
+        key: "4",
+        label: "TOWER",
+    },
+    ts_ui::HotkeyEntry {
+        prefix: None,
+        key: "5",
+        label: "CASTLE",
+    },
+    ts_ui::HotkeyEntry {
+        prefix: Some("STR"),
+        key: "A",
+        label: "MOVE",
+    },
+    ts_ui::HotkeyEntry {
+        prefix: Some("SPC"),
+        key: "B",
+        label: "STOP",
+    },
+    ts_ui::HotkeyEntry {
+        prefix: Some("ALT"),
+        key: "C",
+        label: "ATTACK",
+    },
+    ts_ui::HotkeyEntry {
+        prefix: Some("SFT"),
+        key: "D",
+        label: "SELECT",
+    },
+    ts_ui::HotkeyEntry {
+        prefix: None,
+        key: "E",
+        label: "CAMERA",
+    },
+];
 const PAWN_ASEPRITE_PATH: &str = "ts_freepack/Pawn.aseprite";
 const PARTICLE_FX_ASEPRITE_PATH: &str = "ts_freepack/Particle FX.aseprite";
 const IDLE_WORLD_UNIT_SPECS: [UnitWalkSpec; 5] = [
@@ -210,6 +258,51 @@ const IDLE_WORLD_UNIT_SPECS: [UnitWalkSpec; 5] = [
     UnitWalkSpec::animated("Monk Idle", "ts_freepack/Monk.aseprite", "Idle"),
     UnitWalkSpec::animated("Warrior Idle", "ts_freepack/Warrior.aseprite", "Idle"),
     UnitWalkSpec::animated_offset("Sheep Idle", "ts_freepack/Sheep.aseprite", "Idle", 0.0, 8.0),
+];
+const IDLE_WORLD_MOVE_SPECS: [UnitWalkSpec; 5] = [
+    UnitWalkSpec::animated("Archer Run", "ts_freepack/Archer.aseprite", "Run"),
+    UnitWalkSpec::animated_offset(
+        "Lancer Run",
+        "ts_freepack/Lancer.aseprite",
+        "Run",
+        0.0,
+        -16.0,
+    ),
+    UnitWalkSpec::animated("Monk Run", "ts_freepack/Monk.aseprite", "Run"),
+    UnitWalkSpec::animated("Warrior Run", "ts_freepack/Warrior.aseprite", "Run"),
+    UnitWalkSpec::animated_offset("Sheep Move", "ts_freepack/Sheep.aseprite", "Move", 0.0, 8.0),
+];
+const IDLE_WORLD_ATTACK_SPECS: [&[UnitWalkSpec]; 5] = [
+    &[UnitWalkSpec::animated(
+        "Archer Shoot",
+        "ts_freepack/Archer.aseprite",
+        "Shoot",
+    )],
+    &[UnitWalkSpec::animated_offset(
+        "Lancer Attack",
+        "ts_freepack/Lancer.aseprite",
+        "Attack",
+        0.0,
+        -16.0,
+    )],
+    &[UnitWalkSpec::animated(
+        "Monk Heal",
+        "ts_freepack/Monk.aseprite",
+        "Heal",
+    )],
+    &[
+        UnitWalkSpec::animated(
+            "Warrior Attack 1",
+            "ts_freepack/Warrior.aseprite",
+            "Attack 1",
+        ),
+        UnitWalkSpec::animated(
+            "Warrior Attack 2",
+            "ts_freepack/Warrior.aseprite",
+            "Attack 2",
+        ),
+    ],
+    &[],
 ];
 const PAWN_IDLE_TAGS: [&str; 8] = [
     "Idle",
@@ -247,6 +340,8 @@ const UNIT_WALK_SPECS: [UnitWalkSpec; 14] = [
 ];
 
 pub(crate) fn run() {
+    let unit_walk_viewer_request = Arc::new(AtomicBool::new(false));
+    let idle_viewer_request = Arc::new(AtomicBool::new(false));
     WgpuSevenWindowApp::new(
         "tactics world editor",
         AdapterConfig {
@@ -271,7 +366,10 @@ pub(crate) fn run() {
             width: WINDOW_WIDTH,
             height: WINDOW_HEIGHT,
         },
-        LoadScreen::new(),
+        loadscreen::LoadScreen::new(
+            unit_walk_viewer_request.clone(),
+            idle_viewer_request.clone(),
+        ),
         "tactics icon viewer",
         AdapterConfig {
             width: ICON_VIEWER_WIDTH,
@@ -291,11 +389,13 @@ pub(crate) fn run() {
         },
         IdleWorldViewer::new(),
     )
+    .defer_tertiary_until(unit_walk_viewer_request)
+    .defer_septenary_until(idle_viewer_request)
     .run()
     .expect("window loop failed");
 }
 
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
 struct Point {
     x: f32,
     y: f32,
@@ -585,6 +685,40 @@ impl RockKind {
             Self::Rock4 => None,
         }
     }
+
+    fn uses_half_height_footprint(self) -> bool {
+        matches!(self, Self::Rock1)
+    }
+
+    fn visual_instance_count(self, col: usize, row: usize) -> usize {
+        if !matches!(self, Self::Rock1) {
+            return 1;
+        }
+
+        let roll = rock_visual_roll(self, col, row);
+        if roll < 25 {
+            3
+        } else if roll < 70 {
+            2
+        } else {
+            1
+        }
+    }
+
+    fn visual_instance_offset(self, count: usize, instance: usize) -> Point {
+        if !matches!(self, Self::Rock1) || count <= 1 {
+            return Point::default();
+        }
+
+        match (count, instance) {
+            (2, 0) => Point { x: -8.0, y: 1.0 },
+            (2, 1) => Point { x: 8.0, y: -3.0 },
+            (3, 0) => Point { x: 0.0, y: -7.0 },
+            (3, 1) => Point { x: -11.0, y: 2.0 },
+            (3, 2) => Point { x: 11.0, y: 3.0 },
+            _ => Point::default(),
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
@@ -655,6 +789,10 @@ impl PlantKind {
 
     fn is_bush(self) -> bool {
         matches!(self, Self::Bush1 | Self::Bush2 | Self::Bush3 | Self::Bush4)
+    }
+
+    fn is_tree(self) -> bool {
+        matches!(self, Self::Tree1 | Self::Tree2 | Self::Tree3 | Self::Tree4)
     }
 
     fn is_big_bush(self) -> bool {
@@ -755,6 +893,10 @@ impl BuildingKind {
             Self::Monastery => 6,
             Self::Tower => 7,
         }
+    }
+
+    fn is_house(self) -> bool {
+        matches!(self, Self::House1 | Self::House2 | Self::House3)
     }
 
     fn developer_name(self) -> &'static str {
@@ -906,28 +1048,58 @@ struct UnitWalkViewer {
     started_at: Instant,
 }
 
+struct RightClickIndicator {
+    position: Point,
+    started: Instant,
+}
+
 struct IdleWorldViewer {
     terrain: TextureAtlas,
+    fog: ImageAsset,
+    buildings: [ImageAsset; BUILDING_COUNT],
+    water_visuals: WaterVisualAssets,
+    plant_props: [SpriteAnimation; PLANT_PROP_COUNT],
+    gold_props: [SpriteAnimation; GOLD_PROP_COUNT],
+    rock_props: [ImageAsset; ROCK_PROP_COUNT],
+    world: TileWorld,
+    terrain_cache: TerrainDrawCache,
     cursor_default: ImageAsset,
     cursor_hover: ImageAsset,
     cursor_select: ImageAsset,
+    cursor_pickaxe: ImageAsset,
+    cursor_axe: ImageAsset,
+    cursor_dagger: ImageAsset,
+    right_click_indicator: ImageAsset,
+    regular_paper: ImageAsset,
+    special_paper: ImageAsset,
+    house_previews: [ImageAsset; 3],
+    house_icon_inlays: [ImageAsset; 3],
     clouds: Vec<ImageAsset>,
     cloud_instances: Vec<CloudInstance>,
-    units: Vec<UnitWalkClip>,
+    units: Vec<IdleWorldUnit>,
+    pawn_templates: Vec<PawnClipTemplate>,
     selected_units: Vec<usize>,
+    right_click_indicators: Vec<RightClickIndicator>,
     selection_start: Option<Point>,
+    last_move_command: Option<IdleWorldMoveCommand>,
+    placement_building: Option<BuildingKind>,
+    show_hotkey_menu: bool,
     mouse: Point,
+    camera: Point,
+    panning: bool,
     uploaded: bool,
     window_width: u32,
     window_height: u32,
+    environment_rng: SeededRng,
+    water_animations: Vec<ActiveWaterAnimation>,
+    plant_animations: Vec<ActivePlantAnimation>,
+    gold_animations: Vec<ActiveGoldAnimation>,
+    water_animation_timer: f32,
+    plant_animation_timer: f32,
+    gold_animation_timer: f32,
     started_at: Instant,
-}
-
-struct LoadScreen {
-    wood_table: ImageAsset,
-    uploaded: bool,
-    window_width: u32,
-    window_height: u32,
+    last_frame: Instant,
+    attack_rng: SeededRng,
 }
 
 struct IconViewer {
@@ -948,6 +1120,73 @@ struct IdleUnitDraw {
     depth_y: f32,
     texture_id: u32,
     rect: TableRect,
+    flip_x: bool,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum IdleCursorTool {
+    Pickaxe,
+    Axe,
+    Dagger,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum IdleResourceKind {
+    Wood,
+    Meat,
+    Ore,
+}
+
+impl IdleResourceKind {
+    fn tool(self) -> IdleCursorTool {
+        match self {
+            Self::Wood => IdleCursorTool::Axe,
+            Self::Meat => IdleCursorTool::Dagger,
+            Self::Ore => IdleCursorTool::Pickaxe,
+        }
+    }
+
+    fn tool_idle_tag(self) -> &'static str {
+        match self {
+            Self::Wood => "Idle Axe",
+            Self::Meat => "Idle Knife",
+            Self::Ore => "Idle Pickaxe",
+        }
+    }
+
+    fn carrying_idle_tag(self) -> &'static str {
+        match self {
+            Self::Wood => "Idle Wood",
+            Self::Meat => "Idle Meat",
+            Self::Ore => "Idle Gold",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct IdleResourceTarget {
+    kind: IdleResourceKind,
+    position: Point,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct IdleResourceTask {
+    kind: IdleResourceKind,
+    resource: Point,
+    house: Option<Point>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum IdleResourcePhase {
+    ToolPickup,
+    ToResource,
+    ToHouse,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+struct IdleWorldMoveCommand {
+    target: Point,
+    selected_units: Vec<usize>,
 }
 
 struct EventEditor {
@@ -1081,6 +1320,7 @@ impl ScenarioAction {
     }
 }
 
+#[derive(Clone)]
 struct ExplorerFrame {
     texture_id: u32,
     width: u32,
@@ -1089,6 +1329,7 @@ struct ExplorerFrame {
     duration_ms: u32,
 }
 
+#[derive(Clone)]
 struct UnitWalkClip {
     name: String,
     source_tag: String,
@@ -1096,6 +1337,49 @@ struct UnitWalkClip {
     offset_y: f32,
     frames: Vec<ExplorerFrame>,
     total_duration_ms: u32,
+}
+
+struct IdleWorldUnit {
+    idle: UnitWalkClip,
+    movement: UnitWalkClip,
+    attacks: Vec<UnitWalkClip>,
+    position: Point,
+    facing_left: bool,
+    is_pawn: bool,
+    state: IdleWorldUnitState,
+}
+
+#[derive(Clone)]
+struct PawnClipTemplate {
+    idle_tag: String,
+    idle: UnitWalkClip,
+    movement: UnitWalkClip,
+    attacks: Vec<UnitWalkClip>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum IdleWorldUnitState {
+    Idle,
+    Moving {
+        target: Point,
+        running: bool,
+        started_ms: u32,
+    },
+    Attacking {
+        started_ms: u32,
+        attack_index: usize,
+    },
+    ResourceMoving {
+        task: IdleResourceTask,
+        phase: IdleResourcePhase,
+        target: Point,
+        running: bool,
+        started_ms: u32,
+    },
+    ResourceWorking {
+        task: IdleResourceTask,
+        started_ms: u32,
+    },
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -2248,16 +2532,20 @@ impl Game {
                 }
                 PropKind::Rock(kind) => {
                     let image = &self.rock_props[kind.index()];
-                    self.push_bottom_aligned_image_half(
-                        &mut image_batches,
-                        image,
-                        prop.x2,
-                        prop.y2,
-                        0.0,
-                        0.0,
-                        1.0,
-                        Rgba8::WHITE,
-                    );
+                    let instance_count = kind.visual_instance_count(prop.x2, prop.y2);
+                    for instance in 0..instance_count {
+                        let offset = kind.visual_instance_offset(instance_count, instance);
+                        self.push_bottom_aligned_image_half(
+                            &mut image_batches,
+                            image,
+                            prop.x2,
+                            prop.y2,
+                            offset.x,
+                            offset.y,
+                            1.0,
+                            Rgba8::WHITE,
+                        );
+                    }
                 }
             }
         }
@@ -2347,16 +2635,17 @@ impl Game {
                 } else {
                     Rgba8::new(255, 96, 96, 155)
                 };
-                self.draw_bottom_aligned_image_half(
-                    adapter,
-                    &self.rock_props[RockKind::Rock1.index()],
-                    col * BUILDING_GRID_DIVISIONS,
-                    row * BUILDING_GRID_DIVISIONS,
-                    0.0,
-                    0.0,
-                    1.0,
-                    tint,
-                );
+                let kind = RockKind::Rock1;
+                let x2 = col * BUILDING_GRID_DIVISIONS;
+                let y2 = row * BUILDING_GRID_DIVISIONS;
+                let image = &self.rock_props[kind.index()];
+                let instance_count = kind.visual_instance_count(x2, y2);
+                for instance in 0..instance_count {
+                    let offset = kind.visual_instance_offset(instance_count, instance);
+                    self.draw_bottom_aligned_image_half(
+                        adapter, image, x2, y2, offset.x, offset.y, 1.0, tint,
+                    );
+                }
             }
             _ => {}
         }
@@ -3250,18 +3539,39 @@ impl UnitWalkViewer {
 impl IdleWorldViewer {
     fn new() -> Self {
         let mut next_texture_id = IDLE_WORLD_TEXTURE_BASE;
-        let mut units = load_idle_world_unit_clips(&mut next_texture_id);
-        units.extend(load_pawn_idle_unit_clips(&mut next_texture_id));
+        let units = load_idle_world_units(&mut next_texture_id);
+        let pawn_templates = units
+            .iter()
+            .filter(|unit| unit.is_pawn)
+            .map(|unit| PawnClipTemplate {
+                idle_tag: unit.idle.source_tag.clone(),
+                idle: unit.idle.clone(),
+                movement: unit.movement.clone(),
+                attacks: unit.attacks.clone(),
+            })
+            .collect::<Vec<_>>();
+        let world = initial_editor_world();
+        let water_visuals = load_water_visual_assets();
+        let plant_props = load_plant_prop_assets();
+        let gold_props = load_gold_prop_assets();
+        let rock_props = load_rock_prop_assets();
         let clouds = load_cloud_assets();
-        let cloud_instances = generate_clouds(
-            DEFAULT_SEED ^ 0x1D1E_2026,
-            &clouds,
-            (IDLE_WORLD_VIRTUAL_WIDTH / TILE_SIZE).ceil() as usize,
-            (IDLE_WORLD_VIRTUAL_HEIGHT / TILE_SIZE).ceil() as usize,
-        );
+        let cloud_instances =
+            generate_clouds(DEFAULT_SEED ^ 0x1D1E_2026, &clouds, world.cols, world.rows);
 
         Self {
             terrain: TextureAtlas::from_png_bytes(TERRAIN_TEXTURE, TERRAIN_BYTES, TERRAIN_TILE_PX),
+            fog: ImageAsset::from_png_bytes_cropped(FOG_TEXTURE, FOG_BYTES),
+            buildings: std::array::from_fn(|index| {
+                let spec = BUILDING_SPECS[index];
+                ImageAsset::from_png_bytes(spec.texture_id, spec.bytes)
+            }),
+            water_visuals,
+            plant_props,
+            gold_props,
+            rock_props,
+            world,
+            terrain_cache: TerrainDrawCache::new(),
             cursor_default: ImageAsset::from_png_bytes_cropped(
                 CURSOR_DEFAULT_TEXTURE,
                 CURSOR_DEFAULT_BYTES,
@@ -3271,22 +3581,91 @@ impl IdleWorldViewer {
                 CURSOR_HOVER_BYTES,
             ),
             cursor_select: ImageAsset::from_png_bytes(CURSOR_SELECT_TEXTURE, CURSOR_SELECT_BYTES),
+            cursor_pickaxe: ImageAsset::from_png_bytes_cropped(
+                IDLE_WORLD_TOOL_CURSOR_TEXTURE_BASE,
+                TOOL2_BYTES,
+            ),
+            cursor_axe: ImageAsset::from_png_bytes_cropped(
+                IDLE_WORLD_TOOL_CURSOR_TEXTURE_BASE + 1,
+                TOOL3_BYTES,
+            ),
+            cursor_dagger: ImageAsset::from_png_bytes_cropped(
+                IDLE_WORLD_TOOL_CURSOR_TEXTURE_BASE + 2,
+                TOOL4_BYTES,
+            ),
+            right_click_indicator: ImageAsset::from_png_bytes(
+                ts_ui::SMALL_BLUE_ROUND_BUTTON_TEXTURE,
+                ts_ui::SMALL_BLUE_ROUND_BUTTON_BYTES,
+            ),
+            regular_paper: ImageAsset::from_png_bytes(
+                ts_ui::REGULAR_PAPER_TEXTURE,
+                ts_ui::REGULAR_PAPER_BYTES,
+            ),
+            special_paper: ImageAsset::from_png_bytes(
+                ts_ui::SPECIAL_PAPER_TEXTURE,
+                ts_ui::SPECIAL_PAPER_BYTES,
+            ),
+            house_previews: [
+                ImageAsset::from_png_bytes_cropped(
+                    IDLE_WORLD_HOUSE_PREVIEW_TEXTURE_BASE,
+                    RED_HOUSE1_BYTES,
+                ),
+                ImageAsset::from_png_bytes_cropped(
+                    IDLE_WORLD_HOUSE_PREVIEW_TEXTURE_BASE + 1,
+                    RED_HOUSE2_BYTES,
+                ),
+                ImageAsset::from_png_bytes_cropped(
+                    IDLE_WORLD_HOUSE_PREVIEW_TEXTURE_BASE + 2,
+                    RED_HOUSE3_BYTES,
+                ),
+            ],
+            house_icon_inlays: [
+                ImageAsset::from_png_bytes_cropped(
+                    IDLE_WORLD_HOUSE_ICON_TEXTURE_BASE,
+                    UI_ICON_BYTES[1],
+                ),
+                ImageAsset::from_png_bytes_cropped(
+                    IDLE_WORLD_HOUSE_ICON_TEXTURE_BASE + 1,
+                    UI_ICON_BYTES[2],
+                ),
+                ImageAsset::from_png_bytes_cropped(
+                    IDLE_WORLD_HOUSE_ICON_TEXTURE_BASE + 2,
+                    UI_ICON_BYTES[3],
+                ),
+            ],
             clouds,
             cloud_instances,
             units,
+            pawn_templates,
             selected_units: Vec::new(),
+            right_click_indicators: Vec::new(),
             selection_start: None,
+            last_move_command: None,
+            placement_building: None,
+            show_hotkey_menu: false,
             mouse: Point::default(),
+            camera: Point::default(),
+            panning: false,
             uploaded: false,
             window_width: WINDOW_WIDTH,
             window_height: WINDOW_HEIGHT,
+            environment_rng: SeededRng::new(DEFAULT_SEED ^ 0x1D1E_EA57_2026),
+            water_animations: Vec::new(),
+            plant_animations: Vec::new(),
+            gold_animations: Vec::new(),
+            water_animation_timer: 0.2,
+            plant_animation_timer: 0.4,
+            gold_animation_timer: 0.6,
             started_at: Instant::now(),
+            last_frame: Instant::now(),
+            attack_rng: SeededRng::new(DEFAULT_SEED ^ 0xA77A_CAFE_2026),
         }
     }
 
     fn resize_view(&mut self, width: u32, height: u32) {
         self.window_width = width.max(1);
         self.window_height = height.max(1);
+        self.clamp_idle_camera();
     }
 
     fn upload_assets(&mut self, adapter: &mut Adapter) {
@@ -3304,11 +3683,28 @@ impl IdleWorldViewer {
 
         let small_bar_base =
             ImageAsset::from_png_bytes(ts_ui::SMALL_BAR_BASE_TEXTURE, ts_ui::SMALL_BAR_BASE_BYTES);
+        let banner = ImageAsset::from_png_bytes(ts_ui::BANNER_TEXTURE, ts_ui::BANNER_BYTES);
+        let hotkey_button = ImageAsset::from_png_bytes(
+            ts_ui::SMALL_BLUE_SQUARE_BUTTON_TEXTURE,
+            ts_ui::SMALL_BLUE_SQUARE_BUTTON_BYTES,
+        );
+        let big_ribbons =
+            ImageAsset::from_png_bytes(ts_ui::BIG_RIBBONS_TEXTURE, ts_ui::BIG_RIBBONS_BYTES);
         for image in [
             &self.cursor_default,
             &self.cursor_hover,
             &self.cursor_select,
+            &self.cursor_pickaxe,
+            &self.cursor_axe,
+            &self.cursor_dagger,
+            &self.right_click_indicator,
+            &self.fog,
+            &self.regular_paper,
+            &self.special_paper,
             &small_bar_base,
+            &banner,
+            &hotkey_button,
+            &big_ribbons,
         ] {
             let rc = adapter.upload_texture_rgba_image(
                 image.texture_id,
@@ -3319,6 +3715,83 @@ impl IdleWorldViewer {
             assert_eq!(
                 rc, 0,
                 "failed to upload idle world ui texture {}",
+                image.texture_id
+            );
+        }
+
+        for image in self
+            .house_previews
+            .iter()
+            .chain(self.house_icon_inlays.iter())
+        {
+            let rc = adapter.upload_texture_rgba_image(
+                image.texture_id,
+                image.width,
+                image.height,
+                &image.rgba,
+            );
+            assert_eq!(
+                rc, 0,
+                "failed to upload idle world house preview texture {}",
+                image.texture_id
+            );
+        }
+
+        for image in &self.buildings {
+            let rc = adapter.upload_texture_rgba_image(
+                image.texture_id,
+                image.width,
+                image.height,
+                &image.rgba,
+            );
+            assert_eq!(
+                rc, 0,
+                "failed to upload idle world building texture {}",
+                image.texture_id
+            );
+        }
+
+        for image in self
+            .water_visuals
+            .stones
+            .iter()
+            .flat_map(|animation| animation.frames.iter())
+            .chain(self.water_visuals.animation.frames.iter())
+            .chain(self.water_visuals.duck.frames.iter())
+        {
+            let rc = adapter.upload_texture_rgba_image(
+                image.texture_id,
+                image.width,
+                image.height,
+                &image.rgba,
+            );
+            assert_eq!(
+                rc, 0,
+                "failed to upload idle world water texture {}",
+                image.texture_id
+            );
+        }
+
+        for image in self
+            .plant_props
+            .iter()
+            .flat_map(|animation| animation.frames.iter())
+            .chain(
+                self.gold_props
+                    .iter()
+                    .flat_map(|animation| animation.frames.iter()),
+            )
+            .chain(self.rock_props.iter())
+        {
+            let rc = adapter.upload_texture_rgba_image(
+                image.texture_id,
+                image.width,
+                image.height,
+                &image.rgba,
+            );
+            assert_eq!(
+                rc, 0,
+                "failed to upload idle world prop texture {}",
                 image.texture_id
             );
         }
@@ -3338,7 +3811,13 @@ impl IdleWorldViewer {
         }
 
         for unit in &self.units {
-            for frame in &unit.frames {
+            for frame in unit
+                .idle
+                .frames
+                .iter()
+                .chain(unit.movement.frames.iter())
+                .chain(unit.attacks.iter().flat_map(|clip| clip.frames.iter()))
+            {
                 let rc = adapter.upload_texture_rgba_image(
                     frame.texture_id,
                     frame.width,
@@ -3360,17 +3839,430 @@ impl IdleWorldViewer {
         self.started_at.elapsed().as_millis() as u32
     }
 
+    fn idle_view_w(&self) -> f32 {
+        self.window_width as f32
+    }
+
+    fn idle_view_h(&self) -> f32 {
+        self.window_height as f32
+    }
+
+    fn clamp_idle_camera(&mut self) {
+        let max_x = (self.world.width_px() - self.idle_view_w()).max(0.0);
+        let max_y = (self.world.height_px() - self.idle_view_h()).max(0.0);
+        self.camera.x = self.camera.x.clamp(0.0, max_x);
+        self.camera.y = self.camera.y.clamp(0.0, max_y);
+    }
+
+    fn scroll_idle_camera(&mut self, dx: f32, dy: f32) {
+        self.camera.x += dx;
+        self.camera.y += dy;
+        self.clamp_idle_camera();
+    }
+
+    fn update_idle_camera(&mut self, dt: f32) {
+        if self.show_hotkey_menu
+            || !inside_rect(
+                self.mouse.x,
+                self.mouse.y,
+                0.0,
+                0.0,
+                self.idle_view_w(),
+                self.idle_view_h(),
+            )
+        {
+            return;
+        }
+
+        let mut dx = 0.0;
+        let mut dy = 0.0;
+        if self.mouse.x < EDGE_SCROLL_ZONE {
+            dx = -scroll_strength(self.mouse.x);
+        } else if self.mouse.x > self.idle_view_w() - EDGE_SCROLL_ZONE {
+            dx = scroll_strength(self.idle_view_w() - self.mouse.x);
+        }
+
+        if self.mouse.y < EDGE_SCROLL_ZONE {
+            dy = -scroll_strength(self.mouse.y);
+        } else if self.mouse.y > self.idle_view_h() - EDGE_SCROLL_ZONE {
+            dy = scroll_strength(self.idle_view_h() - self.mouse.y);
+        }
+
+        self.scroll_idle_camera(dx * EDGE_SCROLL_SPEED * dt, dy * EDGE_SCROLL_SPEED * dt);
+    }
+
+    fn idle_world_point_at(&self, point: Point) -> Point {
+        Point {
+            x: point.x + self.camera.x,
+            y: point.y + self.camera.y,
+        }
+    }
+
+    fn update_units(&mut self) {
+        let now = Instant::now();
+        let dt = now.duration_since(self.last_frame).as_secs_f32().min(0.05);
+        self.last_frame = now;
+        let elapsed_ms = self.elapsed_ms();
+        self.update_idle_environment(dt, elapsed_ms);
+        self.update_idle_camera(dt);
+        self.update_right_click_indicators();
+        let attack_rng = &mut self.attack_rng;
+
+        let mut pawn_clip_changes = Vec::new();
+
+        for (index, unit) in self.units.iter_mut().enumerate() {
+            match unit.state {
+                IdleWorldUnitState::Idle => {}
+                IdleWorldUnitState::Moving {
+                    target, running, ..
+                } => {
+                    let dx = target.x - unit.position.x;
+                    let dy = target.y - unit.position.y;
+                    let distance = (dx * dx + dy * dy).sqrt();
+                    let speed = if running {
+                        IDLE_WORLD_UNIT_SPEED
+                    } else {
+                        IDLE_WORLD_UNIT_SPEED * 0.5
+                    };
+                    let step = speed * dt;
+                    if distance <= step.max(1.0) {
+                        unit.position = target;
+                        unit.state = if unit.attacks.is_empty() {
+                            IdleWorldUnitState::Idle
+                        } else {
+                            IdleWorldUnitState::Attacking {
+                                started_ms: elapsed_ms,
+                                attack_index: attack_rng.range_usize(0, unit.attacks.len()),
+                            }
+                        };
+                    } else if distance > 0.0 {
+                        unit.facing_left = dx < 0.0;
+                        unit.position.x += dx / distance * step;
+                        unit.position.y += dy / distance * step;
+                    }
+                }
+                IdleWorldUnitState::Attacking {
+                    started_ms,
+                    attack_index,
+                } => {
+                    if unit.attacks.get(attack_index).is_none_or(|clip| {
+                        elapsed_ms.saturating_sub(started_ms) >= clip.total_duration_ms
+                    }) {
+                        unit.state = IdleWorldUnitState::Idle;
+                    }
+                }
+                IdleWorldUnitState::ResourceMoving {
+                    task,
+                    phase,
+                    target,
+                    running,
+                    ..
+                } => {
+                    let dx = target.x - unit.position.x;
+                    let dy = target.y - unit.position.y;
+                    let distance = (dx * dx + dy * dy).sqrt();
+                    let speed = if running {
+                        IDLE_WORLD_UNIT_SPEED
+                    } else {
+                        IDLE_WORLD_UNIT_SPEED * 0.5
+                    };
+                    let step = speed * dt;
+                    if distance <= step.max(1.0) {
+                        unit.position = target;
+                        unit.state = match phase {
+                            IdleResourcePhase::ToolPickup => {
+                                pawn_clip_changes.push((index, task.kind.tool_idle_tag()));
+                                IdleWorldUnitState::ResourceMoving {
+                                    task,
+                                    phase: IdleResourcePhase::ToResource,
+                                    target: task.resource,
+                                    running: true,
+                                    started_ms: elapsed_ms,
+                                }
+                            }
+                            IdleResourcePhase::ToResource => IdleWorldUnitState::ResourceWorking {
+                                task,
+                                started_ms: elapsed_ms,
+                            },
+                            IdleResourcePhase::ToHouse => {
+                                pawn_clip_changes.push((index, task.kind.tool_idle_tag()));
+                                IdleWorldUnitState::ResourceMoving {
+                                    task,
+                                    phase: IdleResourcePhase::ToResource,
+                                    target: task.resource,
+                                    running: true,
+                                    started_ms: elapsed_ms,
+                                }
+                            }
+                        };
+                    } else if distance > 0.0 {
+                        unit.facing_left = dx < 0.0;
+                        unit.position.x += dx / distance * step;
+                        unit.position.y += dy / distance * step;
+                    }
+                }
+                IdleWorldUnitState::ResourceWorking { task, started_ms } => {
+                    if elapsed_ms.saturating_sub(started_ms) >= IDLE_RESOURCE_WORK_MS {
+                        pawn_clip_changes.push((index, task.kind.carrying_idle_tag()));
+                        unit.state = if let Some(house) = task.house {
+                            IdleWorldUnitState::ResourceMoving {
+                                task,
+                                phase: IdleResourcePhase::ToHouse,
+                                target: house,
+                                running: false,
+                                started_ms: elapsed_ms,
+                            }
+                        } else {
+                            IdleWorldUnitState::Idle
+                        };
+                    }
+                }
+            }
+        }
+
+        for (index, idle_tag) in pawn_clip_changes {
+            self.apply_pawn_idle_tag(index, idle_tag);
+        }
+    }
+
+    fn update_idle_environment(&mut self, dt: f32, elapsed_ms: u32) {
+        self.update_idle_plant_environment(dt, elapsed_ms);
+        self.update_idle_gold_environment(dt, elapsed_ms);
+        self.update_idle_water_environment(dt, elapsed_ms);
+    }
+
+    fn update_idle_plant_environment(&mut self, dt: f32, elapsed_ms: u32) {
+        let plant_durations =
+            PlantKind::ALL.map(|kind| (kind, self.plant_props[kind.index()].total_duration_ms));
+        self.plant_animations.retain(|animation| {
+            let duration = plant_durations
+                .iter()
+                .find_map(|&(kind, duration)| (kind == animation.kind).then_some(duration))
+                .unwrap_or(0);
+            elapsed_ms.saturating_sub(animation.started_ms) < duration
+        });
+
+        self.plant_animation_timer -= dt;
+        if self.plant_animation_timer > 0.0 {
+            return;
+        }
+        self.plant_animation_timer = self.environment_rng.range_f32(0.45, 1.0);
+
+        let mut candidates = Vec::new();
+        for prop in &self.world.props {
+            let PropKind::Plant(kind) = prop.kind else {
+                continue;
+            };
+            if !kind.animates_in_environment() {
+                continue;
+            }
+            let instance_count = kind.visual_instance_count(prop.x2, prop.y2);
+            for instance in 0..instance_count {
+                if self.plant_animations.iter().any(|animation| {
+                    animation.col == prop.x2
+                        && animation.row == prop.y2
+                        && animation.kind == kind
+                        && animation.instance == instance
+                }) {
+                    continue;
+                }
+                candidates.push((prop.x2, prop.y2, kind, instance));
+            }
+        }
+
+        let trigger_count = self.environment_rng.range_usize(1, 3).min(candidates.len());
+        for _ in 0..trigger_count {
+            let index = self.environment_rng.range_usize(0, candidates.len());
+            let (col, row, kind, instance) = candidates.swap_remove(index);
+            self.plant_animations.push(ActivePlantAnimation {
+                col,
+                row,
+                kind,
+                instance,
+                started_ms: elapsed_ms,
+            });
+        }
+    }
+
+    fn update_idle_gold_environment(&mut self, dt: f32, elapsed_ms: u32) {
+        let gold_durations =
+            GoldKind::ALL.map(|kind| (kind, self.gold_props[kind.index()].total_duration_ms));
+        self.gold_animations.retain(|animation| {
+            let duration = gold_durations
+                .iter()
+                .find_map(|&(kind, duration)| (kind == animation.kind).then_some(duration))
+                .unwrap_or(0);
+            elapsed_ms.saturating_sub(animation.started_ms) < duration
+        });
+
+        self.gold_animation_timer -= dt;
+        if self.gold_animation_timer > 0.0 {
+            return;
+        }
+        self.gold_animation_timer = self.environment_rng.range_f32(0.45, 1.1);
+
+        let mut candidates = Vec::new();
+        for prop in &self.world.props {
+            let PropKind::Gold(kind) = prop.kind else {
+                continue;
+            };
+            if self.gold_animations.iter().any(|animation| {
+                animation.x2 == prop.x2 && animation.y2 == prop.y2 && animation.kind == kind
+            }) {
+                continue;
+            }
+            candidates.push((prop.x2, prop.y2, kind));
+        }
+
+        let trigger_count = self.environment_rng.range_usize(1, 3).min(candidates.len());
+        for _ in 0..trigger_count {
+            let index = self.environment_rng.range_usize(0, candidates.len());
+            let (x2, y2, kind) = candidates.swap_remove(index);
+            self.gold_animations.push(ActiveGoldAnimation {
+                x2,
+                y2,
+                kind,
+                started_ms: elapsed_ms,
+            });
+        }
+    }
+
+    fn update_idle_water_environment(&mut self, dt: f32, elapsed_ms: u32) {
+        let water_durations = [
+            (
+                WaterState::Stone1,
+                self.water_visuals.stones[0].total_duration_ms,
+            ),
+            (
+                WaterState::Stone2,
+                self.water_visuals.stones[1].total_duration_ms,
+            ),
+            (
+                WaterState::Stone3,
+                self.water_visuals.stones[2].total_duration_ms,
+            ),
+            (
+                WaterState::Stone4,
+                self.water_visuals.stones[3].total_duration_ms,
+            ),
+            (
+                WaterState::Animation,
+                self.water_visuals.animation.total_duration_ms,
+            ),
+            (WaterState::Duck, self.water_visuals.duck.total_duration_ms),
+        ];
+        self.water_animations.retain(|animation| {
+            let duration = water_durations
+                .iter()
+                .find_map(|&(state, duration)| (state == animation.state).then_some(duration))
+                .unwrap_or(0);
+            elapsed_ms.saturating_sub(animation.started_ms) < duration
+        });
+
+        self.water_animation_timer -= dt;
+        if self.water_animation_timer > 0.0 {
+            return;
+        }
+        self.water_animation_timer = self.environment_rng.range_f32(0.35, 0.85);
+
+        let mut candidates = Vec::new();
+        for row in 0..self.world.rows {
+            for col in 0..self.world.cols {
+                let state = match self.world.water_state(col, row) {
+                    Some(
+                        state @ (WaterState::Stone1
+                        | WaterState::Stone2
+                        | WaterState::Stone3
+                        | WaterState::Stone4),
+                    ) => Some(state),
+                    _ if self.world.cell_accepts_wave_animation(col, row) => {
+                        Some(WaterState::Animation)
+                    }
+                    _ => None,
+                };
+                let Some(state) = state else {
+                    continue;
+                };
+                if self
+                    .water_animations
+                    .iter()
+                    .any(|animation| animation.col == col && animation.row == row)
+                {
+                    continue;
+                }
+                candidates.push((col, row, state));
+            }
+        }
+
+        let trigger_count = self.environment_rng.range_usize(1, 3).min(candidates.len());
+        for _ in 0..trigger_count {
+            let index = self.environment_rng.range_usize(0, candidates.len());
+            let (col, row, state) = candidates.swap_remove(index);
+            self.water_animations.push(ActiveWaterAnimation {
+                col,
+                row,
+                state,
+                started_ms: elapsed_ms,
+            });
+        }
+    }
+
+    fn unit_clip_and_elapsed(unit: &IdleWorldUnit, elapsed_ms: u32) -> (&UnitWalkClip, u32) {
+        match unit.state {
+            IdleWorldUnitState::Idle => (&unit.idle, elapsed_ms),
+            IdleWorldUnitState::Moving {
+                started_ms,
+                running,
+                ..
+            }
+            | IdleWorldUnitState::ResourceMoving {
+                started_ms,
+                running,
+                ..
+            } => {
+                let movement_elapsed = elapsed_ms.saturating_sub(started_ms);
+                let movement_elapsed = if running {
+                    movement_elapsed
+                } else {
+                    movement_elapsed / 2
+                };
+                (&unit.movement, movement_elapsed)
+            }
+            IdleWorldUnitState::Attacking {
+                started_ms,
+                attack_index,
+            } => unit
+                .attacks
+                .get(attack_index)
+                .map(|clip| (clip, elapsed_ms.saturating_sub(started_ms)))
+                .unwrap_or((&unit.idle, elapsed_ms)),
+            IdleWorldUnitState::ResourceWorking { started_ms, .. } => unit
+                .attacks
+                .first()
+                .map(|clip| {
+                    let elapsed = elapsed_ms.saturating_sub(started_ms);
+                    let looped = if clip.total_duration_ms > 0 {
+                        elapsed % clip.total_duration_ms
+                    } else {
+                        elapsed
+                    };
+                    (clip, looped)
+                })
+                .unwrap_or((&unit.idle, elapsed_ms)),
+        }
+    }
+
     fn unit_rect(&self, index: usize, elapsed_ms: u32) -> Option<(TableRect, &ExplorerFrame)> {
         let unit = self.units.get(index)?;
-        let frame = unit_walk_frame(unit, elapsed_ms);
+        let (clip, clip_elapsed_ms) = Self::unit_clip_and_elapsed(unit, elapsed_ms);
+        let frame = unit_walk_frame(clip, clip_elapsed_ms);
         let scale = 1.0;
         let w = frame.width as f32 * scale;
         let h = frame.height as f32 * scale;
-        let foot = idle_world_unit_foot_position(index, self.units.len().max(1));
         Some((
             TableRect {
-                x: foot.x - w * 0.5 + unit.offset_x,
-                y: foot.y - h + unit.offset_y,
+                x: unit.position.x - self.camera.x - w * 0.5 + clip.offset_x,
+                y: unit.position.y - self.camera.y - h + clip.offset_y,
                 w,
                 h,
             },
@@ -3390,6 +4282,7 @@ impl IdleWorldViewer {
                     depth_y: rect.y + rect.h,
                     texture_id: frame.texture_id,
                     rect,
+                    flip_x: self.units[index].facing_left,
                 })
             })
             .collect::<Vec<_>>();
@@ -3447,6 +4340,182 @@ impl IdleWorldViewer {
         self.selected_units.clear();
     }
 
+    fn hotkey_menu_rect(&self) -> TableRect {
+        let (w, h) = ts_ui::hotkey_menu_page_size(IDLE_HOTKEY_ENTRIES.len());
+        TableRect {
+            x: ((self.window_width as f32 - w) * 0.5).round(),
+            y: ((self.window_height as f32 - h) * 0.5).round(),
+            w,
+            h,
+        }
+    }
+
+    fn mouse_inside_hotkey_menu(&self) -> bool {
+        let rect = self.hotkey_menu_rect();
+        inside_rect(self.mouse.x, self.mouse.y, rect.x, rect.y, rect.w, rect.h)
+    }
+
+    fn move_command_is_repeat_run(&self, target: Point) -> bool {
+        let Some(command) = &self.last_move_command else {
+            return false;
+        };
+        command.selected_units == self.selected_units
+            && point_distance(command.target, target) <= IDLE_WORLD_RUN_COMMAND_DISTANCE_PX
+    }
+
+    fn issue_move_order(&mut self, target: Point) {
+        if self.selected_units.is_empty() {
+            self.cancel_selection();
+            return;
+        }
+        let running = self.move_command_is_repeat_run(target);
+        let selected_units = self.selected_units.clone();
+        let started_ms = self.elapsed_ms();
+
+        let mut center = Point::default();
+        let mut count = 0.0;
+        for &index in &selected_units {
+            if let Some(unit) = self.units.get(index) {
+                center.x += unit.position.x;
+                center.y += unit.position.y;
+                count += 1.0;
+            }
+        }
+        if count <= 0.0 {
+            return;
+        }
+        center.x /= count;
+        center.y /= count;
+
+        for &index in &selected_units {
+            if let Some(unit) = self.units.get_mut(index) {
+                let target = Point {
+                    x: target.x + unit.position.x - center.x,
+                    y: target.y + unit.position.y - center.y,
+                };
+                let dx = target.x - unit.position.x;
+                if dx.abs() > 0.5 {
+                    unit.facing_left = dx < 0.0;
+                }
+                unit.state = IdleWorldUnitState::Moving {
+                    target,
+                    running,
+                    started_ms,
+                };
+            }
+        }
+
+        self.last_move_command = Some(IdleWorldMoveCommand {
+            target,
+            selected_units,
+        });
+    }
+
+    fn issue_resource_order(&mut self, resource_target: IdleResourceTarget) {
+        if !self.selected_units_are_only_pawns() {
+            return;
+        }
+
+        let selected_units = self.selected_units.clone();
+        let started_ms = self.elapsed_ms();
+        let mut pawn_clip_changes = Vec::new();
+
+        for index in selected_units {
+            let Some(unit) = self.units.get(index) else {
+                continue;
+            };
+            let position = unit.position;
+            let has_tool = unit.idle.source_tag.trim() == resource_target.kind.tool_idle_tag();
+            let house = self.nearest_idle_house(position);
+
+            let (phase, target) = if has_tool {
+                (IdleResourcePhase::ToResource, resource_target.position)
+            } else if let Some(house) = house {
+                (IdleResourcePhase::ToolPickup, house)
+            } else {
+                pawn_clip_changes.push((index, resource_target.kind.tool_idle_tag()));
+                (IdleResourcePhase::ToResource, resource_target.position)
+            };
+
+            if let Some(unit) = self.units.get_mut(index) {
+                let dx = target.x - unit.position.x;
+                if dx.abs() > 0.5 {
+                    unit.facing_left = dx < 0.0;
+                }
+                unit.state = IdleWorldUnitState::ResourceMoving {
+                    task: IdleResourceTask {
+                        kind: resource_target.kind,
+                        resource: resource_target.position,
+                        house,
+                    },
+                    phase,
+                    target,
+                    running: true,
+                    started_ms,
+                };
+            }
+        }
+
+        for (index, idle_tag) in pawn_clip_changes {
+            self.apply_pawn_idle_tag(index, idle_tag);
+        }
+        self.last_move_command = None;
+    }
+
+    fn apply_pawn_idle_tag(&mut self, index: usize, idle_tag: &str) {
+        let Some(template) = self
+            .pawn_templates
+            .iter()
+            .find(|template| template.idle_tag.trim() == idle_tag)
+            .cloned()
+        else {
+            return;
+        };
+        let Some(unit) = self.units.get_mut(index) else {
+            return;
+        };
+        if !unit.is_pawn {
+            return;
+        }
+        unit.idle = template.idle;
+        unit.movement = template.movement;
+        unit.attacks = template.attacks;
+    }
+
+    fn nearest_idle_house(&self, from: Point) -> Option<Point> {
+        self.world
+            .buildings
+            .iter()
+            .filter(|building| building.kind.is_house())
+            .map(|building| self.idle_building_foot_target(*building))
+            .min_by(|a, b| {
+                point_distance(from, *a)
+                    .partial_cmp(&point_distance(from, *b))
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            })
+    }
+
+    fn idle_building_foot_target(&self, building: PlacedBuilding) -> Point {
+        let (x2, y2, w2, h2) = building_footprint_rect2(building);
+        Point {
+            x: signed_half_grid_to_px(x2) + half_grid_to_px(w2) * 0.5,
+            y: signed_half_grid_to_px(y2) + half_grid_to_px(h2),
+        }
+    }
+
+    fn spawn_right_click_indicator(&mut self) {
+        self.right_click_indicators.push(RightClickIndicator {
+            position: self.mouse,
+            started: Instant::now(),
+        });
+    }
+
+    fn update_right_click_indicators(&mut self) {
+        self.right_click_indicators.retain(|indicator| {
+            indicator.started.elapsed().as_millis() < IDLE_RIGHT_CLICK_INDICATOR_MS
+        });
+    }
+
     fn selection_drag_is_large_enough(&self) -> bool {
         let Some(start) = self.selection_start else {
             return false;
@@ -3486,6 +4555,118 @@ impl IdleWorldViewer {
             .collect()
     }
 
+    fn idle_cursor_tool(&self, elapsed_ms: u32) -> Option<IdleCursorTool> {
+        if self.selection_start.is_some() || !self.selected_units_are_only_pawns() {
+            return None;
+        }
+
+        self.idle_resource_target_at_mouse(elapsed_ms)
+            .map(|target| target.kind.tool())
+    }
+
+    fn idle_resource_target_at_mouse(&self, elapsed_ms: u32) -> Option<IdleResourceTarget> {
+        if let Some(index) = self
+            .unit_at_point(self.mouse, elapsed_ms)
+            .filter(|&index| self.idle_unit_is_sheep(index))
+        {
+            return Some(IdleResourceTarget {
+                kind: IdleResourceKind::Meat,
+                position: self.units.get(index)?.position,
+            });
+        }
+
+        self.idle_resource_prop_at_mouse()
+    }
+
+    fn idle_unit_is_sheep(&self, index: usize) -> bool {
+        self.units
+            .get(index)
+            .is_some_and(|unit| !unit.is_pawn && unit.idle.name.starts_with("Sheep"))
+    }
+
+    fn idle_resource_prop_at_mouse(&self) -> Option<IdleResourceTarget> {
+        for prop in self.world.props.iter().rev() {
+            let Some((kind, image, rect)) = self.idle_resource_prop_hit_rect(*prop) else {
+                continue;
+            };
+            if !inside_rect(self.mouse.x, self.mouse.y, rect.x, rect.y, rect.w, rect.h) {
+                continue;
+            }
+            if image_point_has_alpha(image, self.mouse, rect) {
+                return Some(IdleResourceTarget {
+                    kind,
+                    position: Self::idle_resource_prop_target(*prop),
+                });
+            }
+        }
+
+        None
+    }
+
+    fn idle_resource_prop_hit_rect(
+        &self,
+        prop: PlacedProp,
+    ) -> Option<(IdleResourceKind, &ImageAsset, TableRect)> {
+        match prop.kind {
+            PropKind::Plant(kind) if kind.is_tree() => {
+                let image = self.plant_props[kind.index()].first_frame()?;
+                Some((
+                    IdleResourceKind::Wood,
+                    image,
+                    self.idle_bottom_aligned_image_half_rect(
+                        image,
+                        prop.x2,
+                        prop.y2,
+                        kind.render_offset_y(),
+                        kind.render_scale(),
+                    ),
+                ))
+            }
+            PropKind::Gold(kind) => {
+                let image = self.gold_props[kind.index()].first_frame()?;
+                Some((
+                    IdleResourceKind::Ore,
+                    image,
+                    self.idle_bottom_aligned_image_half_rect(image, prop.x2, prop.y2, 0.0, 1.0),
+                ))
+            }
+            PropKind::Rock(kind) => {
+                let image = &self.rock_props[kind.index()];
+                Some((
+                    IdleResourceKind::Ore,
+                    image,
+                    self.idle_bottom_aligned_image_half_rect(image, prop.x2, prop.y2, 0.0, 1.0),
+                ))
+            }
+            _ => None,
+        }
+    }
+
+    fn idle_resource_prop_target(prop: PlacedProp) -> Point {
+        Point {
+            x: half_grid_to_px(prop.x2) + TILE_SIZE * 0.5,
+            y: half_grid_to_px(prop.y2 + BUILDING_GRID_DIVISIONS),
+        }
+    }
+
+    fn idle_bottom_aligned_image_half_rect(
+        &self,
+        image: &ImageAsset,
+        x2: usize,
+        y2: usize,
+        offset_y: f32,
+        scale: f32,
+    ) -> TableRect {
+        let w = image.width as f32 * BUILDING_SCALE * scale;
+        let h = image.height as f32 * BUILDING_SCALE * scale;
+        TableRect {
+            x: half_grid_to_px(x2) - self.camera.x + (TILE_SIZE - w) * 0.5,
+            y: half_grid_to_px(y2 + BUILDING_GRID_DIVISIONS) - self.camera.y - h + offset_y,
+            w: w.max(1.0),
+            h: h.max(1.0),
+        }
+    }
+
     fn cursor_image(&self, elapsed_ms: u32) -> &ImageAsset {
         if self.selection_start.is_some() {
             &self.cursor_default
@@ -3493,6 +4674,579 @@ impl IdleWorldViewer {
             &self.cursor_hover
         } else {
             &self.cursor_default
+        }
+    }
+
+    fn draw_world_background(&mut self, adapter: &mut Adapter, elapsed_ms: u32) {
+        let _ = adapter.set_texture_effect(TextureEffect::World);
+        self.terrain_cache.rebuild_if_dirty(&self.world);
+        let mut water = SolidBatch::new(self.window_width, self.window_height);
+        let mut backgrounds = SpriteBatch::new(self.window_width, self.window_height);
+        let mut under_foregrounds = SpriteBatch::new(self.window_width, self.window_height);
+        let mut foregrounds = SpriteBatch::new(self.window_width, self.window_height);
+        let start_col = (self.camera.x / TILE_SIZE).floor().max(0.0) as usize;
+        let start_row = (self.camera.y / TILE_SIZE).floor().max(0.0) as usize;
+        let end_col = ((self.camera.x + self.idle_view_w()) / TILE_SIZE).ceil() as usize + 1;
+        let end_row = ((self.camera.y + self.idle_view_h()) / TILE_SIZE).ceil() as usize + 1;
+
+        for row in start_row..end_row.min(self.world.rows) {
+            for col in start_col..end_col.min(self.world.cols) {
+                if self.world.render_background(col, row) == BackgroundTile::Water {
+                    water.rect(
+                        col as f32 * TILE_SIZE - self.camera.x,
+                        row as f32 * TILE_SIZE - self.camera.y,
+                        TILE_SIZE,
+                        TILE_SIZE,
+                        Rgba8::new(71, 171, 169, 255),
+                    );
+                }
+            }
+        }
+
+        for cell in self
+            .terrain_cache
+            .backgrounds
+            .iter()
+            .filter(|cell| terrain_cell_visible(cell, start_col, start_row, end_col, end_row))
+        {
+            backgrounds.sprite(
+                &self.terrain,
+                cell.tile,
+                cell.col as f32 * TILE_SIZE - self.camera.x,
+                cell.row as f32 * TILE_SIZE - self.camera.y,
+                TILE_SIZE,
+                TILE_SIZE,
+                Rgba8::WHITE,
+            );
+        }
+
+        for cell in self
+            .terrain_cache
+            .under_foregrounds
+            .iter()
+            .filter(|cell| terrain_cell_visible(cell, start_col, start_row, end_col, end_row))
+        {
+            under_foregrounds.sprite(
+                &self.terrain,
+                cell.tile,
+                cell.col as f32 * TILE_SIZE - self.camera.x,
+                cell.row as f32 * TILE_SIZE - self.camera.y,
+                TILE_SIZE,
+                TILE_SIZE,
+                Rgba8::WHITE,
+            );
+        }
+
+        for cell in self
+            .terrain_cache
+            .foregrounds
+            .iter()
+            .filter(|cell| terrain_cell_visible(cell, start_col, start_row, end_col, end_row))
+        {
+            foregrounds.sprite(
+                &self.terrain,
+                cell.tile,
+                cell.col as f32 * TILE_SIZE - self.camera.x,
+                cell.row as f32 * TILE_SIZE - self.camera.y,
+                TILE_SIZE,
+                TILE_SIZE,
+                Rgba8::WHITE,
+            );
+        }
+
+        let _ = adapter.draw_rgb_triangles_no_present(&water.bytes);
+        let _ = adapter.draw_tex_triangles_no_present(self.terrain.texture_id, &backgrounds.bytes);
+        self.draw_idle_water_states(adapter, elapsed_ms);
+        let _ = adapter
+            .draw_tex_triangles_no_present(self.terrain.texture_id, &under_foregrounds.bytes);
+        let _ = adapter.draw_tex_triangles_no_present(self.terrain.texture_id, &foregrounds.bytes);
+        let _ = adapter.set_texture_effect(TextureEffect::Plain);
+    }
+
+    fn draw_saved_world_assets(&self, adapter: &mut Adapter) {
+        let _ = adapter.set_texture_effect(TextureEffect::World);
+        self.draw_idle_props(adapter);
+        self.draw_idle_buildings(adapter);
+        let _ = adapter.set_texture_effect(TextureEffect::Plain);
+        self.draw_idle_fog(adapter);
+    }
+
+    fn draw_idle_water_states(&self, adapter: &mut Adapter, elapsed_ms: u32) {
+        let mut batches = BTreeMap::new();
+        let start_col = (self.camera.x / TILE_SIZE).floor().max(0.0) as usize;
+        let start_row = (self.camera.y / TILE_SIZE).floor().max(0.0) as usize;
+        let end_col = ((self.camera.x + self.idle_view_w()) / TILE_SIZE).ceil() as usize + 1;
+        let end_row = ((self.camera.y + self.idle_view_h()) / TILE_SIZE).ceil() as usize + 1;
+
+        for row in start_row..end_row.min(self.world.rows) {
+            for col in start_col..end_col.min(self.world.cols) {
+                if self.world.cell_accepts_wave_animation(col, row) {
+                    if let Some(image) = self.active_idle_water_visual_frame(
+                        WaterState::Animation,
+                        col,
+                        row,
+                        elapsed_ms,
+                    ) {
+                        let w = image.width as f32 * BUILDING_SCALE;
+                        let h = image.height as f32 * BUILDING_SCALE;
+                        self.push_idle_image_batch(
+                            &mut batches,
+                            image.texture_id,
+                            col as f32 * TILE_SIZE - self.camera.x + (TILE_SIZE - w) * 0.5,
+                            row as f32 * TILE_SIZE - self.camera.y + (TILE_SIZE - h) * 0.5,
+                            w.max(1.0),
+                            h.max(1.0),
+                            Rgba8::WHITE,
+                        );
+                    }
+                }
+
+                let Some(state) = self.world.water_state(col, row) else {
+                    continue;
+                };
+                if state == WaterState::Nothing || state == WaterState::Animation {
+                    continue;
+                }
+                let Some(image) = self.idle_water_visual_frame(state, col, row, elapsed_ms) else {
+                    continue;
+                };
+                let w = image.width as f32 * BUILDING_SCALE;
+                let h = image.height as f32 * BUILDING_SCALE;
+                self.push_idle_image_batch(
+                    &mut batches,
+                    image.texture_id,
+                    col as f32 * TILE_SIZE - self.camera.x + (TILE_SIZE - w) * 0.5,
+                    row as f32 * TILE_SIZE - self.camera.y + (TILE_SIZE - h) * 0.5,
+                    w.max(1.0),
+                    h.max(1.0),
+                    Rgba8::WHITE,
+                );
+            }
+        }
+
+        self.draw_idle_image_batches(adapter, batches);
+    }
+
+    fn active_idle_water_visual_frame(
+        &self,
+        state: WaterState,
+        col: usize,
+        row: usize,
+        elapsed_ms: u32,
+    ) -> Option<&ImageAsset> {
+        let animation = self.idle_water_visual_animation(state)?;
+        self.water_animations
+            .iter()
+            .find(|active| active.col == col && active.row == row && active.state == state)
+            .and_then(|active| animation.frame_once(elapsed_ms.saturating_sub(active.started_ms)))
+    }
+
+    fn idle_water_visual_frame(
+        &self,
+        state: WaterState,
+        col: usize,
+        row: usize,
+        elapsed_ms: u32,
+    ) -> Option<&ImageAsset> {
+        let animation = self.idle_water_visual_animation(state)?;
+        let active = self
+            .water_animations
+            .iter()
+            .find(|active| active.col == col && active.row == row && active.state == state);
+        active
+            .and_then(|active| animation.frame_once(elapsed_ms.saturating_sub(active.started_ms)))
+            .or_else(|| animation.first_frame())
+    }
+
+    fn idle_water_visual_animation(&self, state: WaterState) -> Option<&SpriteAnimation> {
+        let animation = match state {
+            WaterState::Nothing => return None,
+            WaterState::Stone1 => &self.water_visuals.stones[0],
+            WaterState::Stone2 => &self.water_visuals.stones[1],
+            WaterState::Stone3 => &self.water_visuals.stones[2],
+            WaterState::Stone4 => &self.water_visuals.stones[3],
+            WaterState::Animation => &self.water_visuals.animation,
+            WaterState::Duck => &self.water_visuals.duck,
+        };
+        Some(animation)
+    }
+
+    fn draw_idle_props(&self, adapter: &mut Adapter) {
+        let mut terrain_batch = SpriteBatch::new(self.window_width, self.window_height);
+        let mut image_batches = BTreeMap::new();
+
+        for prop in &self.world.props {
+            match prop.kind {
+                PropKind::Pillar(tile) => {
+                    terrain_batch.sprite(
+                        &self.terrain,
+                        tile,
+                        half_grid_to_px(prop.x2) - self.camera.x,
+                        half_grid_to_px(prop.y2) - self.camera.y,
+                        TILE_SIZE,
+                        TILE_SIZE,
+                        Rgba8::WHITE,
+                    );
+                }
+                PropKind::Plant(kind) => {
+                    let instance_count = kind.visual_instance_count(prop.x2, prop.y2);
+                    for instance in 0..instance_count {
+                        let Some(image) = self.idle_plant_frame(kind, prop.x2, prop.y2, instance)
+                        else {
+                            continue;
+                        };
+                        let offset = kind.visual_instance_offset(instance_count, instance);
+                        self.push_idle_bottom_aligned_image_half(
+                            &mut image_batches,
+                            image,
+                            prop.x2,
+                            prop.y2,
+                            offset.x,
+                            kind.render_offset_y() + offset.y,
+                            kind.render_scale(),
+                            Rgba8::WHITE,
+                        );
+                    }
+                }
+                PropKind::Gold(kind) => {
+                    let Some(image) = self.idle_gold_frame(kind, prop.x2, prop.y2) else {
+                        continue;
+                    };
+                    self.push_idle_bottom_aligned_image_half(
+                        &mut image_batches,
+                        image,
+                        prop.x2,
+                        prop.y2,
+                        0.0,
+                        0.0,
+                        1.0,
+                        Rgba8::WHITE,
+                    );
+                }
+                PropKind::Rock(kind) => {
+                    let image = &self.rock_props[kind.index()];
+                    let instance_count = kind.visual_instance_count(prop.x2, prop.y2);
+                    for instance in 0..instance_count {
+                        let offset = kind.visual_instance_offset(instance_count, instance);
+                        self.push_idle_bottom_aligned_image_half(
+                            &mut image_batches,
+                            image,
+                            prop.x2,
+                            prop.y2,
+                            offset.x,
+                            offset.y,
+                            1.0,
+                            Rgba8::WHITE,
+                        );
+                    }
+                }
+            }
+        }
+
+        let _ =
+            adapter.draw_tex_triangles_no_present(self.terrain.texture_id, &terrain_batch.bytes);
+        self.draw_idle_image_batches(adapter, image_batches);
+    }
+
+    fn idle_plant_frame(
+        &self,
+        kind: PlantKind,
+        col: usize,
+        row: usize,
+        instance: usize,
+    ) -> Option<&ImageAsset> {
+        let animation = &self.plant_props[kind.index()];
+        if !kind.animates_in_environment() {
+            return animation.first_frame();
+        }
+        let active = self.plant_animations.iter().find(|active| {
+            active.col == col
+                && active.row == row
+                && active.kind == kind
+                && active.instance == instance
+        });
+        active
+            .and_then(|active| {
+                animation.frame_once(
+                    self.started_at
+                        .elapsed()
+                        .as_millis()
+                        .try_into()
+                        .unwrap_or(u32::MAX)
+                        .saturating_sub(active.started_ms),
+                )
+            })
+            .or_else(|| animation.first_frame())
+    }
+
+    fn idle_gold_frame(&self, kind: GoldKind, x2: usize, y2: usize) -> Option<&ImageAsset> {
+        let animation = &self.gold_props[kind.index()];
+        let active = self
+            .gold_animations
+            .iter()
+            .find(|active| active.x2 == x2 && active.y2 == y2 && active.kind == kind);
+        active
+            .and_then(|active| {
+                animation.frame_once(
+                    self.started_at
+                        .elapsed()
+                        .as_millis()
+                        .try_into()
+                        .unwrap_or(u32::MAX)
+                        .saturating_sub(active.started_ms),
+                )
+            })
+            .or_else(|| animation.first_frame())
+    }
+
+    fn draw_idle_buildings(&self, adapter: &mut Adapter) {
+        let mut batches = BTreeMap::new();
+        let mut icon_batches = BTreeMap::new();
+        let elapsed_ms = self.started_at.elapsed().as_millis() as u32;
+        for building in &self.world.buildings {
+            let image = &self.buildings[building.kind.index()];
+            let x = signed_half_grid_to_px(building.x2) - self.camera.x;
+            let y = signed_half_grid_to_px(building.y2) - self.camera.y;
+            let w = image.width as f32 * BUILDING_SCALE;
+            let h = image.height as f32 * BUILDING_SCALE;
+            if x + w < 0.0
+                || y + h < 0.0
+                || x > self.window_width as f32
+                || y > self.window_height as f32
+            {
+                continue;
+            }
+
+            self.push_idle_image_batch(
+                &mut batches,
+                image.texture_id,
+                x,
+                y,
+                w.max(1.0),
+                h.max(1.0),
+                Rgba8::WHITE,
+            );
+
+            if let Some(icon_index) = Self::idle_house_icon_index(building.kind) {
+                let icon = &self.house_icon_inlays[icon_index];
+                let icon_size = Self::idle_house_icon_size(elapsed_ms, icon_index);
+                self.push_idle_image_batch(
+                    &mut icon_batches,
+                    icon.texture_id,
+                    (x + w - icon_size * 0.5).floor(),
+                    (y + (h - icon_size) * 0.5).floor(),
+                    icon_size,
+                    icon_size,
+                    Rgba8::new(255, 255, 255, 191),
+                );
+            }
+        }
+        self.draw_idle_image_batches(adapter, batches);
+        self.draw_idle_image_batches(adapter, icon_batches);
+    }
+
+    fn idle_build_hotkey_kind(digit: u8) -> Option<BuildingKind> {
+        match digit {
+            1 => Some(BuildingKind::House1),
+            2 => Some(BuildingKind::House2),
+            3 => Some(BuildingKind::House3),
+            _ => None,
+        }
+    }
+
+    fn idle_house_icon_size(elapsed_ms: u32, index: usize) -> f32 {
+        let base_icon_size = 56.0;
+        let pulse = 0.85 + 0.05 * ((elapsed_ms as f32 * 0.004) + index as f32 * 0.55).sin();
+        (base_icon_size * pulse).floor().max(1.0)
+    }
+
+    fn idle_house_icon_index(kind: BuildingKind) -> Option<usize> {
+        match kind {
+            BuildingKind::House1 => Some(0),
+            BuildingKind::House2 => Some(1),
+            BuildingKind::House3 => Some(2),
+            _ => None,
+        }
+    }
+
+    fn idle_world_half_cell_at(&self, x: f32, y: f32) -> Option<(usize, usize)> {
+        if x < 0.0 || y < 0.0 {
+            return None;
+        }
+
+        let x = x + self.camera.x;
+        let y = y + self.camera.y;
+        let half_tile = TILE_SIZE / BUILDING_GRID_DIVISIONS as f32;
+        let x2 = (x / half_tile).floor() as usize;
+        let y2 = (y / half_tile).floor() as usize;
+        if x2 < self.world.cols * BUILDING_GRID_DIVISIONS
+            && y2 < self.world.rows * BUILDING_GRID_DIVISIONS
+        {
+            Some((x2, y2))
+        } else {
+            None
+        }
+    }
+
+    fn idle_building_anchor_half_cell(kind: BuildingKind, x2: usize, y2: usize) -> (isize, isize) {
+        let spec = building_spec(kind);
+        let center_offset_x2 = spec.footprint_offset_cols * BUILDING_GRID_DIVISIONS
+            + spec.footprint_cols * BUILDING_GRID_DIVISIONS / 2;
+        let center_offset_y2 = spec.footprint_offset_rows * BUILDING_GRID_DIVISIONS
+            + spec.footprint_rows * BUILDING_GRID_DIVISIONS / 2;
+        (
+            x2 as isize - center_offset_x2 as isize,
+            y2 as isize - center_offset_y2 as isize,
+        )
+    }
+
+    fn place_idle_building_at_mouse(&mut self) {
+        let Some(kind) = self.placement_building else {
+            return;
+        };
+        let Some((x2, y2)) = self.idle_world_half_cell_at(self.mouse.x, self.mouse.y) else {
+            return;
+        };
+
+        let (anchor_x2, anchor_y2) = Self::idle_building_anchor_half_cell(kind, x2, y2);
+        self.world.paint_building(kind, anchor_x2, anchor_y2);
+    }
+
+    fn draw_idle_building_preview(&self, adapter: &mut Adapter) {
+        let Some(kind) = self.placement_building else {
+            return;
+        };
+        let Some((x2, y2)) = self.idle_world_half_cell_at(self.mouse.x, self.mouse.y) else {
+            return;
+        };
+
+        let (x2, y2) = Self::idle_building_anchor_half_cell(kind, x2, y2);
+        let image = &self.buildings[kind.index()];
+        let can_place = self.world.can_place_building_kind(kind, x2, y2);
+        let tint = if can_place {
+            Rgba8::new(255, 255, 255, 145)
+        } else {
+            Rgba8::new(255, 96, 96, 155)
+        };
+        let (footprint_x2, footprint_y2, footprint_w2, footprint_h2) =
+            building_spec_footprint_rect2(building_spec(kind), x2, y2);
+        let mut overlay = SolidBatch::new(self.window_width, self.window_height);
+        outline_rect(
+            &mut overlay,
+            signed_half_grid_to_px(footprint_x2) - self.camera.x,
+            signed_half_grid_to_px(footprint_y2) - self.camera.y,
+            half_grid_to_px(footprint_w2),
+            half_grid_to_px(footprint_h2),
+            2.0,
+            if can_place {
+                Rgba8::new(255, 225, 118, 210)
+            } else {
+                Rgba8::new(255, 86, 86, 230)
+            },
+        );
+        let _ = adapter.draw_rgb_triangles_no_present(&overlay.bytes);
+
+        let mut sprite = SpriteBatch::new(self.window_width, self.window_height);
+        sprite.image(
+            signed_half_grid_to_px(x2) - self.camera.x,
+            signed_half_grid_to_px(y2) - self.camera.y,
+            image.width as f32 * BUILDING_SCALE,
+            image.height as f32 * BUILDING_SCALE,
+            tint,
+        );
+        let _ = adapter.draw_tex_triangles_no_present(image.texture_id, &sprite.bytes);
+
+        if let Some(icon_index) = Self::idle_house_icon_index(kind) {
+            let icon = &self.house_icon_inlays[icon_index];
+            let elapsed_ms = self.started_at.elapsed().as_millis() as u32;
+            let icon_size = Self::idle_house_icon_size(elapsed_ms, icon_index);
+            let mut inlay = SpriteBatch::new(self.window_width, self.window_height);
+            let x = signed_half_grid_to_px(x2) - self.camera.x;
+            let y = signed_half_grid_to_px(y2) - self.camera.y;
+            let w = image.width as f32 * BUILDING_SCALE;
+            let h = image.height as f32 * BUILDING_SCALE;
+            inlay.image(
+                (x + w - icon_size * 0.5).floor(),
+                (y + (h - icon_size) * 0.5).floor(),
+                icon_size,
+                icon_size,
+                Rgba8::new(255, 255, 255, 191),
+            );
+            let _ = adapter.draw_tex_triangles_no_present(icon.texture_id, &inlay.bytes);
+        }
+    }
+
+    fn draw_idle_fog(&self, adapter: &mut Adapter) {
+        let mut fog = SpriteBatch::new(self.window_width, self.window_height);
+        let start_col = (self.camera.x / TILE_SIZE).floor().max(0.0) as usize;
+        let start_row = (self.camera.y / TILE_SIZE).floor().max(0.0) as usize;
+        let end_col = ((self.camera.x + self.idle_view_w()) / TILE_SIZE).ceil() as usize + 1;
+        let end_row = ((self.camera.y + self.idle_view_h()) / TILE_SIZE).ceil() as usize + 1;
+
+        for row in start_row..end_row.min(self.world.rows) {
+            for col in start_col..end_col.min(self.world.cols) {
+                if self.world.fog(col, row) {
+                    fog.image(
+                        col as f32 * TILE_SIZE - self.camera.x,
+                        row as f32 * TILE_SIZE - self.camera.y,
+                        TILE_SIZE,
+                        TILE_SIZE,
+                        Rgba8::new(255, 255, 255, 190),
+                    );
+                }
+            }
+        }
+
+        let _ = adapter.draw_tex_triangles_no_present(self.fog.texture_id, &fog.bytes);
+    }
+
+    fn push_idle_bottom_aligned_image_half(
+        &self,
+        batches: &mut BTreeMap<u32, SpriteBatch>,
+        image: &ImageAsset,
+        x2: usize,
+        y2: usize,
+        offset_x: f32,
+        offset_y: f32,
+        scale: f32,
+        tint: Rgba8,
+    ) {
+        let w = image.width as f32 * BUILDING_SCALE * scale;
+        let h = image.height as f32 * BUILDING_SCALE * scale;
+        let x = half_grid_to_px(x2) - self.camera.x + (TILE_SIZE - w) * 0.5 + offset_x;
+        let y = half_grid_to_px(y2 + BUILDING_GRID_DIVISIONS) - self.camera.y - h + offset_y;
+        self.push_idle_image_batch(
+            batches,
+            image.texture_id,
+            x.floor(),
+            y.floor(),
+            w.max(1.0),
+            h.max(1.0),
+            tint,
+        );
+    }
+
+    fn push_idle_image_batch(
+        &self,
+        batches: &mut BTreeMap<u32, SpriteBatch>,
+        texture_id: u32,
+        x: f32,
+        y: f32,
+        w: f32,
+        h: f32,
+        tint: Rgba8,
+    ) {
+        batches
+            .entry(texture_id)
+            .or_insert_with(|| SpriteBatch::new(self.window_width, self.window_height))
+            .image(x, y, w, h, tint);
+    }
+
+    fn draw_idle_image_batches(&self, adapter: &mut Adapter, batches: BTreeMap<u32, SpriteBatch>) {
+        for (texture_id, batch) in batches {
+            if !batch.bytes.is_empty() {
+                let _ = adapter.draw_tex_triangles_no_present(texture_id, &batch.bytes);
+            }
         }
     }
 
@@ -3510,18 +5264,20 @@ impl IdleWorldViewer {
                 (cloud.alpha_min + (cloud.alpha_max - cloud.alpha_min) * fade).clamp(0.0, 1.0);
             let scale =
                 cloud.scale * (1.0 + cloud.scale_wobble * (elapsed * 0.18 + cloud.phase).sin());
-            let wrap_w = IDLE_WORLD_VIRTUAL_WIDTH + image.width as f32 * scale;
-            let wrap_h = IDLE_WORLD_VIRTUAL_HEIGHT + image.height as f32 * scale;
+            let wrap_w = self.world.cols as f32 * TILE_SIZE + image.width as f32 * scale;
+            let wrap_h = self.world.rows as f32 * TILE_SIZE + image.height as f32 * scale;
             let x = (cloud.x + cloud.drift_x * elapsed).rem_euclid(wrap_w)
                 - image.width as f32 * scale * 0.5;
             let y = (cloud.y + cloud.drift_y * elapsed).rem_euclid(wrap_h)
                 - image.height as f32 * scale * 0.5;
+            let screen_x = x - self.camera.x;
+            let screen_y = y - self.camera.y;
             let w = image.width as f32 * scale;
             let h = image.height as f32 * scale;
-            if x + w < 0.0
-                || y + h < 0.0
-                || x > self.window_width as f32
-                || y > self.window_height as f32
+            if screen_x + w < 0.0
+                || screen_y + h < 0.0
+                || screen_x > self.window_width as f32
+                || screen_y > self.window_height as f32
             {
                 continue;
             }
@@ -3530,8 +5286,8 @@ impl IdleWorldViewer {
                 .entry(image.texture_id)
                 .or_insert_with(|| SpriteBatch::new(self.window_width, self.window_height))
                 .image(
-                    x.floor(),
-                    y.floor(),
+                    screen_x.floor(),
+                    screen_y.floor(),
                     w.floor().max(1.0),
                     h.floor().max(1.0),
                     Rgba8::new(255, 255, 255, (alpha * 255.0).round() as u8),
@@ -3621,8 +5377,153 @@ impl IdleWorldViewer {
         let _ = adapter.draw_rgb_triangles_no_present(&health_bars.fill_solid_bytes);
     }
 
+    fn selected_units_include_pawn(&self) -> bool {
+        self.selected_units
+            .iter()
+            .any(|&index| self.units.get(index).is_some_and(|unit| unit.is_pawn))
+    }
+
+    fn selected_units_are_only_pawns(&self) -> bool {
+        !self.selected_units.is_empty()
+            && self
+                .selected_units
+                .iter()
+                .all(|&index| self.units.get(index).is_some_and(|unit| unit.is_pawn))
+    }
+
+    fn draw_pawn_build_ui(&self, adapter: &mut Adapter, elapsed_ms: u32) {
+        if !self.selected_units_include_pawn() {
+            return;
+        }
+
+        let tile = 64.0;
+        let panel_w = tile * 7.0;
+        let panel_h = tile;
+        let panel_x = ((self.window_width as f32 - panel_w) * 0.5).round();
+        let panel_y = (self.window_height as f32 - panel_h - 24.0)
+            .max(0.0)
+            .round();
+        let mut paper = ts_ui::UiBatch::new(self.window_width, self.window_height);
+        paper.paper_panel_tiles(panel_x, panel_y, 7, 1, tile, Rgba8::new(255, 255, 255, 128));
+        let _ = adapter
+            .draw_tex_triangles_no_present(self.regular_paper.texture_id, &paper.texture_bytes);
+
+        let slot_w = panel_w / 3.0;
+        let mut labels = ts_ui::UiBatch::new(self.window_width, self.window_height);
+        for (index, image) in self.house_previews.iter().enumerate() {
+            let max_w = 88.0;
+            let max_h = 102.0;
+            let scale = (max_w / image.width as f32)
+                .min(max_h / image.height as f32)
+                .min(1.0);
+            let w = (image.width as f32 * scale).floor().max(1.0);
+            let h = (image.height as f32 * scale).floor().max(1.0);
+            let slot_x = panel_x + index as f32 * slot_w;
+            let x = (slot_x + (slot_w - w) * 0.5).floor();
+            let y = (panel_y + panel_h - h - 16.0).floor();
+            let key = (index + 1).to_string();
+            labels.text(
+                &key,
+                (x - 28.0).max(slot_x + 10.0),
+                panel_y + 24.0,
+                2.0,
+                Rgba8::new(36, 44, 44, 255),
+            );
+
+            let mut preview = SpriteBatch::new(self.window_width, self.window_height);
+            preview.image(x, y, w, h, Rgba8::WHITE);
+            let _ = adapter.draw_tex_triangles_no_present(image.texture_id, &preview.bytes);
+
+            let icon = &self.house_icon_inlays[index];
+            let base_icon_size = 56.0;
+            let pulse = 0.85 + 0.05 * ((elapsed_ms as f32 * 0.004) + index as f32 * 0.55).sin();
+            let icon_size = (base_icon_size * pulse).floor().max(1.0);
+            let icon_x = (x + w - icon_size * 0.5).floor();
+            let icon_y = (y + (h - icon_size) * 0.5).floor();
+            let mut inlay = SpriteBatch::new(self.window_width, self.window_height);
+            inlay.image(
+                icon_x,
+                icon_y,
+                icon_size,
+                icon_size,
+                Rgba8::new(255, 255, 255, 191),
+            );
+            let _ = adapter.draw_tex_triangles_no_present(icon.texture_id, &inlay.bytes);
+        }
+        let _ = adapter.draw_rgb_triangles_no_present(&labels.solid_bytes);
+    }
+
+    fn draw_hotkey_menu(&self, adapter: &mut Adapter) {
+        if !self.show_hotkey_menu {
+            return;
+        }
+
+        let rect = self.hotkey_menu_rect();
+        let mut menu = ts_ui::UiBatch::new(self.window_width, self.window_height);
+        menu.hotkey_menu_page("HOTKEYS", rect.x, rect.y, &IDLE_HOTKEY_ENTRIES);
+        let _ = adapter.draw_tex_triangles_no_present(ts_ui::BANNER_TEXTURE, &menu.texture_bytes);
+        let _ =
+            adapter.draw_tex_triangles_no_present(ts_ui::BIG_RIBBONS_TEXTURE, &menu.ribbon_bytes);
+        let _ = adapter.draw_tex_triangles_no_present(
+            ts_ui::SMALL_BLUE_SQUARE_BUTTON_TEXTURE,
+            &menu.button_bytes,
+        );
+        let _ = adapter.draw_rgb_triangles_no_present(&menu.solid_bytes);
+    }
+
+    fn draw_right_click_indicators(&self, adapter: &mut Adapter) {
+        if self.right_click_indicators.is_empty() {
+            return;
+        }
+
+        let mut batch = SpriteBatch::new(self.window_width, self.window_height);
+        for indicator in &self.right_click_indicators {
+            let elapsed = indicator.started.elapsed().as_millis();
+            if elapsed >= IDLE_RIGHT_CLICK_INDICATOR_MS {
+                continue;
+            }
+            let t = elapsed as f32 / IDLE_RIGHT_CLICK_INDICATOR_MS as f32;
+            let size = (IDLE_RIGHT_CLICK_INDICATOR_SIZE * (1.0 - t)).max(0.0);
+            if size <= 0.5 {
+                continue;
+            }
+            batch.image(
+                (indicator.position.x - size * 0.5).floor(),
+                (indicator.position.y - size * 0.5).floor(),
+                size.floor().max(1.0),
+                size.floor().max(1.0),
+                Rgba8::WHITE,
+            );
+        }
+
+        let _ = adapter
+            .draw_tex_triangles_no_present(self.right_click_indicator.texture_id, &batch.bytes);
+    }
+
     fn draw_cursor(&self, adapter: &mut Adapter, elapsed_ms: u32) {
         if self.selection_drag_is_large_enough() {
+            return;
+        }
+
+        if let Some(tool) = self.idle_cursor_tool(elapsed_ms) {
+            let image = self.idle_cursor_tool_image(tool);
+            let mut cursor = SpriteBatch::new(self.window_width, self.window_height);
+            let phase_ms = elapsed_ms % 800;
+            let mirror_x = phase_ms >= 400;
+            let local_ms = if mirror_x { phase_ms - 400 } else { phase_ms };
+            let swing = ((local_ms as f32 / 400.0) * std::f32::consts::TAU).sin();
+            let angle = swing * 15.0_f32.to_radians();
+            let size = 32.0;
+            cursor.image_rotated_mirror_x(
+                self.mouse.x - size * 0.15,
+                self.mouse.y - size * 0.15,
+                size,
+                size,
+                angle,
+                mirror_x,
+                Rgba8::WHITE,
+            );
+            let _ = adapter.draw_tex_triangles_no_present(image.texture_id, &cursor.bytes);
             return;
         }
 
@@ -3631,36 +5532,13 @@ impl IdleWorldViewer {
         cursor.image(self.mouse.x, self.mouse.y, 28.0, 28.0, Rgba8::WHITE);
         let _ = adapter.draw_tex_triangles_no_present(image.texture_id, &cursor.bytes);
     }
-}
 
-impl LoadScreen {
-    fn new() -> Self {
-        Self {
-            wood_table: ImageAsset::from_png_bytes(WOOD_TABLE_TEXTURE, WOOD_TABLE_BYTES),
-            uploaded: false,
-            window_width: WINDOW_WIDTH,
-            window_height: WINDOW_HEIGHT,
+    fn idle_cursor_tool_image(&self, tool: IdleCursorTool) -> &ImageAsset {
+        match tool {
+            IdleCursorTool::Pickaxe => &self.cursor_pickaxe,
+            IdleCursorTool::Axe => &self.cursor_axe,
+            IdleCursorTool::Dagger => &self.cursor_dagger,
         }
-    }
-
-    fn resize_view(&mut self, width: u32, height: u32) {
-        self.window_width = width.max(1);
-        self.window_height = height.max(1);
-    }
-
-    fn upload_assets(&mut self, adapter: &mut Adapter) {
-        if self.uploaded {
-            return;
-        }
-
-        let rc = adapter.upload_texture_rgba_image(
-            self.wood_table.texture_id,
-            self.wood_table.width,
-            self.wood_table.height,
-            &self.wood_table.rgba,
-        );
-        assert_eq!(rc, 0, "failed to upload loadscreen table texture");
-        self.uploaded = true;
     }
 }
 
@@ -3810,25 +5688,54 @@ fn load_unit_walk_clip(spec: UnitWalkSpec, next_texture_id: &mut u32) -> Option<
     )
 }
 
-fn load_idle_world_unit_clips(next_texture_id: &mut u32) -> Vec<UnitWalkClip> {
-    IDLE_WORLD_UNIT_SPECS
+fn load_idle_world_units(next_texture_id: &mut u32) -> Vec<IdleWorldUnit> {
+    let mut units = IDLE_WORLD_UNIT_SPECS
         .iter()
-        .filter_map(|spec| {
-            let tags: &[&str] = if spec.label == "Sheep Idle" {
+        .zip(IDLE_WORLD_MOVE_SPECS.iter())
+        .zip(IDLE_WORLD_ATTACK_SPECS.iter())
+        .enumerate()
+        .filter_map(|(index, ((idle_spec, move_spec), attack_specs))| {
+            let tags: &[&str] = if idle_spec.label == "Sheep Idle" {
                 &["Idle", "Move"]
             } else {
                 &["Idle"]
             };
-            load_unit_clip_from_tags(
-                spec.label.to_string(),
-                spec.path,
+            let idle = load_unit_clip_from_tags(
+                idle_spec.label.to_string(),
+                idle_spec.path,
                 tags,
-                spec.offset_x,
-                spec.offset_y,
+                idle_spec.offset_x,
+                idle_spec.offset_y,
                 next_texture_id,
-            )
+            )?;
+            let movement = load_unit_walk_clip(*move_spec, next_texture_id).unwrap_or_else(|| {
+                load_unit_clip_from_tags(
+                    move_spec.label.to_string(),
+                    move_spec.path,
+                    &["Idle"],
+                    move_spec.offset_x,
+                    move_spec.offset_y,
+                    next_texture_id,
+                )
+                .expect("idle world movement fallback should load")
+            });
+            let attacks = attack_specs
+                .iter()
+                .filter_map(|spec| load_unit_walk_clip(*spec, next_texture_id))
+                .collect();
+            Some(IdleWorldUnit {
+                idle,
+                movement,
+                attacks,
+                position: idle_world_unit_foot_position(index, 13),
+                facing_left: false,
+                is_pawn: false,
+                state: IdleWorldUnitState::Idle,
+            })
         })
-        .collect()
+        .collect::<Vec<_>>();
+    units.extend(load_pawn_idle_world_units(next_texture_id, units.len(), 13));
+    units
 }
 
 fn load_unit_clip_from_tags(
@@ -3887,7 +5794,11 @@ fn load_pawn_unit_clips(next_texture_id: &mut u32) -> Vec<UnitWalkClip> {
         .collect()
 }
 
-fn load_pawn_idle_unit_clips(next_texture_id: &mut u32) -> Vec<UnitWalkClip> {
+fn load_pawn_idle_world_units(
+    next_texture_id: &mut u32,
+    start_index: usize,
+    count: usize,
+) -> Vec<IdleWorldUnit> {
     let Ok(set) = ase_assets::load_tinted_aseprite_set(
         PAWN_ASEPRITE_PATH,
         [255, 255, 255, 255],
@@ -3898,25 +5809,94 @@ fn load_pawn_idle_unit_clips(next_texture_id: &mut u32) -> Vec<UnitWalkClip> {
 
     PAWN_IDLE_TAGS
         .iter()
-        .filter_map(|tag_name| {
-            let tag = if *tag_name == "Idle" {
-                set.tags.iter().rfind(|tag| tag.name.trim() == *tag_name)?
-            } else {
-                set.tags.iter().find(|tag| tag.name.trim() == *tag_name)?
-            };
-            let frames = set
-                .frames
-                .get(tag.from_frame as usize..=tag.to_frame as usize)?;
-            unit_clip_from_frames(
-                format!("Pawn {tag_name}"),
-                (*tag_name).to_string(),
-                frames,
-                0.0,
-                0.0,
+        .enumerate()
+        .filter_map(|(offset, idle_tag)| {
+            let idle = load_pawn_clip_from_set(
+                &set,
+                &format!("Pawn {idle_tag}"),
+                idle_tag,
+                next_texture_id,
+            )?;
+            let run_tag = pawn_run_tag(idle_tag);
+            let movement =
+                load_pawn_clip_from_set(&set, &format!("Pawn {run_tag}"), run_tag, next_texture_id)
+                    .unwrap_or_else(|| {
+                        load_pawn_clip_from_set(
+                            &set,
+                            &format!("Pawn {idle_tag}"),
+                            idle_tag,
+                            next_texture_id,
+                        )
+                        .expect("pawn idle movement fallback should load")
+                    });
+            let attack_tag = pawn_attack_tag(idle_tag);
+            let attacks = load_pawn_clip_from_set(
+                &set,
+                &format!("Pawn {attack_tag}"),
+                attack_tag,
                 next_texture_id,
             )
+            .into_iter()
+            .collect();
+            Some(IdleWorldUnit {
+                idle,
+                movement,
+                attacks,
+                position: idle_world_unit_foot_position(start_index + offset, count),
+                facing_left: false,
+                is_pawn: true,
+                state: IdleWorldUnitState::Idle,
+            })
         })
         .collect()
+}
+
+fn load_pawn_clip_from_set(
+    set: &ase_assets::AsepriteSet,
+    label: &str,
+    tag_name: &str,
+    next_texture_id: &mut u32,
+) -> Option<UnitWalkClip> {
+    let tag = if tag_name == "Idle" {
+        set.tags.iter().rfind(|tag| tag.name.trim() == tag_name)?
+    } else {
+        set.tags.iter().find(|tag| tag.name.trim() == tag_name)?
+    };
+    let frames = set
+        .frames
+        .get(tag.from_frame as usize..=tag.to_frame as usize)?;
+    unit_clip_from_frames(
+        label.to_string(),
+        tag.name.trim().to_string(),
+        frames,
+        0.0,
+        0.0,
+        next_texture_id,
+    )
+}
+
+fn pawn_run_tag(idle_tag: &str) -> &str {
+    match idle_tag {
+        "Idle" => "Run",
+        "Idle Wood" => "Run Wood",
+        "Idle Meat" => "Run Meat",
+        "Idle Gold" => "Run Gold",
+        "Idle Hammer" => "Run Hammer",
+        "Idle Axe" => "Run Axe",
+        "Idle Knife" => "Run Knife",
+        "Idle Pickaxe" => "Run Pickaxe",
+        _ => "Run",
+    }
+}
+
+fn pawn_attack_tag(idle_tag: &str) -> &str {
+    match idle_tag {
+        "Idle Hammer" => "Interact Hammer",
+        "Idle Axe" => "Interact Axe",
+        "Idle Knife" => "Interact Knife",
+        "Idle Pickaxe" => "Interact Pickaxe",
+        _ => "Interact",
+    }
 }
 
 fn load_particle_fx_unit_clips(next_texture_id: &mut u32) -> Vec<UnitWalkClip> {
@@ -4505,7 +6485,7 @@ impl FrameProducer for UnitWalkViewer {
         );
         title.text("UNIT WALK", 44.0, 35.0, 2.0, Rgba8::new(32, 56, 60, 255));
         let _ =
-            adapter.draw_tex_triangles_no_present(ts_ui::BIG_RIBBONS_TEXTURE, &title.texture_bytes);
+            adapter.draw_tex_triangles_no_present(ts_ui::BIG_RIBBONS_TEXTURE, &title.ribbon_bytes);
         let _ = adapter.draw_rgb_triangles_no_present(&title.solid_bytes);
 
         let elapsed_ms = self.started_at.elapsed().as_millis() as u32;
@@ -4622,22 +6602,94 @@ impl FrameProducer for IdleWorldViewer {
     fn handle_input(&mut self, event: InputEvent) {
         match event {
             InputEvent::CursorMoved { x, y } => {
+                if self.panning {
+                    self.scroll_idle_camera(self.mouse.x - x, self.mouse.y - y);
+                }
                 self.mouse = Point { x, y };
             }
             InputEvent::MouseButton {
+                button: InputMouseButton::Middle,
+                state: InputButtonState::Pressed,
+            } => {
+                self.panning = true;
+                self.selection_start = None;
+            }
+            InputEvent::MouseButton {
+                button: InputMouseButton::Middle,
+                state: InputButtonState::Released,
+            } => {
+                self.panning = false;
+            }
+            InputEvent::DigitPressed(digit) => {
+                if !self.show_hotkey_menu && self.selected_units_include_pawn() {
+                    if let Some(kind) = Self::idle_build_hotkey_kind(digit) {
+                        self.placement_building = Some(kind);
+                        self.selection_start = None;
+                        return;
+                    }
+                }
+
+                if digit == 2 {
+                    self.show_hotkey_menu = !self.show_hotkey_menu;
+                    self.selection_start = None;
+                }
+            }
+            InputEvent::MouseButton {
                 button: InputMouseButton::Left,
                 state: InputButtonState::Pressed,
-            } => self.start_selection(),
+            } => {
+                if self.show_hotkey_menu {
+                    if !self.mouse_inside_hotkey_menu() {
+                        self.show_hotkey_menu = false;
+                    }
+                    self.selection_start = None;
+                } else if self.placement_building.is_some() {
+                    self.place_idle_building_at_mouse();
+                    self.selection_start = None;
+                } else {
+                    self.start_selection();
+                }
+            }
             InputEvent::MouseButton {
                 button: InputMouseButton::Left,
                 state: InputButtonState::Released,
-            } => self.finish_selection(),
+            } => {
+                if !self.show_hotkey_menu && self.placement_building.is_none() {
+                    self.finish_selection();
+                }
+            }
             InputEvent::MouseButton {
                 button: InputMouseButton::Right,
                 state: InputButtonState::Pressed,
+            } => {
+                if self.placement_building.is_some() {
+                    self.placement_building = None;
+                    self.selection_start = None;
+                } else if !self.show_hotkey_menu {
+                    if !self.selected_units.is_empty() {
+                        self.spawn_right_click_indicator();
+                    }
+                    if self.selected_units_are_only_pawns() {
+                        if let Some(resource_target) =
+                            self.idle_resource_target_at_mouse(self.elapsed_ms())
+                        {
+                            self.issue_resource_order(resource_target);
+                            return;
+                        }
+                    }
+                    self.issue_move_order(self.idle_world_point_at(self.mouse));
+                }
             }
-            | InputEvent::EscapePressed => {
-                self.cancel_selection();
+            InputEvent::EscapePressed => {
+                if self.show_hotkey_menu {
+                    self.show_hotkey_menu = false;
+                    self.selection_start = None;
+                } else if self.placement_building.is_some() {
+                    self.placement_building = None;
+                    self.selection_start = None;
+                } else {
+                    self.cancel_selection();
+                }
             }
             _ => {}
         }
@@ -4645,85 +6697,45 @@ impl FrameProducer for IdleWorldViewer {
 
     fn build_frame(&mut self, adapter: &mut Adapter) {
         self.upload_assets(adapter);
-
-        let _ = adapter.begin_frame(0x4B9A48);
-        let _ = adapter.set_sampler_raw(0, 0, 0, 0);
-        let _ = adapter.set_blend_raw(1, 0x0302, 0x0303);
-
-        let mut grass = SpriteBatch::new(self.window_width, self.window_height);
-        let cols = self.window_width.div_ceil(TILE_SIZE as u32);
-        let rows = self.window_height.div_ceil(TILE_SIZE as u32);
-        for row in 0..rows {
-            for col in 0..cols {
-                grass.sprite(
-                    &self.terrain,
-                    GRASS_BG_TILE,
-                    col as f32 * TILE_SIZE,
-                    row as f32 * TILE_SIZE,
-                    TILE_SIZE,
-                    TILE_SIZE,
-                    Rgba8::WHITE,
-                );
-            }
-        }
-        let _ = adapter.draw_tex_triangles_no_present(self.terrain.texture_id, &grass.bytes);
-        self.draw_clouds(adapter);
-
-        let elapsed_ms = self.started_at.elapsed().as_millis() as u32;
-        for draw in self.unit_draws(elapsed_ms) {
-            let mut image = SpriteBatch::new(self.window_width, self.window_height);
-            image.image(
-                draw.rect.x.floor(),
-                draw.rect.y.floor(),
-                draw.rect.w.floor().max(1.0),
-                draw.rect.h.floor().max(1.0),
-                Rgba8::WHITE,
-            );
-            let _ = adapter.draw_tex_triangles_no_present(draw.texture_id, &image.bytes);
-        }
-
-        self.draw_selected_unit_ui(adapter, elapsed_ms);
-        if let Some(rect) = self.active_selection_rect() {
-            self.draw_selection_corners(adapter, rect);
-        }
-        self.draw_cursor(adapter, elapsed_ms);
-
-        let _ = adapter.end_frame();
-    }
-}
-
-impl FrameProducer for LoadScreen {
-    fn cursor_visible(&self) -> bool {
-        false
-    }
-
-    fn window_decorations(&self) -> bool {
-        false
-    }
-
-    fn resize(&mut self, width: u32, height: u32) {
-        self.resize_view(width, height);
-    }
-
-    fn build_frame(&mut self, adapter: &mut Adapter) {
-        self.upload_assets(adapter);
+        self.update_units();
 
         let _ = adapter.begin_frame(WATER_BG);
         let _ = adapter.set_sampler_raw(0, 0, 0, 0);
         let _ = adapter.set_blend_raw(1, 0x0302, 0x0303);
 
-        let mut tables = SpriteBatch::new(self.window_width, self.window_height);
-        for table in loadscreen_table_layout(self.window_width as f32, self.window_height as f32) {
-            draw_wood_table(
-                &mut tables,
-                &self.wood_table,
-                table.x,
-                table.y,
-                table.w,
-                table.h,
+        let elapsed_ms = self.started_at.elapsed().as_millis() as u32;
+        self.draw_world_background(adapter, elapsed_ms);
+        self.draw_saved_world_assets(adapter);
+        self.draw_idle_building_preview(adapter);
+
+        for draw in self.unit_draws(elapsed_ms) {
+            let mut image = SpriteBatch::new(self.window_width, self.window_height);
+            let uv = if draw.flip_x {
+                [1.0, 0.0, 0.0, 1.0]
+            } else {
+                [0.0, 0.0, 1.0, 1.0]
+            };
+            image.image_uv(
+                draw.rect.x.floor(),
+                draw.rect.y.floor(),
+                draw.rect.w.floor().max(1.0),
+                draw.rect.h.floor().max(1.0),
+                uv,
+                Rgba8::WHITE,
             );
+            let _ = adapter.draw_tex_triangles_no_present(draw.texture_id, &image.bytes);
         }
-        let _ = adapter.draw_tex_triangles_no_present(self.wood_table.texture_id, &tables.bytes);
+
+        self.draw_clouds(adapter);
+        self.draw_right_click_indicators(adapter);
+        self.draw_selected_unit_ui(adapter, elapsed_ms);
+        self.draw_pawn_build_ui(adapter, elapsed_ms);
+        self.draw_hotkey_menu(adapter);
+        if let Some(rect) = self.active_selection_rect() {
+            self.draw_selection_corners(adapter, rect);
+        }
+        self.draw_cursor(adapter, elapsed_ms);
+
         let _ = adapter.end_frame();
     }
 }
@@ -5783,6 +7795,32 @@ impl SpriteBatch {
         self.image_uv(x, y, w, h, region.uv(image), color);
     }
 
+    fn image_region_rotated_around(
+        &mut self,
+        image: &ImageAsset,
+        region: ImageRegion,
+        x: f32,
+        y: f32,
+        w: f32,
+        h: f32,
+        origin_x: f32,
+        origin_y: f32,
+        angle_rad: f32,
+        color: Rgba8,
+    ) {
+        self.image_uv_rotated_around(
+            x,
+            y,
+            w,
+            h,
+            region.uv(image),
+            origin_x,
+            origin_y,
+            angle_rad,
+            color,
+        );
+    }
+
     fn image_uv(&mut self, x: f32, y: f32, w: f32, h: f32, uv: [f32; 4], color: Rgba8) {
         let [u0, v0, u1, v1] = uv;
         let (x0, y0) = self.to_clip(x, y);
@@ -5830,6 +7868,75 @@ impl SpriteBatch {
             v: v1,
             color,
         });
+    }
+
+    fn image_uv_rotated_around(
+        &mut self,
+        x: f32,
+        y: f32,
+        w: f32,
+        h: f32,
+        uv: [f32; 4],
+        origin_x: f32,
+        origin_y: f32,
+        angle_rad: f32,
+        color: Rgba8,
+    ) {
+        let [u0, v0, u1, v1] = uv;
+        let sin = angle_rad.sin();
+        let cos = angle_rad.cos();
+        let corners = [
+            (x, y, u0, v0),
+            (x + w, y, u1, v0),
+            (x + w, y + h, u1, v1),
+            (x, y + h, u0, v1),
+        ];
+        let vertices = corners.map(|(x, y, u, v)| {
+            let dx = x - origin_x;
+            let dy = y - origin_y;
+            let (x, y) = (
+                origin_x + dx * cos - dy * sin,
+                origin_y + dx * sin + dy * cos,
+            );
+            let (x, y) = self.to_clip(x, y);
+            TexVertex { x, y, u, v, color }
+        });
+
+        for index in [0, 1, 2, 0, 2, 3] {
+            self.vertex(vertices[index]);
+        }
+    }
+
+    fn image_rotated_mirror_x(
+        &mut self,
+        x: f32,
+        y: f32,
+        w: f32,
+        h: f32,
+        angle_rad: f32,
+        mirror_x: bool,
+        color: Rgba8,
+    ) {
+        let (u0, u1) = if mirror_x { (1.0, 0.0) } else { (0.0, 1.0) };
+        let cx = x + w * 0.5;
+        let cy = y + h * 0.5;
+        let sin = angle_rad.sin();
+        let cos = angle_rad.cos();
+        let corners = [
+            (-w * 0.5, -h * 0.5, u0, 0.0),
+            (w * 0.5, -h * 0.5, u1, 0.0),
+            (w * 0.5, h * 0.5, u1, 1.0),
+            (-w * 0.5, h * 0.5, u0, 1.0),
+        ];
+        let vertices = corners.map(|(dx, dy, u, v)| {
+            let (x, y) = (cx + dx * cos - dy * sin, cy + dx * sin + dy * cos);
+            let (x, y) = self.to_clip(x, y);
+            TexVertex { x, y, u, v, color }
+        });
+
+        for index in [0, 1, 2, 0, 2, 3] {
+            self.vertex(vertices[index]);
+        }
     }
 
     fn vertex(&mut self, vertex: TexVertex) {
@@ -5917,6 +8024,12 @@ fn rects_intersect(a: TableRect, b: TableRect) -> bool {
     a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h && a.y + a.h > b.y
 }
 
+fn point_distance(a: Point, b: Point) -> f32 {
+    let dx = a.x - b.x;
+    let dy = a.y - b.y;
+    (dx * dx + dy * dy).sqrt()
+}
+
 fn terrain_cell_visible(
     cell: &TerrainDrawCell,
     start_col: usize,
@@ -5925,178 +8038,6 @@ fn terrain_cell_visible(
     end_row: usize,
 ) -> bool {
     cell.col >= start_col && cell.col < end_col && cell.row >= start_row && cell.row < end_row
-}
-
-fn loadscreen_table_layout(width: f32, height: f32) -> [TableRect; 3] {
-    let margin = (width.min(height) * 0.06).clamp(32.0, 72.0);
-    let gap = (width * 0.04).clamp(28.0, 52.0);
-    let available_w = (width - margin * 2.0).max(1.0);
-    let available_h = (height - margin * 2.0).max(1.0);
-    let small_w = ((available_w - gap) * 0.34)
-        .clamp(300.0, 420.0)
-        .min((available_w - gap) * 0.5);
-    let large_w = (available_w - gap - small_w).max(256.0);
-    let small_h = ((available_h - gap) * 0.5).max(256.0);
-
-    [
-        TableRect {
-            x: margin,
-            y: margin,
-            w: large_w,
-            h: available_h,
-        },
-        TableRect {
-            x: margin + large_w + gap,
-            y: margin,
-            w: small_w,
-            h: small_h,
-        },
-        TableRect {
-            x: margin + large_w + gap,
-            y: margin + small_h + gap,
-            w: small_w,
-            h: small_h,
-        },
-    ]
-}
-
-fn draw_wood_table(batch: &mut SpriteBatch, image: &ImageAsset, x: f32, y: f32, w: f32, h: f32) {
-    let left_w = WOOD_TABLE_LEFT_EDGE.width as f32;
-    let right_w = WOOD_TABLE_RIGHT_EDGE.width as f32;
-    let top_h = WOOD_TABLE_TOP_EDGE.height as f32;
-    let bottom_h = WOOD_TABLE_BOTTOM_EDGE.height as f32;
-    let top_left_w = WOOD_TABLE_TOP_LEFT.width as f32;
-    let top_right_w = WOOD_TABLE_TOP_RIGHT.width as f32;
-    let bottom_left_w = WOOD_TABLE_BOTTOM_LEFT.width as f32;
-    let bottom_right_w = WOOD_TABLE_BOTTOM_RIGHT.width as f32;
-    let top_left_h = WOOD_TABLE_TOP_LEFT.height as f32;
-    let bottom_left_h = WOOD_TABLE_BOTTOM_LEFT.height as f32;
-    let top_left_join_w = top_left_w - WOOD_TABLE_TOP_LEFT_OUTSET_X;
-    let top_right_join_w = top_right_w - WOOD_TABLE_TOP_RIGHT_OUTSET_X;
-    let bottom_left_join_w = bottom_left_w - WOOD_TABLE_BOTTOM_LEFT_OUTSET_X;
-    let bottom_right_join_w = bottom_right_w - WOOD_TABLE_BOTTOM_RIGHT_OUTSET_X;
-    let top_join_h = top_left_h - WOOD_TABLE_TOP_CORNER_OUTSET_Y;
-
-    draw_tiled_region(
-        batch,
-        image,
-        WOOD_TABLE_FILL,
-        x + left_w,
-        y + top_h,
-        (w - left_w - right_w).max(0.0),
-        (h - top_h - bottom_h).max(0.0),
-    );
-    draw_tiled_region(
-        batch,
-        image,
-        WOOD_TABLE_TOP_EDGE,
-        x + top_left_join_w,
-        y,
-        (w - top_left_join_w - top_right_join_w).max(0.0),
-        top_h,
-    );
-    draw_tiled_region(
-        batch,
-        image,
-        WOOD_TABLE_BOTTOM_EDGE,
-        x + bottom_left_join_w,
-        y + h - bottom_h,
-        (w - bottom_left_join_w - bottom_right_join_w).max(0.0),
-        bottom_h,
-    );
-    draw_tiled_region(
-        batch,
-        image,
-        WOOD_TABLE_LEFT_EDGE,
-        x,
-        y + top_join_h,
-        left_w,
-        (h - top_join_h - bottom_left_h).max(0.0),
-    );
-    draw_tiled_region(
-        batch,
-        image,
-        WOOD_TABLE_RIGHT_EDGE,
-        x + w - right_w,
-        y + top_join_h,
-        right_w,
-        (h - top_join_h - bottom_left_h).max(0.0),
-    );
-
-    batch.image_region(
-        image,
-        WOOD_TABLE_TOP_LEFT,
-        x - WOOD_TABLE_TOP_LEFT_OUTSET_X,
-        y - WOOD_TABLE_TOP_CORNER_OUTSET_Y,
-        WOOD_TABLE_TOP_LEFT.width as f32,
-        WOOD_TABLE_TOP_LEFT.height as f32,
-        Rgba8::WHITE,
-    );
-    batch.image_region(
-        image,
-        WOOD_TABLE_TOP_RIGHT,
-        x + w - WOOD_TABLE_TOP_RIGHT.width as f32 + WOOD_TABLE_TOP_RIGHT_OUTSET_X,
-        y - WOOD_TABLE_TOP_CORNER_OUTSET_Y,
-        WOOD_TABLE_TOP_RIGHT.width as f32,
-        WOOD_TABLE_TOP_RIGHT.height as f32,
-        Rgba8::WHITE,
-    );
-    batch.image_region(
-        image,
-        WOOD_TABLE_BOTTOM_LEFT,
-        x - WOOD_TABLE_BOTTOM_LEFT_OUTSET_X,
-        y + h - WOOD_TABLE_BOTTOM_LEFT.height as f32,
-        WOOD_TABLE_BOTTOM_LEFT.width as f32,
-        WOOD_TABLE_BOTTOM_LEFT.height as f32,
-        Rgba8::WHITE,
-    );
-    batch.image_region(
-        image,
-        WOOD_TABLE_BOTTOM_RIGHT,
-        x + w - WOOD_TABLE_BOTTOM_RIGHT.width as f32 + WOOD_TABLE_BOTTOM_RIGHT_OUTSET_X,
-        y + h - WOOD_TABLE_BOTTOM_RIGHT.height as f32,
-        WOOD_TABLE_BOTTOM_RIGHT.width as f32,
-        WOOD_TABLE_BOTTOM_RIGHT.height as f32,
-        Rgba8::WHITE,
-    );
-}
-
-fn draw_tiled_region(
-    batch: &mut SpriteBatch,
-    image: &ImageAsset,
-    region: ImageRegion,
-    x: f32,
-    y: f32,
-    w: f32,
-    h: f32,
-) {
-    let tile_w = region.width as f32;
-    let tile_h = region.height as f32;
-    let mut dy = 0.0;
-    while dy < h {
-        let draw_h = (h - dy).min(tile_h);
-        let mut dx = 0.0;
-        while dx < w {
-            let draw_w = (w - dx).min(tile_w);
-            let source_w = ((region.width as f32) * (draw_w / tile_w))
-                .ceil()
-                .clamp(1.0, region.width as f32) as u32;
-            let source_h = ((region.height as f32) * (draw_h / tile_h))
-                .ceil()
-                .clamp(1.0, region.height as f32) as u32;
-            batch.image_region(
-                image,
-                ImageRegion::new(region.x, region.y, source_w, source_h),
-                x + dx,
-                y + dy,
-                draw_w,
-                draw_h,
-                Rgba8::WHITE,
-            );
-            dx += draw_w;
-        }
-        dy += draw_h;
-    }
 }
 
 fn scroll_strength(distance_from_edge: f32) -> f32 {
@@ -6146,6 +8087,11 @@ fn brush_preview_footprint_rect2(
         Brush::Prop(kind) if anchor_x2 >= 0 && anchor_y2 >= 0 => {
             prop_kind_footprint_rect2(kind, anchor_x2 as usize, anchor_y2 as usize)
         }
+        Brush::RockResource if anchor_x2 >= 0 && anchor_y2 >= 0 => prop_kind_footprint_rect2(
+            PropKind::Rock(RockKind::Rock1),
+            anchor_x2 as usize,
+            anchor_y2 as usize,
+        ),
         _ => {
             let (cols, rows) = brush.footprint();
             let (offset_cols, offset_rows) = brush.footprint_offset();
@@ -6171,6 +8117,9 @@ fn prop_footprint_rect2(prop: PlacedProp) -> (isize, isize, usize, usize) {
 fn prop_kind_footprint_rect2(kind: PropKind, x2: usize, y2: usize) -> (isize, isize, usize, usize) {
     match kind {
         PropKind::Plant(plant) if plant.uses_half_height_footprint() => {
+            (x2 as isize, y2 as isize + 1, BUILDING_GRID_DIVISIONS, 1)
+        }
+        PropKind::Rock(rock) if rock.uses_half_height_footprint() => {
             (x2 as isize, y2 as isize + 1, BUILDING_GRID_DIVISIONS, 1)
         }
         PropKind::Plant(_) | PropKind::Pillar(_) | PropKind::Gold(_) | PropKind::Rock(_) => (
@@ -6313,9 +8262,31 @@ fn alpha_bounds(image: &image::RgbaImage) -> Option<(u32, u32, u32, u32)> {
     found.then_some((min_x, min_y, max_x, max_y))
 }
 
+fn image_point_has_alpha(image: &ImageAsset, point: Point, rect: TableRect) -> bool {
+    if rect.w <= 0.0 || rect.h <= 0.0 {
+        return false;
+    }
+    let px = ((point.x - rect.x) / rect.w * image.width as f32).floor() as usize;
+    let py = ((point.y - rect.y) / rect.h * image.height as f32).floor() as usize;
+    if px >= image.width as usize || py >= image.height as usize {
+        return false;
+    }
+    image.rgba[(py * image.width as usize + px) * 4 + 3] != 0
+}
+
 fn plant_visual_roll(kind: PlantKind, col: usize, row: usize) -> u8 {
     let mut rng = SeededRng::new(
         0xB05C_A11D_EC05_2026
+            ^ ((kind.index() as u64).wrapping_mul(0x94D0_49BB_1331_11EB))
+            ^ ((col as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15))
+            ^ ((row as u64).wrapping_mul(0xBF58_476D_1CE4_E5B9)),
+    );
+    (rng.next_u64() % 100) as u8
+}
+
+fn rock_visual_roll(kind: RockKind, col: usize, row: usize) -> u8 {
+    let mut rng = SeededRng::new(
+        0x5702_E51E_EC05_2026
             ^ ((kind.index() as u64).wrapping_mul(0x94D0_49BB_1331_11EB))
             ^ ((col as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15))
             ^ ((row as u64).wrapping_mul(0xBF58_476D_1CE4_E5B9)),
@@ -6355,4 +8326,119 @@ impl SeededRng {
 
 fn push_f32(out: &mut Vec<u8>, value: f32) {
     out.extend_from_slice(&value.to_le_bytes());
+}
+
+#[cfg(test)]
+mod idle_world_tests {
+    use super::*;
+
+    #[test]
+    fn warrior_has_both_arrival_attacks() {
+        let viewer = IdleWorldViewer::new();
+        let warrior = &viewer.units[3];
+        let attack_names = warrior
+            .attacks
+            .iter()
+            .map(|clip| clip.name.as_str())
+            .collect::<Vec<_>>();
+
+        assert_eq!(warrior.idle.name, "Warrior Idle");
+        assert_eq!(attack_names, vec!["Warrior Attack 1", "Warrior Attack 2"]);
+    }
+
+    #[test]
+    fn warrior_arrival_attack_coinflip_can_pick_either_attack() {
+        let mut viewer = IdleWorldViewer::new();
+        let warrior_index = 3;
+        let target = viewer.units[warrior_index].position;
+        let mut seen = HashSet::new();
+
+        for _ in 0..16 {
+            viewer.units[warrior_index].state = IdleWorldUnitState::Idle;
+            viewer.units[warrior_index].position = target;
+            viewer.selected_units = vec![warrior_index];
+            viewer.issue_move_order(target);
+            viewer.issue_move_order(target);
+            viewer.update_units();
+            if let IdleWorldUnitState::Attacking { attack_index, .. } =
+                viewer.units[warrior_index].state
+            {
+                seen.insert(attack_index);
+            }
+        }
+
+        assert_eq!(seen, HashSet::from([0, 1]));
+    }
+
+    #[test]
+    fn moving_units_face_their_horizontal_vector() {
+        let mut viewer = IdleWorldViewer::new();
+        let unit_index = 0;
+        let start = viewer.units[unit_index].position;
+
+        viewer.selected_units = vec![unit_index];
+        viewer.issue_move_order(Point {
+            x: start.x - 64.0,
+            y: start.y,
+        });
+        assert!(viewer.units[unit_index].facing_left);
+        assert!(viewer.unit_draws(0)[0].flip_x);
+
+        viewer.issue_move_order(Point {
+            x: start.x + 64.0,
+            y: start.y,
+        });
+        assert!(!viewer.units[unit_index].facing_left);
+    }
+
+    #[test]
+    fn repeated_nearby_move_command_switches_from_walk_to_run() {
+        let mut viewer = IdleWorldViewer::new();
+        let unit_index = 0;
+        let target = Point {
+            x: viewer.units[unit_index].position.x + 80.0,
+            y: viewer.units[unit_index].position.y,
+        };
+
+        viewer.selected_units = vec![unit_index];
+        viewer.issue_move_order(target);
+        let IdleWorldUnitState::Moving {
+            running: false,
+            started_ms,
+            ..
+        } = viewer.units[unit_index].state
+        else {
+            panic!("first right-click should walk");
+        };
+        assert_eq!(
+            IdleWorldViewer::unit_clip_and_elapsed(&viewer.units[unit_index], started_ms + 100).1,
+            50
+        );
+
+        viewer.issue_move_order(Point {
+            x: target.x + 3.0,
+            y: target.y + 4.0,
+        });
+        let IdleWorldUnitState::Moving {
+            running: true,
+            started_ms,
+            ..
+        } = viewer.units[unit_index].state
+        else {
+            panic!("nearby repeated right-click should run");
+        };
+        assert_eq!(
+            IdleWorldViewer::unit_clip_and_elapsed(&viewer.units[unit_index], started_ms + 100).1,
+            100
+        );
+
+        viewer.issue_move_order(Point {
+            x: target.x + 10.0,
+            y: target.y,
+        });
+        assert!(matches!(
+            viewer.units[unit_index].state,
+            IdleWorldUnitState::Moving { running: false, .. }
+        ));
+    }
 }
