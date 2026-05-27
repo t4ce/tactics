@@ -1,11 +1,13 @@
 use super::cli::{self, Lobby};
 use super::*;
+use std::collections::BTreeMap;
 use std::sync::{
     Arc,
     atomic::{AtomicBool, Ordering},
     mpsc::{self, Receiver, TryRecvError},
 };
 use std::thread;
+use std::time::Instant;
 
 const WOOD_TABLE_TEXTURE: u32 = 15;
 const WOOD_TABLE_BYTES: &[u8] =
@@ -24,11 +26,39 @@ const WOOD_TABLE_TOP_RIGHT_OUTSET_X: f32 = 4.0;
 const WOOD_TABLE_BOTTOM_LEFT_OUTSET_X: f32 = 5.0;
 const WOOD_TABLE_BOTTOM_RIGHT_OUTSET_X: f32 = 5.0;
 const WOOD_TABLE_TOP_CORNER_OUTSET_Y: f32 = 6.0;
-const LOADSCREEN_CURSOR_SIZE: f32 = 64.0;
-const LOADSCREEN_ARROW_TEXTURE: u32 = 16;
-const LOADSCREEN_ICON_TEXTURE_BASE: u32 = 17;
+const LOADSCREEN_ARROW_TEXTURE: u32 = 15_000;
+const LOADSCREEN_ICON_TEXTURE_BASE: u32 = 15_010;
+const LOADSCREEN_CLOSE_TEXTURE: u32 = 15_020;
+const LOADSCREEN_BUTTON_HOVER_TEXTURE: u32 = 15_021;
+const LOADSCREEN_CREATE_GAME_TEXTURE: u32 = 15_022;
+const LOADSCREEN_FRAME_TEXTURE_BASE: u32 = 15_030;
 const LOADSCREEN_ARROW_BYTES: &[u8] =
     include_bytes!("../ts_freepack/UI Elements/UI Elements/Icons/Icon_08.png");
+const LOADSCREEN_CLOSE_BYTES: &[u8] =
+    include_bytes!("../ts_freepack/UI Elements/UI Elements/Icons/Icon_09.png");
+const LOADSCREEN_CREATE_GAME_BYTES: &[u8] =
+    include_bytes!("../ts_freepack/UI Elements/UI Elements/Icons/Icon_07.png");
+const LOADSCREEN_BUTTON_HOVER_BYTES: &[u8] = include_bytes!(
+    "../ts_freepack/UI Elements/UI Elements/Buttons/SmallBlueSquareButton_Hover.png"
+);
+const LOADSCREEN_FRAME_TOP_LEFT_BYTES: &[u8] = include_bytes!(
+    "../ts_freepack/UI Elements/UI Elements/Wood Table/WoodTable_Slots_topleft_corner.png"
+);
+const LOADSCREEN_FRAME_TOP_RIGHT_BYTES: &[u8] = include_bytes!(
+    "../ts_freepack/UI Elements/UI Elements/Wood Table/WoodTable_Slots_topright_corner.png"
+);
+const LOADSCREEN_FRAME_BOTTOM_LEFT_BYTES: &[u8] = include_bytes!(
+    "../ts_freepack/UI Elements/UI Elements/Wood Table/WoodTable_Slots_bottomleft_corner.png"
+);
+const LOADSCREEN_FRAME_BOTTOM_RIGHT_BYTES: &[u8] = include_bytes!(
+    "../ts_freepack/UI Elements/UI Elements/Wood Table/WoodTable_Slots_bottomright_corner.png"
+);
+const LOADSCREEN_FRAME_HORIZONTAL_BYTES: &[u8] = include_bytes!(
+    "../ts_freepack/UI Elements/UI Elements/Wood Table/WoodTable_Slots_middle_up_down.png"
+);
+const LOADSCREEN_FRAME_VERTICAL_BYTES: &[u8] = include_bytes!(
+    "../ts_freepack/UI Elements/UI Elements/Wood Table/WoodTable_Slots_middle_left_right.png"
+);
 const LOADSCREEN_TOP_ICON_BYTES: [&[u8]; 3] = [
     include_bytes!("../ts_freepack/UI Elements/UI Elements/Icons/Icon_10.png"),
     include_bytes!("../ts_freepack/UI Elements/UI Elements/Icons/Icon_11.png"),
@@ -40,11 +70,26 @@ const LOBBY_CARD_GAP: f32 = 20.0;
 const LOBBY_CARD_TILE: f32 = 64.0;
 const LOBBY_CARD_PAD_X: f32 = 26.0;
 const LOBBY_ARROW_SIZE: f32 = 34.0;
-const TOP_BUTTON_SIZE: f32 = 64.0;
-const TOP_BUTTON_GAP: f32 = 22.0;
-const TOP_ICON_SIZE: f32 = 38.0;
-const TOP_INFO_BUTTON_INDEX: usize = 1;
-const TOP_MUSIC_BUTTON_INDEX: usize = 2;
+const TOP_BUTTON_COUNT: usize = 6;
+const TOP_BUTTON_SIZE: f32 = 42.0;
+const TOP_BUTTON_GAP: f32 = 8.0;
+const TOP_ICON_SIZE: f32 = 27.0;
+const TOP_WORLD_BUTTON_INDEX: usize = 0;
+const TOP_WORLD_VIEWER_BUTTON_INDEX: usize = 1;
+const TOP_EVENT_BUTTON_INDEX: usize = 2;
+const TOP_ICON_BUTTON_INDEX: usize = 3;
+const TOP_INFO_BUTTON_INDEX: usize = 4;
+const TOP_MUSIC_BUTTON_INDEX: usize = 5;
+const CLOSE_BUTTON_SIZE: f32 = 46.0;
+const CLOSE_ICON_SIZE: f32 = 34.0;
+const CREATE_GAME_ICON_SIZE: f32 = 34.0;
+const FRAME_DRAW_TILE: f32 = 16.0;
+const FRAME_CORNER_SIZE: f32 = FRAME_DRAW_TILE * 2.0;
+const LOADSCREEN_BACKGROUND_ALPHA: u8 = 191;
+const LOADSCREEN_BACKGROUND_SCALE: f32 = 2.0 / 3.0;
+const LOADSCREEN_BACKGROUND_RESEED_SECS: u64 = 10;
+const LOADSCREEN_BACKGROUND_PAN_X: f32 = 14.0;
+const LOADSCREEN_BACKGROUND_PAN_Y: f32 = 5.0;
 const LOBBY_TEXT: Rgba8 = Rgba8 {
     r: 235,
     g: 226,
@@ -59,36 +104,78 @@ const LOBBY_MUTED_TEXT: Rgba8 = Rgba8 {
 };
 
 pub(super) struct LoadScreen {
+    terrain: TextureAtlas,
     wood_table: ImageAsset,
+    water_visuals: WaterVisualAssets,
+    plant_props: [SpriteAnimation; PLANT_PROP_COUNT],
     special_paper: ImageAsset,
     small_blue_square_button: ImageAsset,
+    small_blue_square_button_hover: ImageAsset,
     arrow_icon: ImageAsset,
-    top_icons: [ImageAsset; 3],
+    close_icon: ImageAsset,
+    create_game_icon: ImageAsset,
+    frame_top_left: ImageAsset,
+    frame_top_right: ImageAsset,
+    frame_bottom_left: ImageAsset,
+    frame_bottom_right: ImageAsset,
+    frame_horizontal: ImageAsset,
+    frame_vertical: ImageAsset,
+    clouds: Vec<ImageAsset>,
+    top_icons: [ImageAsset; TOP_BUTTON_COUNT],
     cursor_default: ImageAsset,
+    background_world: TileWorld,
+    background_visible: Vec<bool>,
+    background_cloud_instances: Vec<CloudInstance>,
+    background_scene_index: u64,
+    started_at: Instant,
     lobbies: Vec<Lobby>,
     lobby_error: Option<String>,
     lobby_rx: Option<Receiver<Result<Vec<Lobby>, String>>>,
+    lobby_request_kind: LobbyRequestKind,
+    world_editor_request: Arc<AtomicBool>,
+    world_viewer_request: Arc<AtomicBool>,
     unit_walk_viewer_request: Arc<AtomicBool>,
+    icon_viewer_request: Arc<AtomicBool>,
+    event_editor_request: Arc<AtomicBool>,
     idle_viewer_request: Arc<AtomicBool>,
+    exit_request: Arc<AtomicBool>,
     mouse: Point,
+    layout_offset: Point,
     uploaded: bool,
     window_width: u32,
     window_height: u32,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum LobbyRequestKind {
+    Refresh,
+    CreateGame,
+}
+
 impl LoadScreen {
     pub(super) fn new(
+        world_editor_request: Arc<AtomicBool>,
+        world_viewer_request: Arc<AtomicBool>,
         unit_walk_viewer_request: Arc<AtomicBool>,
+        icon_viewer_request: Arc<AtomicBool>,
+        event_editor_request: Arc<AtomicBool>,
         idle_viewer_request: Arc<AtomicBool>,
+        exit_request: Arc<AtomicBool>,
     ) -> Self {
-        let (lobby_tx, lobby_rx) = mpsc::channel();
-        thread::spawn(move || {
-            let result = cli::get_lobbies().map_err(|error| error.to_string());
-            let _ = lobby_tx.send(result);
-        });
+        let lobby_rx = spawn_lobby_refresh();
+        let terrain = TextureAtlas::from_png_bytes(TERRAIN_TEXTURE, TERRAIN_BYTES, TERRAIN_TILE_PX);
+        let water_visuals = load_water_visual_assets();
+        let plant_props = load_plant_prop_assets();
+        let clouds = load_cloud_assets();
+        let background_scene_index = 0;
+        let (background_world, background_visible, background_cloud_instances) =
+            generate_loadscreen_background_scene(background_scene_index, &clouds);
 
         Self {
+            terrain,
             wood_table: ImageAsset::from_png_bytes(WOOD_TABLE_TEXTURE, WOOD_TABLE_BYTES),
+            water_visuals,
+            plant_props,
             special_paper: ImageAsset::from_png_bytes(
                 ts_ui::SPECIAL_PAPER_TEXTURE,
                 ts_ui::SPECIAL_PAPER_BYTES,
@@ -97,10 +184,47 @@ impl LoadScreen {
                 ts_ui::SMALL_BLUE_SQUARE_BUTTON_TEXTURE,
                 ts_ui::SMALL_BLUE_SQUARE_BUTTON_BYTES,
             ),
+            small_blue_square_button_hover: ImageAsset::from_png_bytes(
+                LOADSCREEN_BUTTON_HOVER_TEXTURE,
+                LOADSCREEN_BUTTON_HOVER_BYTES,
+            ),
             arrow_icon: ImageAsset::from_png_bytes_cropped(
                 LOADSCREEN_ARROW_TEXTURE,
                 LOADSCREEN_ARROW_BYTES,
             ),
+            close_icon: ImageAsset::from_png_bytes_cropped(
+                LOADSCREEN_CLOSE_TEXTURE,
+                LOADSCREEN_CLOSE_BYTES,
+            ),
+            create_game_icon: ImageAsset::from_png_bytes_cropped(
+                LOADSCREEN_CREATE_GAME_TEXTURE,
+                LOADSCREEN_CREATE_GAME_BYTES,
+            ),
+            frame_top_left: ImageAsset::from_png_bytes(
+                LOADSCREEN_FRAME_TEXTURE_BASE,
+                LOADSCREEN_FRAME_TOP_LEFT_BYTES,
+            ),
+            frame_top_right: ImageAsset::from_png_bytes(
+                LOADSCREEN_FRAME_TEXTURE_BASE + 1,
+                LOADSCREEN_FRAME_TOP_RIGHT_BYTES,
+            ),
+            frame_bottom_left: ImageAsset::from_png_bytes(
+                LOADSCREEN_FRAME_TEXTURE_BASE + 2,
+                LOADSCREEN_FRAME_BOTTOM_LEFT_BYTES,
+            ),
+            frame_bottom_right: ImageAsset::from_png_bytes(
+                LOADSCREEN_FRAME_TEXTURE_BASE + 3,
+                LOADSCREEN_FRAME_BOTTOM_RIGHT_BYTES,
+            ),
+            frame_horizontal: ImageAsset::from_png_bytes(
+                LOADSCREEN_FRAME_TEXTURE_BASE + 4,
+                LOADSCREEN_FRAME_HORIZONTAL_BYTES,
+            ),
+            frame_vertical: ImageAsset::from_png_bytes(
+                LOADSCREEN_FRAME_TEXTURE_BASE + 5,
+                LOADSCREEN_FRAME_VERTICAL_BYTES,
+            ),
+            clouds,
             top_icons: [
                 ImageAsset::from_png_bytes_cropped(
                     LOADSCREEN_ICON_TEXTURE_BASE,
@@ -108,23 +232,47 @@ impl LoadScreen {
                 ),
                 ImageAsset::from_png_bytes_cropped(
                     LOADSCREEN_ICON_TEXTURE_BASE + 1,
-                    LOADSCREEN_TOP_ICON_BYTES[1],
+                    LOADSCREEN_TOP_ICON_BYTES[0],
                 ),
                 ImageAsset::from_png_bytes_cropped(
                     LOADSCREEN_ICON_TEXTURE_BASE + 2,
+                    LOADSCREEN_TOP_ICON_BYTES[0],
+                ),
+                ImageAsset::from_png_bytes_cropped(
+                    LOADSCREEN_ICON_TEXTURE_BASE + 3,
+                    LOADSCREEN_TOP_ICON_BYTES[0],
+                ),
+                ImageAsset::from_png_bytes_cropped(
+                    LOADSCREEN_ICON_TEXTURE_BASE + 4,
+                    LOADSCREEN_TOP_ICON_BYTES[1],
+                ),
+                ImageAsset::from_png_bytes_cropped(
+                    LOADSCREEN_ICON_TEXTURE_BASE + 5,
                     LOADSCREEN_TOP_ICON_BYTES[2],
                 ),
             ],
-            cursor_default: ImageAsset::from_png_bytes(
+            cursor_default: ImageAsset::from_png_bytes_cropped(
                 CURSOR_DEFAULT_TEXTURE,
                 CURSOR_DEFAULT_BYTES,
             ),
+            background_world,
+            background_visible,
+            background_cloud_instances,
+            background_scene_index,
+            started_at: Instant::now(),
             lobbies: Vec::new(),
             lobby_error: None,
             lobby_rx: Some(lobby_rx),
+            lobby_request_kind: LobbyRequestKind::Refresh,
+            world_editor_request,
+            world_viewer_request,
             unit_walk_viewer_request,
+            icon_viewer_request,
+            event_editor_request,
             idle_viewer_request,
+            exit_request,
             mouse: Point::default(),
+            layout_offset: Point::default(),
             uploaded: false,
             window_width: WINDOW_WIDTH,
             window_height: WINDOW_HEIGHT,
@@ -141,6 +289,13 @@ impl LoadScreen {
             return;
         }
 
+        let rc = adapter.upload_texture_rgba_image(
+            self.terrain.texture_id,
+            self.terrain.width,
+            self.terrain.height,
+            &self.terrain.rgba,
+        );
+        assert_eq!(rc, 0, "failed to upload loadscreen terrain texture");
         let rc = adapter.upload_texture_rgba_image(
             self.wood_table.texture_id,
             self.wood_table.width,
@@ -163,12 +318,87 @@ impl LoadScreen {
         );
         assert_eq!(rc, 0, "failed to upload loadscreen button texture");
         let rc = adapter.upload_texture_rgba_image(
+            self.small_blue_square_button_hover.texture_id,
+            self.small_blue_square_button_hover.width,
+            self.small_blue_square_button_hover.height,
+            &self.small_blue_square_button_hover.rgba,
+        );
+        assert_eq!(rc, 0, "failed to upload loadscreen hover button texture");
+        let rc = adapter.upload_texture_rgba_image(
             self.arrow_icon.texture_id,
             self.arrow_icon.width,
             self.arrow_icon.height,
             &self.arrow_icon.rgba,
         );
         assert_eq!(rc, 0, "failed to upload loadscreen arrow texture");
+        let rc = adapter.upload_texture_rgba_image(
+            self.close_icon.texture_id,
+            self.close_icon.width,
+            self.close_icon.height,
+            &self.close_icon.rgba,
+        );
+        assert_eq!(rc, 0, "failed to upload loadscreen close texture");
+        let rc = adapter.upload_texture_rgba_image(
+            self.create_game_icon.texture_id,
+            self.create_game_icon.width,
+            self.create_game_icon.height,
+            &self.create_game_icon.rgba,
+        );
+        assert_eq!(rc, 0, "failed to upload loadscreen create game texture");
+        for image in self
+            .water_visuals
+            .stones
+            .iter()
+            .flat_map(|animation| animation.frames.iter())
+            .chain(self.water_visuals.animation.frames.iter())
+            .chain(self.water_visuals.duck.frames.iter())
+            .chain(
+                self.plant_props
+                    .iter()
+                    .flat_map(|animation| animation.frames.iter()),
+            )
+        {
+            let rc = adapter.upload_texture_rgba_image(
+                image.texture_id,
+                image.width,
+                image.height,
+                &image.rgba,
+            );
+            assert_eq!(
+                rc, 0,
+                "failed to upload loadscreen background asset texture {}",
+                image.texture_id
+            );
+        }
+        for frame in [
+            &self.frame_top_left,
+            &self.frame_top_right,
+            &self.frame_bottom_left,
+            &self.frame_bottom_right,
+            &self.frame_horizontal,
+            &self.frame_vertical,
+        ] {
+            let rc = adapter.upload_texture_rgba_image(
+                frame.texture_id,
+                frame.width,
+                frame.height,
+                &frame.rgba,
+            );
+            assert_eq!(rc, 0, "failed to upload loadscreen frame texture");
+        }
+        for image in &self.clouds {
+            let rc = adapter.upload_texture_rgba_image(
+                image.texture_id,
+                image.width,
+                image.height,
+                &image.rgba,
+            );
+            assert_eq!(
+                rc, 0,
+                "failed to upload loadscreen cloud texture {}",
+                image.texture_id
+            );
+        }
         for icon in &self.top_icons {
             let rc = adapter.upload_texture_rgba_image(
                 icon.texture_id,
@@ -193,8 +423,8 @@ impl LoadScreen {
         cursor.image(
             self.mouse.x,
             self.mouse.y,
-            LOADSCREEN_CURSOR_SIZE,
-            LOADSCREEN_CURSOR_SIZE,
+            self.cursor_default.width as f32,
+            self.cursor_default.height as f32,
             Rgba8::WHITE,
         );
         let _ =
@@ -222,6 +452,328 @@ impl LoadScreen {
                 self.lobby_error = Some("lobby request stopped".to_owned());
                 self.lobby_rx = None;
             }
+        }
+    }
+
+    fn start_create_game(&mut self) {
+        if self.lobby_rx.is_some() {
+            return;
+        }
+
+        self.lobby_error = None;
+        self.lobby_rx = Some(spawn_lobby_create_game());
+        self.lobby_request_kind = LobbyRequestKind::CreateGame;
+    }
+
+    fn update_background_scene(&mut self) {
+        let scene_index = self.started_at.elapsed().as_secs() / LOADSCREEN_BACKGROUND_RESEED_SECS;
+        if scene_index == self.background_scene_index {
+            return;
+        }
+
+        let (world, visible, clouds) =
+            generate_loadscreen_background_scene(scene_index, &self.clouds);
+        self.background_world = world;
+        self.background_visible = visible;
+        self.background_cloud_instances = clouds;
+        self.background_scene_index = scene_index;
+    }
+
+    fn background_camera(&self) -> Point {
+        let elapsed = self.started_at.elapsed().as_secs_f32();
+        let view_w = self.window_width as f32 / LOADSCREEN_BACKGROUND_SCALE;
+        let view_h = self.window_height as f32 / LOADSCREEN_BACKGROUND_SCALE;
+        let max_x = (self.background_world.width_px() - view_w).max(0.0);
+        let max_y = (self.background_world.height_px() - view_h).max(0.0);
+        let seed_offset = self.background_scene_index as f32 * 173.0;
+        Point {
+            x: if max_x > 0.0 {
+                (elapsed * LOADSCREEN_BACKGROUND_PAN_X + seed_offset).rem_euclid(max_x)
+            } else {
+                0.0
+            },
+            y: if max_y > 0.0 {
+                (elapsed * LOADSCREEN_BACKGROUND_PAN_Y + seed_offset * 0.43).rem_euclid(max_y)
+            } else {
+                0.0
+            },
+        }
+    }
+
+    fn draw_background_scene(&self, adapter: &mut Adapter) {
+        let camera = self.background_camera();
+        let tile_size = TILE_SIZE * LOADSCREEN_BACKGROUND_SCALE;
+        let view_w = self.window_width as f32 / LOADSCREEN_BACKGROUND_SCALE;
+        let view_h = self.window_height as f32 / LOADSCREEN_BACKGROUND_SCALE;
+        let start_col = (camera.x / TILE_SIZE).floor().max(0.0) as usize;
+        let start_row = (camera.y / TILE_SIZE).floor().max(0.0) as usize;
+        let end_col = ((camera.x + view_w) / TILE_SIZE).ceil() as usize + 1;
+        let end_row = ((camera.y + view_h) / TILE_SIZE).ceil() as usize + 1;
+        let tint = Rgba8::new(255, 255, 255, LOADSCREEN_BACKGROUND_ALPHA);
+        let mut water = SolidBatch::new(self.window_width, self.window_height);
+        let mut backgrounds = SpriteBatch::new(self.window_width, self.window_height);
+        let mut under_foregrounds = SpriteBatch::new(self.window_width, self.window_height);
+        let mut foregrounds = SpriteBatch::new(self.window_width, self.window_height);
+
+        for row in start_row..end_row.min(self.background_world.rows) {
+            for col in start_col..end_col.min(self.background_world.cols) {
+                let index = self.background_world.index(col, row);
+                if !self.background_visible.get(index).copied().unwrap_or(true) {
+                    continue;
+                }
+
+                let x = (col as f32 * TILE_SIZE - camera.x) * LOADSCREEN_BACKGROUND_SCALE;
+                let y = (row as f32 * TILE_SIZE - camera.y) * LOADSCREEN_BACKGROUND_SCALE;
+                match self.background_world.render_background(col, row) {
+                    BackgroundTile::Water => {
+                        water.rect(
+                            x,
+                            y,
+                            tile_size,
+                            tile_size,
+                            Rgba8::new(71, 171, 169, LOADSCREEN_BACKGROUND_ALPHA),
+                        );
+                    }
+                    BackgroundTile::Grass => {
+                        backgrounds.sprite(
+                            &self.terrain,
+                            GRASS_BG_TILE,
+                            x,
+                            y,
+                            tile_size,
+                            tile_size,
+                            tint,
+                        );
+                    }
+                }
+
+                if let Some(tile) = self.background_world.under_foreground(col, row) {
+                    under_foregrounds.sprite(&self.terrain, tile, x, y, tile_size, tile_size, tint);
+                }
+                if let Some(tile) = self.background_world.foreground(col, row) {
+                    foregrounds.sprite(&self.terrain, tile, x, y, tile_size, tile_size, tint);
+                }
+            }
+        }
+
+        let _ = adapter.set_texture_effect(TextureEffect::World);
+        let _ = adapter.draw_rgb_triangles_no_present(&water.bytes);
+        let _ = adapter.draw_tex_triangles_no_present(self.terrain.texture_id, &backgrounds.bytes);
+        let _ = adapter
+            .draw_tex_triangles_no_present(self.terrain.texture_id, &under_foregrounds.bytes);
+        let _ = adapter.draw_tex_triangles_no_present(self.terrain.texture_id, &foregrounds.bytes);
+        let _ = adapter.set_texture_effect(TextureEffect::Plain);
+
+        self.draw_background_world_assets(adapter, camera, start_col, start_row, end_col, end_row);
+        self.draw_background_clouds(adapter, camera);
+    }
+
+    fn draw_background_world_assets(
+        &self,
+        adapter: &mut Adapter,
+        camera: Point,
+        start_col: usize,
+        start_row: usize,
+        end_col: usize,
+        end_row: usize,
+    ) {
+        let mut batches = BTreeMap::new();
+
+        for row in start_row..end_row.min(self.background_world.rows) {
+            for col in start_col..end_col.min(self.background_world.cols) {
+                let index = self.background_world.index(col, row);
+                if !self.background_visible.get(index).copied().unwrap_or(true) {
+                    continue;
+                }
+                let state = self.background_world.water_states[index];
+                if state == WaterState::Nothing || state == WaterState::Animation {
+                    continue;
+                }
+                let Some(image) = self.loadscreen_water_visual_frame(state) else {
+                    continue;
+                };
+                self.push_background_centered_tile_image(
+                    &mut batches,
+                    image,
+                    col,
+                    row,
+                    camera,
+                    Rgba8::new(255, 255, 255, LOADSCREEN_BACKGROUND_ALPHA),
+                );
+            }
+        }
+
+        for prop in &self.background_world.props {
+            let col = prop.x2 / BUILDING_GRID_DIVISIONS;
+            let row = prop.y2 / BUILDING_GRID_DIVISIONS;
+            if col >= self.background_world.cols || row >= self.background_world.rows {
+                continue;
+            }
+            let index = self.background_world.index(col, row);
+            if !self.background_visible.get(index).copied().unwrap_or(true) {
+                continue;
+            }
+
+            let PropKind::Plant(kind) = prop.kind else {
+                continue;
+            };
+            let Some(image) = self.plant_props[kind.index()].first_frame() else {
+                continue;
+            };
+            let instance_count = kind.visual_instance_count(prop.x2, prop.y2);
+            for instance in 0..instance_count {
+                let offset = kind.visual_instance_offset(instance_count, instance);
+                self.push_background_bottom_aligned_image_half(
+                    &mut batches,
+                    image,
+                    prop.x2,
+                    prop.y2,
+                    camera,
+                    offset.x,
+                    kind.render_offset_y() + offset.y,
+                    kind.render_scale(),
+                    Rgba8::new(255, 255, 255, LOADSCREEN_BACKGROUND_ALPHA),
+                );
+            }
+        }
+
+        for (texture_id, batch) in batches {
+            let _ = adapter.draw_tex_triangles_no_present(texture_id, &batch.bytes);
+        }
+    }
+
+    fn loadscreen_water_visual_frame(&self, state: WaterState) -> Option<&ImageAsset> {
+        match state {
+            WaterState::Nothing | WaterState::Animation => None,
+            WaterState::Stone1 => self.water_visuals.stones[0].first_frame(),
+            WaterState::Stone2 => self.water_visuals.stones[1].first_frame(),
+            WaterState::Stone3 => self.water_visuals.stones[2].first_frame(),
+            WaterState::Stone4 => self.water_visuals.stones[3].first_frame(),
+            WaterState::Duck => self.water_visuals.duck.first_frame(),
+        }
+    }
+
+    fn push_background_centered_tile_image(
+        &self,
+        batches: &mut BTreeMap<u32, SpriteBatch>,
+        image: &ImageAsset,
+        col: usize,
+        row: usize,
+        camera: Point,
+        tint: Rgba8,
+    ) {
+        let w = image.width as f32 * BUILDING_SCALE * LOADSCREEN_BACKGROUND_SCALE;
+        let h = image.height as f32 * BUILDING_SCALE * LOADSCREEN_BACKGROUND_SCALE;
+        let tile_size = TILE_SIZE * LOADSCREEN_BACKGROUND_SCALE;
+        let x = (col as f32 * TILE_SIZE - camera.x) * LOADSCREEN_BACKGROUND_SCALE
+            + (tile_size - w) * 0.5;
+        let y = (row as f32 * TILE_SIZE - camera.y) * LOADSCREEN_BACKGROUND_SCALE
+            + (tile_size - h) * 0.5;
+        self.push_background_image_batch(batches, image.texture_id, x, y, w, h, tint);
+    }
+
+    fn push_background_bottom_aligned_image_half(
+        &self,
+        batches: &mut BTreeMap<u32, SpriteBatch>,
+        image: &ImageAsset,
+        x2: usize,
+        y2: usize,
+        camera: Point,
+        offset_x: f32,
+        offset_y: f32,
+        scale: f32,
+        tint: Rgba8,
+    ) {
+        let w = image.width as f32 * BUILDING_SCALE * scale * LOADSCREEN_BACKGROUND_SCALE;
+        let h = image.height as f32 * BUILDING_SCALE * scale * LOADSCREEN_BACKGROUND_SCALE;
+        let tile_size = TILE_SIZE * LOADSCREEN_BACKGROUND_SCALE;
+        let x = (half_grid_to_px(x2) - camera.x) * LOADSCREEN_BACKGROUND_SCALE
+            + (tile_size - w) * 0.5
+            + offset_x * LOADSCREEN_BACKGROUND_SCALE;
+        let y = (half_grid_to_px(y2 + BUILDING_GRID_DIVISIONS) - camera.y)
+            * LOADSCREEN_BACKGROUND_SCALE
+            - h
+            + offset_y * LOADSCREEN_BACKGROUND_SCALE;
+        self.push_background_image_batch(batches, image.texture_id, x, y, w, h, tint);
+    }
+
+    fn push_background_image_batch(
+        &self,
+        batches: &mut BTreeMap<u32, SpriteBatch>,
+        texture_id: u32,
+        x: f32,
+        y: f32,
+        w: f32,
+        h: f32,
+        tint: Rgba8,
+    ) {
+        batches
+            .entry(texture_id)
+            .or_insert_with(|| SpriteBatch::new(self.window_width, self.window_height))
+            .image(
+                x.floor(),
+                y.floor(),
+                w.floor().max(1.0),
+                h.floor().max(1.0),
+                tint,
+            );
+    }
+
+    fn draw_background_clouds(&self, adapter: &mut Adapter, camera: Point) {
+        if self.clouds.is_empty() {
+            return;
+        }
+
+        let elapsed = self.started_at.elapsed().as_secs_f32();
+        let world_w = self.background_world.width_px();
+        let world_h = self.background_world.height_px();
+        let mut batches = BTreeMap::new();
+
+        for cloud in &self.background_cloud_instances {
+            let image = &self.clouds[cloud.asset_index % self.clouds.len()];
+            let fade = ((elapsed * 0.12 + cloud.phase).sin() + 1.0) * 0.5;
+            let alpha =
+                (cloud.alpha_min + (cloud.alpha_max - cloud.alpha_min) * fade).clamp(0.0, 1.0);
+            let scale =
+                cloud.scale * (1.0 + cloud.scale_wobble * (elapsed * 0.18 + cloud.phase).sin());
+            let wrap_w = world_w + image.width as f32 * scale;
+            let wrap_h = world_h + image.height as f32 * scale;
+            let world_x = (cloud.x + cloud.drift_x * elapsed).rem_euclid(wrap_w)
+                - image.width as f32 * scale * 0.5;
+            let world_y = (cloud.y + cloud.drift_y * elapsed).rem_euclid(wrap_h)
+                - image.height as f32 * scale * 0.5;
+            let x = (world_x - camera.x) * LOADSCREEN_BACKGROUND_SCALE;
+            let y = (world_y - camera.y) * LOADSCREEN_BACKGROUND_SCALE;
+            let w = image.width as f32 * scale * LOADSCREEN_BACKGROUND_SCALE;
+            let h = image.height as f32 * scale * LOADSCREEN_BACKGROUND_SCALE;
+
+            if x + w < 0.0
+                || y + h < 0.0
+                || x > self.window_width as f32
+                || y > self.window_height as f32
+            {
+                continue;
+            }
+
+            batches
+                .entry(image.texture_id)
+                .or_insert_with(|| SpriteBatch::new(self.window_width, self.window_height))
+                .image(
+                    x.floor(),
+                    y.floor(),
+                    w.floor().max(1.0),
+                    h.floor().max(1.0),
+                    Rgba8::new(
+                        255,
+                        255,
+                        255,
+                        (alpha * LOADSCREEN_BACKGROUND_ALPHA as f32).round() as u8,
+                    ),
+                );
+        }
+
+        for (texture_id, batch) in batches {
+            let _ = adapter.draw_tex_triangles_no_present(texture_id, &batch.bytes);
         }
     }
 
@@ -281,12 +833,72 @@ impl LoadScreen {
         let _ = adapter.draw_tex_triangles_no_present(self.arrow_icon.texture_id, &arrows.bytes);
     }
 
+    fn draw_create_game_button(&self, adapter: &mut Adapter, table: TableRect) {
+        let rect = create_game_button_rect(table);
+        let hovered = inside_rect(self.mouse.x, self.mouse.y, rect.x, rect.y, rect.w, rect.h);
+        let tint = if self.lobby_rx.is_some() {
+            Rgba8 {
+                r: 165,
+                g: 180,
+                b: 190,
+                a: 255,
+            }
+        } else {
+            Rgba8::WHITE
+        };
+        let button_asset = if hovered && self.lobby_rx.is_none() {
+            &self.small_blue_square_button_hover
+        } else {
+            &self.small_blue_square_button
+        };
+        let mut button = SpriteBatch::new(self.window_width, self.window_height);
+        button.image(rect.x, rect.y, rect.w, rect.h, tint);
+        let _ = adapter.draw_tex_triangles_no_present(button_asset.texture_id, &button.bytes);
+
+        let icon_size = CREATE_GAME_ICON_SIZE;
+        let mut icon = SpriteBatch::new(self.window_width, self.window_height);
+        icon.image(
+            rect.x + (rect.w - icon_size) * 0.5,
+            rect.y + (rect.h - icon_size) * 0.5,
+            icon_size,
+            icon_size,
+            tint,
+        );
+        let _ =
+            adapter.draw_tex_triangles_no_present(self.create_game_icon.texture_id, &icon.bytes);
+
+        if hovered {
+            let mut label = ts_ui::UiBatch::new(self.window_width, self.window_height);
+            draw_centered_text(
+                &mut label,
+                if self.lobby_rx.is_some() {
+                    "PLEASE WAIT"
+                } else {
+                    "CREATE GAME"
+                },
+                table.x,
+                rect.y + rect.h + 12.0,
+                table.w,
+                1.0,
+                LOBBY_TEXT,
+            );
+            let _ = adapter.draw_rgb_triangles_no_present(&label.solid_bytes);
+        }
+    }
+
     fn draw_top_table_buttons(&self, adapter: &mut Adapter, table: TableRect) {
         let (start_x, button_y) = top_table_button_origin(table);
+        let hovered = top_table_button_at(self.mouse, table);
         let mut buttons = SpriteBatch::new(self.window_width, self.window_height);
+        let mut hover_buttons = SpriteBatch::new(self.window_width, self.window_height);
 
-        for index in 0..3 {
-            buttons.image(
+        for index in 0..TOP_BUTTON_COUNT {
+            let batch = if Some(index) == hovered {
+                &mut hover_buttons
+            } else {
+                &mut buttons
+            };
+            batch.image(
                 start_x + index as f32 * (TOP_BUTTON_SIZE + TOP_BUTTON_GAP),
                 button_y,
                 TOP_BUTTON_SIZE,
@@ -298,6 +910,10 @@ impl LoadScreen {
         let _ = adapter.draw_tex_triangles_no_present(
             self.small_blue_square_button.texture_id,
             &buttons.bytes,
+        );
+        let _ = adapter.draw_tex_triangles_no_present(
+            self.small_blue_square_button_hover.texture_id,
+            &hover_buttons.bytes,
         );
 
         for (index, icon) in self.top_icons.iter().enumerate() {
@@ -311,21 +927,182 @@ impl LoadScreen {
         }
 
         let mut status = ts_ui::UiBatch::new(self.window_width, self.window_height);
+        if let Some(index) = hovered {
+            draw_centered_text(
+                &mut status,
+                top_table_button_label(index),
+                table.x,
+                button_y + TOP_BUTTON_SIZE + 16.0,
+                table.w,
+                1.0,
+                LOBBY_TEXT,
+            );
+        }
         draw_centered_text(
             &mut status,
             self.server_status_text(),
             table.x,
-            button_y + TOP_BUTTON_SIZE + 26.0,
+            button_y + TOP_BUTTON_SIZE + 38.0,
             table.w,
             1.0,
-            LOBBY_TEXT,
+            LOBBY_MUTED_TEXT,
         );
         let _ = adapter.draw_rgb_triangles_no_present(&status.solid_bytes);
     }
 
+    fn draw_frame(&self, adapter: &mut Adapter) {
+        let window_w = self.window_width as f32;
+        let window_h = self.window_height as f32;
+        draw_tiled_asset(
+            adapter,
+            &self.frame_horizontal,
+            self.window_width,
+            self.window_height,
+            FRAME_CORNER_SIZE,
+            0.0,
+            (window_w - FRAME_CORNER_SIZE * 2.0).max(0.0),
+            FRAME_CORNER_SIZE,
+            FRAME_DRAW_TILE,
+            FRAME_CORNER_SIZE,
+        );
+        draw_tiled_asset(
+            adapter,
+            &self.frame_horizontal,
+            self.window_width,
+            self.window_height,
+            FRAME_CORNER_SIZE,
+            (window_h - FRAME_CORNER_SIZE).max(0.0),
+            (window_w - FRAME_CORNER_SIZE * 2.0).max(0.0),
+            FRAME_CORNER_SIZE,
+            FRAME_DRAW_TILE,
+            FRAME_CORNER_SIZE,
+        );
+        draw_tiled_asset(
+            adapter,
+            &self.frame_vertical,
+            self.window_width,
+            self.window_height,
+            0.0,
+            FRAME_CORNER_SIZE,
+            FRAME_CORNER_SIZE,
+            (window_h - FRAME_CORNER_SIZE * 2.0).max(0.0),
+            FRAME_CORNER_SIZE,
+            FRAME_DRAW_TILE,
+        );
+        draw_tiled_asset(
+            adapter,
+            &self.frame_vertical,
+            self.window_width,
+            self.window_height,
+            (window_w - FRAME_CORNER_SIZE).max(0.0),
+            FRAME_CORNER_SIZE,
+            FRAME_CORNER_SIZE,
+            (window_h - FRAME_CORNER_SIZE * 2.0).max(0.0),
+            FRAME_CORNER_SIZE,
+            FRAME_DRAW_TILE,
+        );
+        draw_asset_rect(
+            adapter,
+            &self.frame_top_left,
+            self.window_width,
+            self.window_height,
+            0.0,
+            0.0,
+            FRAME_CORNER_SIZE,
+            FRAME_CORNER_SIZE,
+        );
+        draw_asset_rect(
+            adapter,
+            &self.frame_top_right,
+            self.window_width,
+            self.window_height,
+            (window_w - FRAME_CORNER_SIZE).max(0.0),
+            0.0,
+            FRAME_CORNER_SIZE,
+            FRAME_CORNER_SIZE,
+        );
+        draw_asset_rect(
+            adapter,
+            &self.frame_bottom_left,
+            self.window_width,
+            self.window_height,
+            0.0,
+            (window_h - FRAME_CORNER_SIZE).max(0.0),
+            FRAME_CORNER_SIZE,
+            FRAME_CORNER_SIZE,
+        );
+        draw_asset_rect(
+            adapter,
+            &self.frame_bottom_right,
+            self.window_width,
+            self.window_height,
+            (window_w - FRAME_CORNER_SIZE).max(0.0),
+            (window_h - FRAME_CORNER_SIZE).max(0.0),
+            FRAME_CORNER_SIZE,
+            FRAME_CORNER_SIZE,
+        );
+    }
+
+    fn window_drag_region_at(&self, point: Point) -> bool {
+        let table_layout = offset_table_layout(
+            loadscreen_table_layout(self.window_width as f32, self.window_height as f32),
+            self.layout_offset,
+        );
+        let close = close_button_rect(self.window_width as f32);
+        let create_game = create_game_button_rect(table_layout[0]);
+        if inside_rect(point.x, point.y, close.x, close.y, close.w, close.h)
+            || inside_rect(
+                point.x,
+                point.y,
+                create_game.x,
+                create_game.y,
+                create_game.w,
+                create_game.h,
+            )
+            || top_table_button_at(point, table_layout[1]).is_some()
+        {
+            return false;
+        }
+
+        inside_rect(
+            point.x,
+            point.y,
+            0.0,
+            0.0,
+            self.window_width as f32,
+            self.window_height as f32,
+        )
+    }
+
+    fn draw_close_button(&self, adapter: &mut Adapter) {
+        let rect = close_button_rect(self.window_width as f32);
+        let button_asset =
+            if inside_rect(self.mouse.x, self.mouse.y, rect.x, rect.y, rect.w, rect.h) {
+                &self.small_blue_square_button_hover
+            } else {
+                &self.small_blue_square_button
+            };
+        let mut button = SpriteBatch::new(self.window_width, self.window_height);
+        button.image(rect.x, rect.y, rect.w, rect.h, Rgba8::WHITE);
+        let _ = adapter.draw_tex_triangles_no_present(button_asset.texture_id, &button.bytes);
+
+        let mut close = SpriteBatch::new(self.window_width, self.window_height);
+        close.image(
+            rect.x + (rect.w - CLOSE_ICON_SIZE) * 0.5,
+            rect.y + (rect.h - CLOSE_ICON_SIZE) * 0.5,
+            CLOSE_ICON_SIZE,
+            CLOSE_ICON_SIZE,
+            Rgba8::WHITE,
+        );
+        let _ = adapter.draw_tex_triangles_no_present(self.close_icon.texture_id, &close.bytes);
+    }
+
     fn status_card_text(&self) -> (&str, &str, &str) {
         if self.lobby_rx.is_some() {
-            ("GAME LIST", "SERVER CONNECTING", "LOADING")
+            match self.lobby_request_kind {
+                LobbyRequestKind::Refresh => ("GAME LIST", "SERVER CONNECTING", "LOADING"),
+                LobbyRequestKind::CreateGame => ("GAME LIST", "SERVER CONNECTED", "CREATING GAME"),
+            }
         } else if self.lobby_error.is_some() {
             ("GAME LIST", "SERVER OFFLINE", "TRY AGAIN")
         } else {
@@ -335,7 +1112,10 @@ impl LoadScreen {
 
     fn server_status_text(&self) -> &str {
         if self.lobby_rx.is_some() {
-            "SERVER CONNECTING"
+            match self.lobby_request_kind {
+                LobbyRequestKind::Refresh => "SERVER CONNECTING",
+                LobbyRequestKind::CreateGame => "CREATING GAME",
+            }
         } else if self.lobby_error.is_some() {
             "SERVER OFFLINE"
         } else {
@@ -344,9 +1124,49 @@ impl LoadScreen {
     }
 
     fn handle_left_click(&mut self) {
-        let table_layout =
-            loadscreen_table_layout(self.window_width as f32, self.window_height as f32);
+        let table_layout = offset_table_layout(
+            loadscreen_table_layout(self.window_width as f32, self.window_height as f32),
+            self.layout_offset,
+        );
+        let close = close_button_rect(self.window_width as f32);
+        if inside_rect(
+            self.mouse.x,
+            self.mouse.y,
+            close.x,
+            close.y,
+            close.w,
+            close.h,
+        ) {
+            self.exit_request.store(true, Ordering::Relaxed);
+            return;
+        }
+
+        let create_game = create_game_button_rect(table_layout[0]);
+        if inside_rect(
+            self.mouse.x,
+            self.mouse.y,
+            create_game.x,
+            create_game.y,
+            create_game.w,
+            create_game.h,
+        ) {
+            self.start_create_game();
+            return;
+        }
+
         match top_table_button_at(self.mouse, table_layout[1]) {
+            Some(TOP_WORLD_BUTTON_INDEX) => {
+                self.world_editor_request.store(true, Ordering::Relaxed);
+            }
+            Some(TOP_WORLD_VIEWER_BUTTON_INDEX) => {
+                self.world_viewer_request.store(true, Ordering::Relaxed);
+            }
+            Some(TOP_EVENT_BUTTON_INDEX) => {
+                self.event_editor_request.store(true, Ordering::Relaxed);
+            }
+            Some(TOP_ICON_BUTTON_INDEX) => {
+                self.icon_viewer_request.store(true, Ordering::Relaxed);
+            }
             Some(TOP_INFO_BUTTON_INDEX) => {
                 self.idle_viewer_request.store(true, Ordering::Relaxed);
             }
@@ -367,6 +1187,10 @@ impl FrameProducer for LoadScreen {
         false
     }
 
+    fn window_drag_region(&self) -> bool {
+        self.window_drag_region_at(self.mouse)
+    }
+
     fn resize(&mut self, width: u32, height: u32) {
         self.resize_view(width, height);
     }
@@ -380,20 +1204,29 @@ impl FrameProducer for LoadScreen {
                 button: InputMouseButton::Left,
                 state: InputButtonState::Pressed,
             } => self.handle_left_click(),
+            InputEvent::MouseButton {
+                button: InputMouseButton::Left,
+                state: InputButtonState::Released,
+            } => {}
             _ => {}
         }
     }
 
     fn build_frame(&mut self, adapter: &mut Adapter) {
         self.poll_lobbies();
+        self.update_background_scene();
         self.upload_assets(adapter);
 
-        let _ = adapter.begin_frame(WATER_BG);
+        let _ = adapter.begin_frame(0xFFFFFF);
         let _ = adapter.set_sampler_raw(0, 0, 0, 0);
         let _ = adapter.set_blend_raw(1, 0x0302, 0x0303);
 
-        let table_layout =
-            loadscreen_table_layout(self.window_width as f32, self.window_height as f32);
+        self.draw_background_scene(adapter);
+        let table_layout = offset_table_layout(
+            loadscreen_table_layout(self.window_width as f32, self.window_height as f32),
+            self.layout_offset,
+        );
+        self.draw_frame(adapter);
         let mut tables = SpriteBatch::new(self.window_width, self.window_height);
         for table in table_layout {
             draw_wood_table(
@@ -409,7 +1242,9 @@ impl FrameProducer for LoadScreen {
 
         let large_table = table_layout[0];
         self.draw_lobby_cards(adapter, large_table);
+        self.draw_create_game_button(adapter, large_table);
         self.draw_top_table_buttons(adapter, table_layout[1]);
+        self.draw_close_button(adapter);
 
         self.draw_cursor(adapter);
         let _ = adapter.end_frame();
@@ -467,19 +1302,90 @@ fn draw_centered_text(
 }
 
 fn top_table_button_origin(table: TableRect) -> (f32, f32) {
-    let total_w = TOP_BUTTON_SIZE * 3.0 + TOP_BUTTON_GAP * 2.0;
+    let total_w =
+        TOP_BUTTON_SIZE * TOP_BUTTON_COUNT as f32 + TOP_BUTTON_GAP * (TOP_BUTTON_COUNT - 1) as f32;
     (table.x + (table.w - total_w) * 0.5, table.y + 72.0)
 }
 
 fn top_table_button_at(point: Point, table: TableRect) -> Option<usize> {
     let (start_x, button_y) = top_table_button_origin(table);
-    (0..3).find(|index| {
+    (0..TOP_BUTTON_COUNT).find(|index| {
         let x = start_x + *index as f32 * (TOP_BUTTON_SIZE + TOP_BUTTON_GAP);
         point.x >= x
             && point.x <= x + TOP_BUTTON_SIZE
             && point.y >= button_y
             && point.y <= button_y + TOP_BUTTON_SIZE
     })
+}
+
+fn top_table_button_label(index: usize) -> &'static str {
+    match index {
+        TOP_WORLD_BUTTON_INDEX => "WORLD EDITOR",
+        TOP_WORLD_VIEWER_BUTTON_INDEX => "WORLD VIEWER",
+        TOP_EVENT_BUTTON_INDEX => "EVENT EDITOR",
+        TOP_ICON_BUTTON_INDEX => "ICON VIEWER",
+        TOP_INFO_BUTTON_INDEX => "IDLE WORLD",
+        TOP_MUSIC_BUTTON_INDEX => "UNIT WALK",
+        _ => "",
+    }
+}
+
+fn create_game_button_rect(table: TableRect) -> TableRect {
+    TableRect {
+        x: table.x + table.w - 72.0 - CLOSE_BUTTON_SIZE,
+        y: table.y + 24.0,
+        w: CLOSE_BUTTON_SIZE,
+        h: CLOSE_BUTTON_SIZE,
+    }
+}
+
+fn close_button_rect(window_w: f32) -> TableRect {
+    let half_button = CLOSE_BUTTON_SIZE * 0.5;
+    TableRect {
+        x: (window_w - FRAME_CORNER_SIZE - half_button).max(0.0),
+        y: (FRAME_CORNER_SIZE - half_button).max(0.0),
+        w: CLOSE_BUTTON_SIZE,
+        h: CLOSE_BUTTON_SIZE,
+    }
+}
+
+fn spawn_lobby_refresh() -> Receiver<Result<Vec<Lobby>, String>> {
+    spawn_lobby_request(|| cli::get_lobbies().map_err(|error| error.to_string()))
+}
+
+fn spawn_lobby_create_game() -> Receiver<Result<Vec<Lobby>, String>> {
+    spawn_lobby_request(|| cli::create_game_and_get_lobbies().map_err(|error| error.to_string()))
+}
+
+fn spawn_lobby_request(
+    request: impl FnOnce() -> Result<Vec<Lobby>, String> + Send + 'static,
+) -> Receiver<Result<Vec<Lobby>, String>> {
+    let (lobby_tx, lobby_rx) = mpsc::channel();
+    thread::spawn(move || {
+        let _ = lobby_tx.send(request());
+    });
+    lobby_rx
+}
+
+fn generate_loadscreen_background_scene(
+    scene_index: u64,
+    cloud_assets: &[ImageAsset],
+) -> (TileWorld, Vec<bool>, Vec<CloudInstance>) {
+    let seed = DEFAULT_SEED ^ 0x10AD_5CEE_2026 ^ scene_index.wrapping_mul(0x9E37_79B9_7F4A_7C15);
+    let mut generator = wldgenerator::RunningGenerator::new(WORLD_COLS, WORLD_ROWS, seed);
+    generator.complete_initial_seeds();
+    while generator.fill_visual_voids_once(256) != 0 {}
+    let visual_world = generator.world().to_visual_tile_world();
+    let clouds = generate_clouds(seed ^ 0xC10D_2026, cloud_assets, WORLD_COLS, WORLD_ROWS);
+    (visual_world.tiles, visual_world.visible, clouds)
+}
+
+fn offset_table_layout(mut layout: [TableRect; 3], offset: Point) -> [TableRect; 3] {
+    for table in &mut layout {
+        table.x += offset.x;
+        table.y += offset.y;
+    }
+    layout
 }
 
 fn fit_lobby_text(text: &str, max_w: f32, scale: f32) -> String {
@@ -641,6 +1547,56 @@ fn draw_wood_table(batch: &mut SpriteBatch, image: &ImageAsset, x: f32, y: f32, 
         WOOD_TABLE_BOTTOM_RIGHT.height as f32,
         Rgba8::WHITE,
     );
+}
+
+fn draw_asset_rect(
+    adapter: &mut Adapter,
+    image: &ImageAsset,
+    window_w: u32,
+    window_h: u32,
+    x: f32,
+    y: f32,
+    w: f32,
+    h: f32,
+) {
+    if w <= 0.0 || h <= 0.0 {
+        return;
+    }
+
+    let mut batch = SpriteBatch::new(window_w, window_h);
+    batch.image(x, y, w, h, Rgba8::WHITE);
+    let _ = adapter.draw_tex_triangles_no_present(image.texture_id, &batch.bytes);
+}
+
+fn draw_tiled_asset(
+    adapter: &mut Adapter,
+    image: &ImageAsset,
+    window_w: u32,
+    window_h: u32,
+    x: f32,
+    y: f32,
+    w: f32,
+    h: f32,
+    tile_w: f32,
+    tile_h: f32,
+) {
+    if w <= 0.0 || h <= 0.0 || tile_w <= 0.0 || tile_h <= 0.0 {
+        return;
+    }
+
+    let mut batch = SpriteBatch::new(window_w, window_h);
+    let mut dy = 0.0;
+    while dy < h {
+        let draw_h = (h - dy).min(tile_h);
+        let mut dx = 0.0;
+        while dx < w {
+            let draw_w = (w - dx).min(tile_w);
+            batch.image(x + dx, y + dy, draw_w, draw_h, Rgba8::WHITE);
+            dx += draw_w;
+        }
+        dy += draw_h;
+    }
+    let _ = adapter.draw_tex_triangles_no_present(image.texture_id, &batch.bytes);
 }
 
 fn draw_tiled_region(

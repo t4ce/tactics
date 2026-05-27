@@ -895,8 +895,10 @@ impl WorldViewer {
 
     fn write_generated_world_to_root(&self) -> Result<PathBuf, String> {
         let visual_world = self.generator.world().to_visual_tile_world();
+        let mut tiles = visual_world.tiles;
+        tiles.generated_source = Some(self.generator.world().clone());
         let path = generated_world_save_path()?;
-        save_tile_world_without_overwrite(&visual_world.tiles, &path)?;
+        save_tile_world_without_overwrite(&tiles, &path)?;
         Ok(path)
     }
 }

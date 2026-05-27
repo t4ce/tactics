@@ -108,14 +108,14 @@ const LEVEL0_SHORELINE_BY_OPEN_MASK: [Option<AtlasTile>; 16] = [
     Some(SHORE_NARROW_BOTTOM),
     Some(SHORE_SINGLE_IN_WATER),
 ];
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
 pub(super) enum GeneratedCell {
     Unknown,
     Grass,
     Water,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
 pub(super) struct GeneratedPlatform {
     pub(super) col: usize,
     pub(super) row: usize,
@@ -125,20 +125,20 @@ pub(super) struct GeneratedPlatform {
     pub(super) kind: GeneratedPlatformKind,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
 pub(super) enum GeneratedPlatformKind {
     Large,
     Small,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
 pub(super) struct GeneratedTerrainCross {
     pub(super) col: usize,
     pub(super) center_row: usize,
     pub(super) background: BackgroundTile,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
 pub(super) struct GeneratedWallTile {
     pub(super) col: usize,
     pub(super) row: usize,
@@ -147,7 +147,7 @@ pub(super) struct GeneratedWallTile {
     pub(super) orientation: GeneratedWallOrientation,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
 pub(super) enum GeneratedWallOrientation {
     Horizontal,
     Vertical,
@@ -165,7 +165,7 @@ pub(super) struct GeneratedVisualWorld {
     pub(super) visible: Vec<bool>,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
 pub(super) struct GeneratedWorld {
     pub(super) cols: usize,
     pub(super) rows: usize,
@@ -185,6 +185,50 @@ impl GeneratedWorld {
             terrain_crosses: Vec::new(),
             wall_tiles: Vec::new(),
         }
+    }
+
+    pub(super) fn validate(&self) -> Result<(), String> {
+        let cells = self
+            .cols
+            .checked_mul(self.rows)
+            .ok_or_else(|| "generated world dimensions overflow".to_string())?;
+        if cells == 0 {
+            return Err("generated world dimensions must be non-zero".to_string());
+        }
+        if self.cells.len() != cells {
+            return Err(format!(
+                "generated world cells length {} does not match {cells}",
+                self.cells.len()
+            ));
+        }
+        for platform in &self.platforms {
+            if platform.cols == 0
+                || platform.rows == 0
+                || platform.col.saturating_add(platform.cols) > self.cols
+                || platform.row.saturating_add(platform.rows) > self.rows
+            {
+                return Err("generated platform is outside world bounds".to_string());
+            }
+        }
+        for cross in &self.terrain_crosses {
+            if cross.col == 0
+                || cross.center_row == 0
+                || cross.col + 1 >= self.cols
+                || cross.center_row + 1 >= self.rows
+            {
+                return Err("generated terrain cross is outside world bounds".to_string());
+            }
+        }
+        for wall in &self.wall_tiles {
+            if wall.cols == 0
+                || wall.rows == 0
+                || wall.col.saturating_add(wall.cols) > self.cols
+                || wall.row.saturating_add(wall.rows) > self.rows
+            {
+                return Err("generated wall is outside world bounds".to_string());
+            }
+        }
+        Ok(())
     }
 
     pub(super) fn cell(&self, col: usize, row: usize) -> GeneratedCell {

@@ -29,12 +29,47 @@ pub(super) fn get_lobbies() -> std::io::Result<Vec<Lobby>> {
     get_lobbies_from(DEFAULT_SERVER_ADDR, DEFAULT_GAME)
 }
 
+pub(super) fn create_game_and_get_lobbies() -> std::io::Result<Vec<Lobby>> {
+    create_game_and_get_lobbies_from(DEFAULT_SERVER_ADDR, DEFAULT_GAME, "Tactics lobby", 4)
+}
+
 pub(super) fn get_lobbies_from(
     addr: impl ToSocketAddrs,
     game: &str,
 ) -> std::io::Result<Vec<Lobby>> {
     let mut client = TacticsClient::connect(addr)?;
     client.hello("Loadscreen", game)?;
+    client.get_lobbies()
+}
+
+#[allow(dead_code)]
+pub(super) fn create_game_from(
+    addr: impl ToSocketAddrs,
+    game: &str,
+    name: &str,
+    max_players: u32,
+) -> std::io::Result<Lobby> {
+    let mut client = TacticsClient::connect(addr)?;
+    client.hello("Loadscreen", game)?;
+    client.create_game(name, game, max_players)?;
+    client.wait_for_create_game_ack()?.ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::TimedOut,
+            "server did not confirm created game",
+        )
+    })
+}
+
+pub(super) fn create_game_and_get_lobbies_from(
+    addr: impl ToSocketAddrs,
+    game: &str,
+    name: &str,
+    max_players: u32,
+) -> std::io::Result<Vec<Lobby>> {
+    let mut client = TacticsClient::connect(addr)?;
+    client.hello("Loadscreen", game)?;
+    client.create_game(name, game, max_players)?;
+    let _ = client.wait_for_create_game_ack()?;
     client.get_lobbies()
 }
 
@@ -101,11 +136,73 @@ impl TacticsClient {
             }
         }
     }
+
+    pub fn create_game(&mut self, name: &str, game: &str, max_players: u32) -> std::io::Result<()> {
+        send(
+            &mut self.stream,
+            json!({
+                "type": "create_game",
+                "name": name,
+                "game": game,
+                "max_players": max_players
+            }),
+        )
+    }
+
+    fn wait_for_create_game_ack(&mut self) -> std::io::Result<Option<Lobby>> {
+        let mut read = BufReader::new(self.stream.try_clone()?);
+        let started = Instant::now();
+        let mut line = String::new();
+
+        loop {
+            if started.elapsed() > Duration::from_secs(2) {
+                return Ok(None);
+            }
+
+            line.clear();
+            match read.read_line(&mut line) {
+                Ok(0) => return Ok(None),
+                Ok(_) => {
+                    let Ok(value) = serde_json::from_str::<Value>(line.trim()) else {
+                        continue;
+                    };
+                    if value.get("type").and_then(Value::as_str) == Some("error") {
+                        let message = value
+                            .get("message")
+                            .and_then(Value::as_str)
+                            .unwrap_or("server returned an error");
+                        return Err(std::io::Error::other(message.to_owned()));
+                    }
+                    if let Some(mut lobbies) = lobbies_from_value(&value) {
+                        if let Some(lobby) = lobbies.pop() {
+                            return Ok(Some(lobby));
+                        }
+                    }
+                }
+                Err(error)
+                    if matches!(
+                        error.kind(),
+                        std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+                    ) =>
+                {
+                    return Ok(None);
+                }
+                Err(error) => return Err(error),
+            }
+        }
+    }
 }
 
 fn lobbies_from_value(value: &Value) -> Option<Vec<Lobby>> {
     if let Some(items) = value.as_array() {
         return Some(items.iter().filter_map(Lobby::from_value).collect());
+    }
+
+    if value.get("type").and_then(Value::as_str) == Some("game_created") {
+        return value
+            .get("game")
+            .and_then(Lobby::from_value)
+            .map(|lobby| vec![lobby]);
     }
 
     for key in ["games", "lobbies", "game_list"] {
@@ -205,6 +302,48 @@ fn number_field(value: &Value, keys: &[&str]) -> u32 {
     keys.iter()
         .find_map(|key| value.get(*key).and_then(Value::as_u64))
         .unwrap_or(0) as u32
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_game_created_nested_game_as_lobby() {
+        let payload = json!({
+            "type": "game_created",
+            "game": {
+                "id": 1,
+                "name": "Friday lobby",
+                "game": "tactics",
+                "host_id": 1,
+                "max_players": 4,
+                "status": "lobby",
+                "players": [
+                    {
+                        "id": 1,
+                        "name": "Ada",
+                        "ping_ms": 12,
+                        "latency_ms": 6,
+                        "game_id": 1
+                    }
+                ]
+            }
+        });
+
+        let lobbies = lobbies_from_value(&payload).expect("game_created should parse");
+        assert_eq!(
+            lobbies,
+            vec![Lobby {
+                id: 1,
+                name: "Friday lobby".to_owned(),
+                game: "tactics".to_owned(),
+                players: 1,
+                max_players: 4,
+                status: "lobby".to_owned(),
+            }]
+        );
+    }
 }
 
 #[allow(dead_code)]

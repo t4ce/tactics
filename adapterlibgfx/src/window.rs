@@ -21,6 +21,10 @@ pub trait FrameProducer {
         true
     }
 
+    fn window_drag_region(&self) -> bool {
+        false
+    }
+
     fn resize(&mut self, _width: u32, _height: u32) {}
 
     fn handle_input(&mut self, _event: InputEvent) {}
@@ -257,8 +261,13 @@ pub struct WgpuSevenWindowApp<P, S, T, U, V, W, X> {
     quinary_renderer: Option<WgpuRenderer>,
     senary_renderer: Option<WgpuRenderer>,
     septenary_renderer: Option<WgpuRenderer>,
+    primary_create_request: Option<Arc<AtomicBool>>,
+    secondary_create_request: Option<Arc<AtomicBool>>,
     tertiary_create_request: Option<Arc<AtomicBool>>,
+    quinary_create_request: Option<Arc<AtomicBool>>,
+    senary_create_request: Option<Arc<AtomicBool>>,
     septenary_create_request: Option<Arc<AtomicBool>>,
+    exit_request: Option<Arc<AtomicBool>>,
     last_error: Option<RenderError>,
 }
 
@@ -631,10 +640,25 @@ impl<P, S, T, U, V, W, X> WgpuSevenWindowApp<P, S, T, U, V, W, X> {
             quinary_renderer: None,
             senary_renderer: None,
             septenary_renderer: None,
+            primary_create_request: None,
+            secondary_create_request: None,
             tertiary_create_request: None,
+            quinary_create_request: None,
+            senary_create_request: None,
             septenary_create_request: None,
+            exit_request: None,
             last_error: None,
         }
+    }
+
+    pub fn defer_primary_until(mut self, request: Arc<AtomicBool>) -> Self {
+        self.primary_create_request = Some(request);
+        self
+    }
+
+    pub fn defer_secondary_until(mut self, request: Arc<AtomicBool>) -> Self {
+        self.secondary_create_request = Some(request);
+        self
     }
 
     pub fn defer_tertiary_until(mut self, request: Arc<AtomicBool>) -> Self {
@@ -642,8 +666,23 @@ impl<P, S, T, U, V, W, X> WgpuSevenWindowApp<P, S, T, U, V, W, X> {
         self
     }
 
+    pub fn defer_quinary_until(mut self, request: Arc<AtomicBool>) -> Self {
+        self.quinary_create_request = Some(request);
+        self
+    }
+
+    pub fn defer_senary_until(mut self, request: Arc<AtomicBool>) -> Self {
+        self.senary_create_request = Some(request);
+        self
+    }
+
     pub fn defer_septenary_until(mut self, request: Arc<AtomicBool>) -> Self {
         self.septenary_create_request = Some(request);
+        self
+    }
+
+    pub fn exit_on(mut self, request: Arc<AtomicBool>) -> Self {
+        self.exit_request = Some(request);
         self
     }
 
@@ -1005,6 +1044,11 @@ impl<P: FrameProducer, S: FrameProducer, T: FrameProducer, U: FrameProducer> App
                 &mut self.last_error,
             );
         } else if self.quaternary_window.as_ref().map(|w| w.id()) == Some(window_id) {
+            if let Some(window) = &self.quaternary_window {
+                if start_window_drag_if_requested(&event, &self.quaternary_producer, window) {
+                    return;
+                }
+            }
             handle_window_event(
                 event_loop,
                 event,
@@ -1146,6 +1190,11 @@ impl<P: FrameProducer, S: FrameProducer, T: FrameProducer, U: FrameProducer, V: 
                 &mut self.last_error,
             );
         } else if self.quaternary_window.as_ref().map(|w| w.id()) == Some(window_id) {
+            if let Some(window) = &self.quaternary_window {
+                if start_window_drag_if_requested(&event, &self.quaternary_producer, window) {
+                    return;
+                }
+            }
             handle_window_event(
                 event_loop,
                 event,
@@ -1320,6 +1369,11 @@ impl<
                 &mut self.last_error,
             );
         } else if self.quaternary_window.as_ref().map(|w| w.id()) == Some(window_id) {
+            if let Some(window) = &self.quaternary_window {
+                if start_window_drag_if_requested(&event, &self.quaternary_producer, window) {
+                    return;
+                }
+            }
             handle_window_event(
                 event_loop,
                 event,
@@ -1382,7 +1436,7 @@ impl<
     > ApplicationHandler for WgpuSevenWindowApp<P, S, T, U, V, W, X>
 {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
-        if self.primary_window.is_none() {
+        if self.primary_create_request.is_none() && self.primary_window.is_none() {
             let Some((window, renderer)) = create_window_renderer(
                 event_loop,
                 &self.primary_title,
@@ -1397,7 +1451,7 @@ impl<
             self.primary_renderer = Some(renderer);
         }
 
-        if self.secondary_window.is_none() {
+        if self.secondary_create_request.is_none() && self.secondary_window.is_none() {
             let Some((window, renderer)) = create_window_renderer(
                 event_loop,
                 &self.secondary_title,
@@ -1442,7 +1496,7 @@ impl<
             self.quaternary_renderer = Some(renderer);
         }
 
-        if self.quinary_window.is_none() {
+        if self.quinary_create_request.is_none() && self.quinary_window.is_none() {
             let Some((window, renderer)) = create_window_renderer(
                 event_loop,
                 &self.quinary_title,
@@ -1457,7 +1511,7 @@ impl<
             self.quinary_renderer = Some(renderer);
         }
 
-        if self.senary_window.is_none() {
+        if self.senary_create_request.is_none() && self.senary_window.is_none() {
             let Some((window, renderer)) = create_window_renderer(
                 event_loop,
                 &self.senary_title,
@@ -1494,6 +1548,30 @@ impl<
         window_id: WindowId,
         event: WindowEvent,
     ) {
+        if self.primary_window.as_ref().map(|w| w.id()) == Some(window_id)
+            && matches!(event, WindowEvent::CloseRequested)
+            && self.primary_create_request.is_some()
+        {
+            self.primary_window = None;
+            self.primary_renderer = None;
+            if let Some(request) = &self.primary_create_request {
+                request.store(false, Ordering::Relaxed);
+            }
+            return;
+        }
+
+        if self.secondary_window.as_ref().map(|w| w.id()) == Some(window_id)
+            && matches!(event, WindowEvent::CloseRequested)
+            && self.secondary_create_request.is_some()
+        {
+            self.secondary_window = None;
+            self.secondary_renderer = None;
+            if let Some(request) = &self.secondary_create_request {
+                request.store(false, Ordering::Relaxed);
+            }
+            return;
+        }
+
         if self.tertiary_window.as_ref().map(|w| w.id()) == Some(window_id)
             && matches!(event, WindowEvent::CloseRequested)
             && self.tertiary_create_request.is_some()
@@ -1501,6 +1579,30 @@ impl<
             self.tertiary_window = None;
             self.tertiary_renderer = None;
             if let Some(request) = &self.tertiary_create_request {
+                request.store(false, Ordering::Relaxed);
+            }
+            return;
+        }
+
+        if self.quinary_window.as_ref().map(|w| w.id()) == Some(window_id)
+            && matches!(event, WindowEvent::CloseRequested)
+            && self.quinary_create_request.is_some()
+        {
+            self.quinary_window = None;
+            self.quinary_renderer = None;
+            if let Some(request) = &self.quinary_create_request {
+                request.store(false, Ordering::Relaxed);
+            }
+            return;
+        }
+
+        if self.senary_window.as_ref().map(|w| w.id()) == Some(window_id)
+            && matches!(event, WindowEvent::CloseRequested)
+            && self.senary_create_request.is_some()
+        {
+            self.senary_window = None;
+            self.senary_renderer = None;
+            if let Some(request) = &self.senary_create_request {
                 request.store(false, Ordering::Relaxed);
             }
             return;
@@ -1534,6 +1636,11 @@ impl<
                 &mut self.last_error,
             );
         } else if self.quaternary_window.as_ref().map(|w| w.id()) == Some(window_id) {
+            if let Some(window) = &self.quaternary_window {
+                if start_window_drag_if_requested(&event, &self.quaternary_producer, window) {
+                    return;
+                }
+            }
             handle_window_event(
                 event_loop,
                 event,
@@ -1583,6 +1690,55 @@ impl<
     }
 
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
+        if self
+            .exit_request
+            .as_ref()
+            .is_some_and(|request| request.load(Ordering::Relaxed))
+        {
+            event_loop.exit();
+            return;
+        }
+
+        if self.primary_window.is_none()
+            && self
+                .primary_create_request
+                .as_ref()
+                .is_some_and(|request| request.load(Ordering::Relaxed))
+        {
+            let Some((window, renderer)) = create_window_renderer(
+                event_loop,
+                &self.primary_title,
+                self.primary_config,
+                self.primary_producer.cursor_visible(),
+                self.primary_producer.window_decorations(),
+            ) else {
+                event_loop.exit();
+                return;
+            };
+            self.primary_window = Some(window);
+            self.primary_renderer = Some(renderer);
+        }
+
+        if self.secondary_window.is_none()
+            && self
+                .secondary_create_request
+                .as_ref()
+                .is_some_and(|request| request.load(Ordering::Relaxed))
+        {
+            let Some((window, renderer)) = create_window_renderer(
+                event_loop,
+                &self.secondary_title,
+                self.secondary_config,
+                self.secondary_producer.cursor_visible(),
+                self.secondary_producer.window_decorations(),
+            ) else {
+                event_loop.exit();
+                return;
+            };
+            self.secondary_window = Some(window);
+            self.secondary_renderer = Some(renderer);
+        }
+
         if self.tertiary_window.is_none()
             && self
                 .tertiary_create_request
@@ -1601,6 +1757,46 @@ impl<
             };
             self.tertiary_window = Some(window);
             self.tertiary_renderer = Some(renderer);
+        }
+
+        if self.quinary_window.is_none()
+            && self
+                .quinary_create_request
+                .as_ref()
+                .is_some_and(|request| request.load(Ordering::Relaxed))
+        {
+            let Some((window, renderer)) = create_window_renderer(
+                event_loop,
+                &self.quinary_title,
+                self.quinary_config,
+                self.quinary_producer.cursor_visible(),
+                self.quinary_producer.window_decorations(),
+            ) else {
+                event_loop.exit();
+                return;
+            };
+            self.quinary_window = Some(window);
+            self.quinary_renderer = Some(renderer);
+        }
+
+        if self.senary_window.is_none()
+            && self
+                .senary_create_request
+                .as_ref()
+                .is_some_and(|request| request.load(Ordering::Relaxed))
+        {
+            let Some((window, renderer)) = create_window_renderer(
+                event_loop,
+                &self.senary_title,
+                self.senary_config,
+                self.senary_producer.cursor_visible(),
+                self.senary_producer.window_decorations(),
+            ) else {
+                event_loop.exit();
+                return;
+            };
+            self.senary_window = Some(window);
+            self.senary_renderer = Some(renderer);
         }
 
         if self.septenary_window.is_none()
@@ -1645,6 +1841,26 @@ impl<
             window.request_redraw();
         }
     }
+}
+
+fn start_window_drag_if_requested<P: FrameProducer>(
+    event: &WindowEvent,
+    producer: &P,
+    window: &Window,
+) -> bool {
+    if !matches!(
+        event,
+        WindowEvent::MouseInput {
+            state: ElementState::Pressed,
+            button: MouseButton::Left,
+            ..
+        }
+    ) || !producer.window_drag_region()
+    {
+        return false;
+    }
+
+    window.drag_window().is_ok()
 }
 
 fn create_window_renderer(

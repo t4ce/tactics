@@ -1,21 +1,22 @@
 use crate::terrain_rules::AtlasTile;
 use crate::{ase_assets, ts_ui};
-use adapterlibgfx::api::{Adapter, AdapterConfig};
+use adapterlibgfx::api::Adapter;
 use adapterlibgfx::command::{ScissorRect, TextureEffect};
 use adapterlibgfx::vertex::{Rgba8, TexVertex};
 use adapterlibgfx::window::{
-    FrameProducer, InputButtonState, InputEvent, InputKey, InputMouseButton, WgpuSevenWindowApp,
+    FrameProducer, InputButtonState, InputEvent, InputKey, InputMouseButton,
 };
 use std::collections::{BTreeMap, HashSet};
 use std::fs;
 use std::path::Path;
-use std::sync::{Arc, atomic::AtomicBool};
 use std::time::Instant;
 
 #[path = "cli.rs"]
 mod cli;
 #[path = "loadscreen.rs"]
 mod loadscreen;
+#[path = "ui_cli.rs"]
+mod ui_cli;
 #[path = "wldgenerator.rs"]
 mod wldgenerator;
 #[path = "worldviewer.rs"]
@@ -58,6 +59,27 @@ const ICON_VIEWER_TEXTURE_BASE: u32 = 7000;
 const IDLE_WORLD_HOUSE_ICON_TEXTURE_BASE: u32 = 8800;
 const IDLE_WORLD_TOOL_CURSOR_TEXTURE_BASE: u32 = 8850;
 const IDLE_WORLD_TEXTURE_BASE: u32 = 9000;
+const IDLE_RETILE_COVER_TEXTURE: u32 = 13_000;
+const IDLE_RETILE_COVER_BYTES: &[u8] =
+    include_bytes!("../ts_freepack/UI Elements/UI Elements/Wood Table/WoodTable_Slots.png");
+const IDLE_RETILE_COVER_TILE_PX: u32 = 64;
+const IDLE_RETILE_COVER_LIGHTEN_PERCENT: u8 = 8;
+const IDLE_RETILE_PARTICLE_TEXTURE_BASE: u32 = 13_100;
+const IDLE_RETILE_FLYOUT_MS: u32 = 500;
+const IDLE_RETILE_FLYOUT_DISTANCE_PX: f32 = 192.0;
+const IDLE_RETILE_COVER_HOLD_MS: u32 = 250;
+const IDLE_RETILE_REVEAL_STAGGER_MS: u32 = 35;
+const IDLE_RETILE_SEQUENTIAL_REVEAL_TILES: usize = 50;
+const IDLE_RETILE_REVEAL_MS: u32 = 50;
+const IDLE_RETILE_BOB_AMPLITUDE_PX: f32 = 2.25;
+const IDLE_RETILE_BOB_PERIOD_MS: f32 = 720.0;
+const IDLE_RETILE_ROTATION_AMPLITUDE_RAD: f32 = 0.0125;
+const IDLE_RETILE_ROTATION_PERIOD_MS: f32 = 960.0;
+const IDLE_MONK_RETILE_MIN_DISTANCE_TILES: usize = 2;
+const IDLE_MONK_RETILE_MAX_DISTANCE_TILES: usize = 3;
+const IDLE_MONK_RETILE_MIN_SIZE: usize = 2;
+const IDLE_MONK_RETILE_MAX_SIZE: usize = 15;
+const IDLE_RETILE_PATCH_PADDING_TILES: usize = 2;
 const IDLE_RIGHT_CLICK_INDICATOR_MS: u128 = 250;
 const IDLE_RIGHT_CLICK_INDICATOR_SIZE: f32 = 42.0;
 const TERRAIN_TILE_PX: u32 = 64;
@@ -340,59 +362,7 @@ const UNIT_WALK_SPECS: [UnitWalkSpec; 14] = [
 ];
 
 pub(crate) fn run() {
-    let unit_walk_viewer_request = Arc::new(AtomicBool::new(false));
-    let idle_viewer_request = Arc::new(AtomicBool::new(false));
-    WgpuSevenWindowApp::new(
-        "tactics world editor",
-        AdapterConfig {
-            width: WINDOW_WIDTH,
-            height: WINDOW_HEIGHT,
-        },
-        Game::new(),
-        "tactics world viewer",
-        AdapterConfig {
-            width: WINDOW_WIDTH,
-            height: WINDOW_HEIGHT,
-        },
-        worldviewer::WorldViewer::new(),
-        "tactics unit walk viewer",
-        AdapterConfig {
-            width: UNIT_VIEWER_WIDTH,
-            height: UNIT_VIEWER_HEIGHT,
-        },
-        UnitWalkViewer::new(),
-        "tactics loadscreen",
-        AdapterConfig {
-            width: WINDOW_WIDTH,
-            height: WINDOW_HEIGHT,
-        },
-        loadscreen::LoadScreen::new(
-            unit_walk_viewer_request.clone(),
-            idle_viewer_request.clone(),
-        ),
-        "tactics icon viewer",
-        AdapterConfig {
-            width: ICON_VIEWER_WIDTH,
-            height: ICON_VIEWER_HEIGHT,
-        },
-        IconViewer::new(),
-        "tactics event editor",
-        AdapterConfig {
-            width: EVENT_EDITOR_WIDTH,
-            height: EVENT_EDITOR_HEIGHT,
-        },
-        EventEditor::new(),
-        "tactics idle world",
-        AdapterConfig {
-            width: WINDOW_WIDTH,
-            height: WINDOW_HEIGHT,
-        },
-        IdleWorldViewer::new(),
-    )
-    .defer_tertiary_until(unit_walk_viewer_request)
-    .defer_septenary_until(idle_viewer_request)
-    .run()
-    .expect("window loop failed");
+    ui_cli::tactics_window();
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -1061,6 +1031,8 @@ struct IdleWorldViewer {
     plant_props: [SpriteAnimation; PLANT_PROP_COUNT],
     gold_props: [SpriteAnimation; GOLD_PROP_COUNT],
     rock_props: [ImageAsset; ROCK_PROP_COUNT],
+    retile_cover: ImageAsset,
+    particle_dust: SpriteAnimation,
     world: TileWorld,
     terrain_cache: TerrainDrawCache,
     cursor_default: ImageAsset,
@@ -1100,6 +1072,7 @@ struct IdleWorldViewer {
     started_at: Instant,
     last_frame: Instant,
     attack_rng: SeededRng,
+    retile_transition: Option<IdleRetileTransition>,
 }
 
 struct IconViewer {
@@ -1187,6 +1160,110 @@ enum IdleResourcePhase {
 struct IdleWorldMoveCommand {
     target: Point,
     selected_units: Vec<usize>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct IdleRetileRect {
+    col: usize,
+    row: usize,
+    cols: usize,
+    rows: usize,
+}
+
+struct IdleRetileTransition {
+    rect: IdleRetileRect,
+    tiles: Vec<IdleRetileTile>,
+    flyout_tiles: Vec<IdleRetileFlyoutTile>,
+    started: Instant,
+    finish_ms: u32,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct IdleRetileTile {
+    col: usize,
+    row: usize,
+    reveal_start_ms: u32,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct IdleRetileFlyoutTile {
+    col: usize,
+    row: usize,
+    background: BackgroundTile,
+    under_foreground: Option<AtlasTile>,
+    foreground: Option<AtlasTile>,
+    dir_x: f32,
+    dir_y: f32,
+}
+
+impl IdleRetileTransition {
+    fn new(
+        rect: IdleRetileRect,
+        seed: u64,
+        dust_duration_ms: u32,
+        flyout_tiles: Vec<IdleRetileFlyoutTile>,
+    ) -> Self {
+        let mut tiles = shuffled_idle_retile_tiles(idle_retile_rect_tiles(rect), seed);
+        let dust_duration_ms = dust_duration_ms.max(1);
+        let mut finish_ms =
+            IDLE_RETILE_FLYOUT_MS.max(IDLE_RETILE_COVER_HOLD_MS.saturating_add(dust_duration_ms));
+
+        let tiles = tiles
+            .drain(..)
+            .enumerate()
+            .map(|(order, (col, row))| {
+                let reveal_order = order.min(IDLE_RETILE_SEQUENTIAL_REVEAL_TILES);
+                let reveal_start_ms = IDLE_RETILE_COVER_HOLD_MS.saturating_add(
+                    (reveal_order as u32).saturating_mul(IDLE_RETILE_REVEAL_STAGGER_MS),
+                );
+                finish_ms = finish_ms.max(reveal_start_ms.saturating_add(dust_duration_ms));
+                IdleRetileTile {
+                    col,
+                    row,
+                    reveal_start_ms,
+                }
+            })
+            .collect();
+
+        Self {
+            rect,
+            tiles,
+            flyout_tiles,
+            started: Instant::now(),
+            finish_ms,
+        }
+    }
+
+    fn cover_reveal_elapsed_ms(
+        &self,
+        tile: IdleRetileTile,
+        elapsed_ms: u32,
+    ) -> Option<Option<u32>> {
+        if elapsed_ms < tile.reveal_start_ms {
+            return Some(None);
+        }
+        let elapsed = elapsed_ms - tile.reveal_start_ms;
+        (elapsed < IDLE_RETILE_REVEAL_MS).then_some(Some(elapsed))
+    }
+
+    fn cover_bob_y(&self, elapsed_ms: u32) -> f32 {
+        let radians = elapsed_ms as f32 / IDLE_RETILE_BOB_PERIOD_MS * std::f32::consts::TAU;
+        radians.sin() * IDLE_RETILE_BOB_AMPLITUDE_PX
+    }
+
+    fn cover_rotation(&self, elapsed_ms: u32) -> f32 {
+        let radians = elapsed_ms as f32 / IDLE_RETILE_ROTATION_PERIOD_MS * std::f32::consts::TAU;
+        radians.sin() * IDLE_RETILE_ROTATION_AMPLITUDE_RAD
+    }
+
+    fn cover_region(&self, tile: IdleRetileTile) -> ImageRegion {
+        idle_retile_cover_region_for_rect(
+            tile.col.saturating_sub(self.rect.col),
+            tile.row.saturating_sub(self.rect.row),
+            self.rect.cols,
+            self.rect.rows,
+        )
+    }
 }
 
 struct EventEditor {
@@ -1346,6 +1423,7 @@ struct IdleWorldUnit {
     position: Point,
     facing_left: bool,
     is_pawn: bool,
+    is_monk: bool,
     state: IdleWorldUnitState,
 }
 
@@ -2073,6 +2151,7 @@ impl Game {
                 let Some((col, row)) = self.world_cell_at(self.mouse.x, self.mouse.y) else {
                     return;
                 };
+                self.world.generated_source = None;
                 self.world.paint(col, row, brush);
                 self.terrain_cache.mark_dirty();
             }
@@ -2083,11 +2162,13 @@ impl Game {
         let Some((col, row)) = self.world_cell_at(self.mouse.x, self.mouse.y) else {
             return;
         };
+        self.world.generated_source = None;
         self.world.clear_foreground(col, row);
         self.terrain_cache.mark_dirty();
     }
 
     fn edit_world_edge(&mut self, edge: WorldEdge) {
+        self.world.generated_source = None;
         if self.ctrl_down {
             if !self.world.remove_edge(edge) {
                 return;
@@ -3558,6 +3639,9 @@ impl IdleWorldViewer {
         let clouds = load_cloud_assets();
         let cloud_instances =
             generate_clouds(DEFAULT_SEED ^ 0x1D1E_2026, &clouds, world.cols, world.rows);
+        let mut retile_cover =
+            ImageAsset::from_png_bytes(IDLE_RETILE_COVER_TEXTURE, IDLE_RETILE_COVER_BYTES);
+        lighten_rgba_toward_white(&mut retile_cover.rgba, IDLE_RETILE_COVER_LIGHTEN_PERCENT);
 
         Self {
             terrain: TextureAtlas::from_png_bytes(TERRAIN_TEXTURE, TERRAIN_BYTES, TERRAIN_TILE_PX),
@@ -3570,6 +3654,8 @@ impl IdleWorldViewer {
             plant_props,
             gold_props,
             rock_props,
+            retile_cover,
+            particle_dust: load_idle_retile_particle_dust(),
             world,
             terrain_cache: TerrainDrawCache::new(),
             cursor_default: ImageAsset::from_png_bytes_cropped(
@@ -3659,6 +3745,7 @@ impl IdleWorldViewer {
             started_at: Instant::now(),
             last_frame: Instant::now(),
             attack_rng: SeededRng::new(DEFAULT_SEED ^ 0xA77A_CAFE_2026),
+            retile_transition: None,
         }
     }
 
@@ -3699,6 +3786,7 @@ impl IdleWorldViewer {
             &self.cursor_dagger,
             &self.right_click_indicator,
             &self.fog,
+            &self.retile_cover,
             &self.regular_paper,
             &self.special_paper,
             &small_bar_base,
@@ -3782,6 +3870,7 @@ impl IdleWorldViewer {
                     .flat_map(|animation| animation.frames.iter()),
             )
             .chain(self.rock_props.iter())
+            .chain(self.particle_dust.frames.iter())
         {
             let rc = adapter.upload_texture_rgba_image(
                 image.texture_id,
@@ -3906,9 +3995,11 @@ impl IdleWorldViewer {
         self.update_idle_environment(dt, elapsed_ms);
         self.update_idle_camera(dt);
         self.update_right_click_indicators();
+        self.update_idle_retile_transition();
         let attack_rng = &mut self.attack_rng;
 
         let mut pawn_clip_changes = Vec::new();
+        let mut monk_retile_requests = Vec::new();
 
         for (index, unit) in self.units.iter_mut().enumerate() {
             match unit.state {
@@ -3930,6 +4021,9 @@ impl IdleWorldViewer {
                         unit.state = if unit.attacks.is_empty() {
                             IdleWorldUnitState::Idle
                         } else {
+                            if unit.is_monk {
+                                monk_retile_requests.push((index, unit.position));
+                            }
                             IdleWorldUnitState::Attacking {
                                 started_ms: elapsed_ms,
                                 attack_index: attack_rng.range_usize(0, unit.attacks.len()),
@@ -4023,6 +4117,109 @@ impl IdleWorldViewer {
         for (index, idle_tag) in pawn_clip_changes {
             self.apply_pawn_idle_tag(index, idle_tag);
         }
+
+        if let Some((index, position)) = monk_retile_requests.into_iter().next() {
+            self.proc_monk_retile_from_attack(index, position, elapsed_ms);
+        }
+    }
+
+    fn update_idle_retile_transition(&mut self) {
+        let Some(transition) = &self.retile_transition else {
+            return;
+        };
+        let elapsed_ms = transition.started.elapsed().as_millis() as u32;
+        if elapsed_ms >= transition.finish_ms {
+            self.retile_transition = None;
+        }
+    }
+
+    fn proc_monk_retile_from_attack(&mut self, index: usize, position: Point, elapsed_ms: u32) {
+        if self.retile_transition.is_some() {
+            return;
+        }
+        if self.units.get(index).is_none_or(|unit| !unit.is_monk) {
+            return;
+        }
+
+        let rect = self.random_monk_retile_rect(position);
+        let seed = DEFAULT_SEED
+            ^ 0x1D1E_2E71_1EAF_2026
+            ^ self.environment_rng.next_u64()
+            ^ ((elapsed_ms as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15));
+        let Some(rect) = self.begin_idle_retile(rect, seed) else {
+            return;
+        };
+
+        if let Some(unit) = self.units.get_mut(index) {
+            let rect_center_x = (rect.col as f32 + rect.cols as f32 * 0.5) * TILE_SIZE;
+            unit.facing_left = rect_center_x < unit.position.x;
+        }
+    }
+
+    fn random_monk_retile_rect(&mut self, position: Point) -> IdleRetileRect {
+        const DIRECTIONS: [(isize, isize); 8] = [
+            (-1, -1),
+            (0, -1),
+            (1, -1),
+            (-1, 0),
+            (1, 0),
+            (-1, 1),
+            (0, 1),
+            (1, 1),
+        ];
+
+        let max_cols = IDLE_MONK_RETILE_MAX_SIZE.min(self.world.cols);
+        let max_rows = IDLE_MONK_RETILE_MAX_SIZE.min(self.world.rows);
+        let min_cols = IDLE_MONK_RETILE_MIN_SIZE.min(max_cols).max(1);
+        let min_rows = IDLE_MONK_RETILE_MIN_SIZE.min(max_rows).max(1);
+        let cols = self.environment_rng.range_usize(min_cols, max_cols + 1);
+        let rows = self.environment_rng.range_usize(min_rows, max_rows + 1);
+        let distance = self.environment_rng.range_usize(
+            IDLE_MONK_RETILE_MIN_DISTANCE_TILES,
+            IDLE_MONK_RETILE_MAX_DISTANCE_TILES + 1,
+        ) as isize;
+        let (dir_x, dir_y) = DIRECTIONS[self.environment_rng.range_usize(0, DIRECTIONS.len())];
+        let monk_col = (position.x / TILE_SIZE).floor() as isize;
+        let monk_row = (position.y / TILE_SIZE).floor() as isize;
+
+        let col = if dir_x < 0 {
+            monk_col - distance - cols as isize + 1
+        } else if dir_x > 0 {
+            monk_col + distance
+        } else {
+            monk_col - cols as isize / 2
+        };
+        let row = if dir_y < 0 {
+            monk_row - distance - rows as isize + 1
+        } else if dir_y > 0 {
+            monk_row + distance
+        } else {
+            monk_row - rows as isize / 2
+        };
+
+        IdleRetileRect {
+            col: col.clamp(0, self.world.cols.saturating_sub(cols) as isize) as usize,
+            row: row.clamp(0, self.world.rows.saturating_sub(rows) as isize) as usize,
+            cols,
+            rows,
+        }
+    }
+
+    fn begin_idle_retile(&mut self, rect: IdleRetileRect, seed: u64) -> Option<IdleRetileRect> {
+        if self.retile_transition.is_some() {
+            return None;
+        }
+        let rect = clamp_idle_retile_rect(rect, self.world.cols, self.world.rows)?;
+        let flyout_tiles = idle_retile_flyout_tiles(&self.world, rect, seed);
+        self.world.replace_with_generated_rect(rect, seed);
+        self.terrain_cache.mark_dirty();
+        self.retile_transition = Some(IdleRetileTransition::new(
+            rect,
+            seed,
+            self.particle_dust.total_duration_ms,
+            flyout_tiles,
+        ));
+        Some(rect)
     }
 
     fn update_idle_environment(&mut self, dt: f32, elapsed_ms: u32) {
@@ -4771,6 +4968,120 @@ impl IdleWorldViewer {
         self.draw_idle_fog(adapter);
     }
 
+    fn draw_idle_retile_flyout(&self, adapter: &mut Adapter) {
+        let Some(transition) = &self.retile_transition else {
+            return;
+        };
+        let elapsed_ms = transition.started.elapsed().as_millis() as u32;
+        if elapsed_ms >= IDLE_RETILE_FLYOUT_MS {
+            return;
+        }
+
+        let t = elapsed_ms as f32 / IDLE_RETILE_FLYOUT_MS as f32;
+        let travel = ease_out_cubic(t) * IDLE_RETILE_FLYOUT_DISTANCE_PX;
+        let alpha = ((1.0 - t).clamp(0.0, 1.0) * 255.0).round() as u8;
+        let mut water = SolidBatch::new(self.window_width, self.window_height);
+        let mut backgrounds = SpriteBatch::new(self.window_width, self.window_height);
+        let mut under_foregrounds = SpriteBatch::new(self.window_width, self.window_height);
+        let mut foregrounds = SpriteBatch::new(self.window_width, self.window_height);
+
+        for tile in &transition.flyout_tiles {
+            let x = tile.col as f32 * TILE_SIZE - self.camera.x + tile.dir_x * travel;
+            let y = tile.row as f32 * TILE_SIZE - self.camera.y + tile.dir_y * travel;
+            let tint = Rgba8::new(255, 255, 255, alpha);
+            match tile.background {
+                BackgroundTile::Water => {
+                    water.rect(x, y, TILE_SIZE, TILE_SIZE, Rgba8::new(71, 171, 169, alpha))
+                }
+                BackgroundTile::Grass => backgrounds.sprite(
+                    &self.terrain,
+                    GRASS_BG_TILE,
+                    x,
+                    y,
+                    TILE_SIZE,
+                    TILE_SIZE,
+                    tint,
+                ),
+            }
+            if let Some(tile) = tile.under_foreground {
+                under_foregrounds.sprite(&self.terrain, tile, x, y, TILE_SIZE, TILE_SIZE, tint);
+            }
+            if let Some(tile) = tile.foreground {
+                foregrounds.sprite(&self.terrain, tile, x, y, TILE_SIZE, TILE_SIZE, tint);
+            }
+        }
+
+        let _ = adapter.set_texture_effect(TextureEffect::World);
+        let _ = adapter.draw_rgb_triangles_no_present(&water.bytes);
+        let _ = adapter.draw_tex_triangles_no_present(self.terrain.texture_id, &backgrounds.bytes);
+        let _ = adapter
+            .draw_tex_triangles_no_present(self.terrain.texture_id, &under_foregrounds.bytes);
+        let _ = adapter.draw_tex_triangles_no_present(self.terrain.texture_id, &foregrounds.bytes);
+        let _ = adapter.set_texture_effect(TextureEffect::Plain);
+    }
+
+    fn draw_idle_retile_cover(&self, adapter: &mut Adapter) {
+        let Some(transition) = &self.retile_transition else {
+            return;
+        };
+        let elapsed_ms = transition.started.elapsed().as_millis() as u32;
+        let mut batch = SpriteBatch::new(self.window_width, self.window_height);
+        let bob_y = transition.cover_bob_y(elapsed_ms);
+        let angle_rad = transition.cover_rotation(elapsed_ms);
+        let origin_x = transition.rect.col as f32 * TILE_SIZE - self.camera.x
+            + transition.rect.cols as f32 * TILE_SIZE * 0.5;
+        let origin_y = transition.rect.row as f32 * TILE_SIZE - self.camera.y
+            + transition.rect.rows as f32 * TILE_SIZE * 0.5
+            + bob_y;
+
+        for tile in &transition.tiles {
+            let Some(reveal_elapsed_ms) = transition.cover_reveal_elapsed_ms(*tile, elapsed_ms)
+            else {
+                continue;
+            };
+            let x = tile.col as f32 * TILE_SIZE - self.camera.x;
+            let y = tile.row as f32 * TILE_SIZE - self.camera.y + bob_y;
+            push_idle_retile_cover_tile(
+                &mut batch,
+                &self.retile_cover,
+                transition.cover_region(*tile),
+                x,
+                y,
+                origin_x,
+                origin_y,
+                angle_rad,
+                reveal_elapsed_ms,
+            );
+        }
+
+        let _ = adapter.set_texture_effect(TextureEffect::Plain);
+        let _ = adapter.draw_tex_triangles_no_present(self.retile_cover.texture_id, &batch.bytes);
+    }
+
+    fn draw_idle_retile_particles(&self, adapter: &mut Adapter) {
+        let Some(transition) = &self.retile_transition else {
+            return;
+        };
+        let elapsed_ms = transition.started.elapsed().as_millis() as u32;
+        let mut batches = BTreeMap::new();
+
+        for tile in &transition.tiles {
+            if elapsed_ms < tile.reveal_start_ms {
+                continue;
+            }
+            let tile_elapsed_ms = elapsed_ms - tile.reveal_start_ms;
+            if tile_elapsed_ms >= self.particle_dust.total_duration_ms {
+                continue;
+            }
+            let Some(image) = self.particle_dust.frame_once(tile_elapsed_ms) else {
+                continue;
+            };
+            self.push_idle_centered_tile_image(&mut batches, image, tile.col, tile.row);
+        }
+
+        self.draw_idle_image_batches(adapter, batches);
+    }
+
     fn draw_idle_water_states(&self, adapter: &mut Adapter, elapsed_ms: u32) {
         let mut batches = BTreeMap::new();
         let start_col = (self.camera.x / TILE_SIZE).floor().max(0.0) as usize;
@@ -5223,6 +5534,26 @@ impl IdleWorldViewer {
             w.max(1.0),
             h.max(1.0),
             tint,
+        );
+    }
+
+    fn push_idle_centered_tile_image(
+        &self,
+        batches: &mut BTreeMap<u32, SpriteBatch>,
+        image: &ImageAsset,
+        col: usize,
+        row: usize,
+    ) {
+        let w = image.width as f32 * BUILDING_SCALE;
+        let h = image.height as f32 * BUILDING_SCALE;
+        self.push_idle_image_batch(
+            batches,
+            image.texture_id,
+            col as f32 * TILE_SIZE - self.camera.x + (TILE_SIZE - w) * 0.5,
+            row as f32 * TILE_SIZE - self.camera.y + (TILE_SIZE - h) * 0.5,
+            w.max(1.0),
+            h.max(1.0),
+            Rgba8::WHITE,
         );
     }
 
@@ -5723,6 +6054,7 @@ fn load_idle_world_units(next_texture_id: &mut u32) -> Vec<IdleWorldUnit> {
                 .iter()
                 .filter_map(|spec| load_unit_walk_clip(*spec, next_texture_id))
                 .collect();
+            let is_monk = idle_spec.label.starts_with("Monk");
             Some(IdleWorldUnit {
                 idle,
                 movement,
@@ -5730,12 +6062,52 @@ fn load_idle_world_units(next_texture_id: &mut u32) -> Vec<IdleWorldUnit> {
                 position: idle_world_unit_foot_position(index, 13),
                 facing_left: false,
                 is_pawn: false,
+                is_monk,
                 state: IdleWorldUnitState::Idle,
             })
         })
         .collect::<Vec<_>>();
     units.extend(load_pawn_idle_world_units(next_texture_id, units.len(), 13));
     units
+}
+
+fn load_idle_retile_particle_dust() -> SpriteAnimation {
+    let set = ase_assets::load_tinted_aseprite_set(
+        PARTICLE_FX_ASEPRITE_PATH,
+        [255, 255, 255, 255],
+        ase_assets::TintMode::Multiply,
+    )
+    .expect("particle fx aseprite should decode");
+
+    let frames = ["particle_dust_1", "Dust 1", "dust_1"]
+        .iter()
+        .find_map(|tag| set.frames_for_tag(tag))
+        .unwrap_or(set.frames.as_slice())
+        .iter()
+        .enumerate()
+        .map(|(index, frame)| {
+            (
+                ImageAsset::from_rgba_cropped(
+                    IDLE_RETILE_PARTICLE_TEXTURE_BASE + index as u32,
+                    frame.width,
+                    frame.height,
+                    frame.rgba.clone(),
+                ),
+                frame.duration_ms.unwrap_or(80).max(1),
+            )
+        })
+        .filter(|(image, _)| image.rgba.chunks_exact(4).any(|pixel| pixel[3] != 0))
+        .collect::<Vec<_>>();
+    let durations_ms = frames
+        .iter()
+        .map(|(_, duration)| *duration)
+        .collect::<Vec<_>>();
+    let total_duration_ms = durations_ms.iter().sum::<u32>().max(1);
+    SpriteAnimation {
+        frames: frames.into_iter().map(|(image, _)| image).collect(),
+        durations_ms,
+        total_duration_ms,
+    }
 }
 
 fn load_unit_clip_from_tags(
@@ -5845,6 +6217,7 @@ fn load_pawn_idle_world_units(
                 position: idle_world_unit_foot_position(start_index + offset, count),
                 facing_left: false,
                 is_pawn: true,
+                is_monk: false,
                 state: IdleWorldUnitState::Idle,
             })
         })
@@ -6460,6 +6833,290 @@ fn generate_clouds(
         .collect()
 }
 
+fn clamp_idle_retile_rect(
+    rect: IdleRetileRect,
+    world_cols: usize,
+    world_rows: usize,
+) -> Option<IdleRetileRect> {
+    if world_cols == 0 || world_rows == 0 || rect.cols == 0 || rect.rows == 0 {
+        return None;
+    }
+    let cols = rect.cols.min(world_cols);
+    let rows = rect.rows.min(world_rows);
+    Some(IdleRetileRect {
+        col: rect.col.min(world_cols.saturating_sub(cols)),
+        row: rect.row.min(world_rows.saturating_sub(rows)),
+        cols,
+        rows,
+    })
+}
+
+fn generated_idle_retile_patch(
+    rect: IdleRetileRect,
+    world_cols: usize,
+    world_rows: usize,
+    seed: u64,
+) -> (TileWorld, usize, usize) {
+    let left_pad = IDLE_RETILE_PATCH_PADDING_TILES.min(rect.col);
+    let top_pad = IDLE_RETILE_PATCH_PADDING_TILES.min(rect.row);
+    let right_pad = IDLE_RETILE_PATCH_PADDING_TILES
+        .min(world_cols.saturating_sub(rect.col.saturating_add(rect.cols)));
+    let bottom_pad = IDLE_RETILE_PATCH_PADDING_TILES
+        .min(world_rows.saturating_sub(rect.row.saturating_add(rect.rows)));
+    let patch_cols = rect.cols.saturating_add(left_pad).saturating_add(right_pad);
+    let patch_rows = rect.rows.saturating_add(top_pad).saturating_add(bottom_pad);
+
+    let mut generator = wldgenerator::RunningGenerator::new(patch_cols, patch_rows, seed);
+    generator.complete_initial_seeds();
+    generator.fill_visual_voids_once(patch_cols.saturating_mul(patch_rows));
+    (
+        generator.world().to_visual_tile_world().tiles,
+        left_pad,
+        top_pad,
+    )
+}
+
+fn idle_retile_rect_tiles(rect: IdleRetileRect) -> Vec<(usize, usize)> {
+    let mut tiles = Vec::with_capacity(rect.cols.saturating_mul(rect.rows));
+    for row in rect.row..rect.row + rect.rows {
+        for col in rect.col..rect.col + rect.cols {
+            tiles.push((col, row));
+        }
+    }
+    tiles
+}
+
+fn reroll_mask_bounding_rect(
+    cols: usize,
+    rows: usize,
+    mask: &[bool],
+    padding: usize,
+) -> Option<IdleRetileRect> {
+    let mut min_col = cols;
+    let mut min_row = rows;
+    let mut max_col = 0;
+    let mut max_row = 0;
+    let mut found = false;
+
+    for row in 0..rows {
+        for col in 0..cols {
+            if !mask.get(row * cols + col).copied().unwrap_or(false) {
+                continue;
+            }
+            found = true;
+            min_col = min_col.min(col);
+            min_row = min_row.min(row);
+            max_col = max_col.max(col);
+            max_row = max_row.max(row);
+        }
+    }
+
+    if !found {
+        return None;
+    }
+    min_col = min_col.saturating_sub(padding);
+    min_row = min_row.saturating_sub(padding);
+    max_col = max_col.saturating_add(padding).min(cols.saturating_sub(1));
+    max_row = max_row.saturating_add(padding).min(rows.saturating_sub(1));
+
+    Some(IdleRetileRect {
+        col: min_col,
+        row: min_row,
+        cols: max_col - min_col + 1,
+        rows: max_row - min_row + 1,
+    })
+}
+
+fn idle_retile_flyout_tiles(
+    world: &TileWorld,
+    rect: IdleRetileRect,
+    seed: u64,
+) -> Vec<IdleRetileFlyoutTile> {
+    let mut rng = SeededRng::new(seed ^ 0x1D1E_F17E_0A17_2026);
+    let mut tiles = Vec::with_capacity(rect.cols.saturating_mul(rect.rows));
+    for row in rect.row..rect.row + rect.rows {
+        for col in rect.col..rect.col + rect.cols {
+            if col >= world.cols || row >= world.rows {
+                continue;
+            }
+            let angle = rng.next_f32() * std::f32::consts::TAU;
+            tiles.push(IdleRetileFlyoutTile {
+                col,
+                row,
+                background: world.background(col, row),
+                under_foreground: world.under_foreground(col, row),
+                foreground: world.foreground(col, row),
+                dir_x: angle.cos(),
+                dir_y: angle.sin(),
+            });
+        }
+    }
+    tiles
+}
+
+fn shuffled_idle_retile_tiles(mut tiles: Vec<(usize, usize)>, seed: u64) -> Vec<(usize, usize)> {
+    let mut rng = SeededRng::new(seed ^ 0x1D1E_51DE_5A1F_2026);
+    for index in (1..tiles.len()).rev() {
+        let swap_index = rng.range_usize(0, index + 1);
+        tiles.swap(index, swap_index);
+    }
+    tiles
+}
+
+fn ease_out_cubic(t: f32) -> f32 {
+    1.0 - (1.0 - t).powi(3)
+}
+
+fn idle_retile_cover_region_for_rect(
+    local_col: usize,
+    local_row: usize,
+    rect_cols: usize,
+    rect_rows: usize,
+) -> ImageRegion {
+    let source_col = idle_retile_cover_slice_index(local_col, rect_cols);
+    let source_row = idle_retile_cover_slice_index(local_row, rect_rows);
+    ImageRegion::new(
+        source_col * IDLE_RETILE_COVER_TILE_PX,
+        source_row * IDLE_RETILE_COVER_TILE_PX,
+        IDLE_RETILE_COVER_TILE_PX,
+        IDLE_RETILE_COVER_TILE_PX,
+    )
+}
+
+fn idle_retile_cover_slice_index(local_index: usize, rect_len: usize) -> u32 {
+    if local_index == 0 {
+        0
+    } else if local_index + 1 >= rect_len {
+        2
+    } else {
+        1
+    }
+}
+
+fn push_idle_retile_cover_tile(
+    batch: &mut SpriteBatch,
+    image: &ImageAsset,
+    region: ImageRegion,
+    x: f32,
+    y: f32,
+    origin_x: f32,
+    origin_y: f32,
+    angle_rad: f32,
+    reveal_elapsed_ms: Option<u32>,
+) {
+    let Some(reveal_elapsed_ms) = reveal_elapsed_ms else {
+        batch.image_region_rotated_around(
+            image,
+            region,
+            x,
+            y,
+            TILE_SIZE,
+            TILE_SIZE,
+            origin_x,
+            origin_y,
+            angle_rad,
+            Rgba8::WHITE,
+        );
+        return;
+    };
+
+    let reveal_px = 1
+        + (IDLE_RETILE_COVER_TILE_PX - 1)
+            .saturating_mul(reveal_elapsed_ms.min(IDLE_RETILE_REVEAL_MS))
+            / IDLE_RETILE_REVEAL_MS.max(1);
+    let left = (IDLE_RETILE_COVER_TILE_PX - reveal_px) / 2;
+    let right = left + reveal_px;
+    let top = (IDLE_RETILE_COVER_TILE_PX - reveal_px) / 2;
+    let bottom = top + reveal_px;
+
+    push_idle_retile_cover_segment(
+        batch,
+        image,
+        region,
+        0,
+        0,
+        IDLE_RETILE_COVER_TILE_PX,
+        top,
+        x,
+        y,
+        origin_x,
+        origin_y,
+        angle_rad,
+    );
+    push_idle_retile_cover_segment(
+        batch,
+        image,
+        region,
+        0,
+        bottom,
+        IDLE_RETILE_COVER_TILE_PX,
+        IDLE_RETILE_COVER_TILE_PX - bottom,
+        x,
+        y,
+        origin_x,
+        origin_y,
+        angle_rad,
+    );
+    push_idle_retile_cover_segment(
+        batch, image, region, 0, top, left, reveal_px, x, y, origin_x, origin_y, angle_rad,
+    );
+    push_idle_retile_cover_segment(
+        batch,
+        image,
+        region,
+        right,
+        top,
+        IDLE_RETILE_COVER_TILE_PX - right,
+        reveal_px,
+        x,
+        y,
+        origin_x,
+        origin_y,
+        angle_rad,
+    );
+}
+
+fn push_idle_retile_cover_segment(
+    batch: &mut SpriteBatch,
+    image: &ImageAsset,
+    region: ImageRegion,
+    source_x: u32,
+    source_y: u32,
+    width: u32,
+    height: u32,
+    tile_x: f32,
+    tile_y: f32,
+    origin_x: f32,
+    origin_y: f32,
+    angle_rad: f32,
+) {
+    if width == 0 || height == 0 {
+        return;
+    }
+    batch.image_region_rotated_around(
+        image,
+        ImageRegion::new(region.x + source_x, region.y + source_y, width, height),
+        tile_x + source_x as f32,
+        tile_y + source_y as f32,
+        width as f32,
+        height as f32,
+        origin_x,
+        origin_y,
+        angle_rad,
+        Rgba8::WHITE,
+    );
+}
+
+fn lighten_rgba_toward_white(rgba: &mut [u8], percent: u8) {
+    let percent = percent.min(100) as u16;
+    for pixel in rgba.chunks_exact_mut(4) {
+        for channel in &mut pixel[..3] {
+            let value = *channel as u16;
+            *channel = (value + ((255 - value) * percent + 50) / 100) as u8;
+        }
+    }
+}
+
 impl FrameProducer for UnitWalkViewer {
     fn resize(&mut self, width: u32, height: u32) {
         self.resize_view(width, height);
@@ -6706,6 +7363,9 @@ impl FrameProducer for IdleWorldViewer {
         let elapsed_ms = self.started_at.elapsed().as_millis() as u32;
         self.draw_world_background(adapter, elapsed_ms);
         self.draw_saved_world_assets(adapter);
+        self.draw_idle_retile_flyout(adapter);
+        self.draw_idle_retile_cover(adapter);
+        self.draw_idle_retile_particles(adapter);
         self.draw_idle_building_preview(adapter);
 
         for draw in self.unit_draws(elapsed_ms) {
@@ -6947,6 +7607,8 @@ impl FrameProducer for EventEditor {
 struct TileWorld {
     cols: usize,
     rows: usize,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    generated_source: Option<wldgenerator::GeneratedWorld>,
     backgrounds: Vec<BackgroundTile>,
     water_states: Vec<WaterState>,
     #[serde(default)]
@@ -6976,6 +7638,7 @@ impl TileWorld {
         Self {
             cols,
             rows,
+            generated_source: None,
             backgrounds: vec![BackgroundTile::Grass; cols * rows],
             water_states: vec![WaterState::Nothing; cols * rows],
             under_foregrounds: vec![None; cols * rows],
@@ -7137,6 +7800,149 @@ impl TileWorld {
         self.props.sort_by_key(|prop| (prop.y2, prop.x2));
     }
 
+    fn replace_with_generated_rect(&mut self, rect: IdleRetileRect, seed: u64) {
+        let Some(rect) = clamp_idle_retile_rect(rect, self.cols, self.rows) else {
+            return;
+        };
+        if self.replace_with_generated_source_rect(rect, seed) {
+            return;
+        }
+
+        let (patch, patch_col_offset, patch_row_offset) =
+            generated_idle_retile_patch(rect, self.cols, self.rows, seed);
+        let inner_x2 = patch_col_offset * BUILDING_GRID_DIVISIONS;
+        let inner_y2 = patch_row_offset * BUILDING_GRID_DIVISIONS;
+        let inner_w2 = rect.cols * BUILDING_GRID_DIVISIONS;
+        let inner_h2 = rect.rows * BUILDING_GRID_DIVISIONS;
+        let rect2 = (
+            (rect.col * BUILDING_GRID_DIVISIONS) as isize,
+            (rect.row * BUILDING_GRID_DIVISIONS) as isize,
+            rect.cols * BUILDING_GRID_DIVISIONS,
+            rect.rows * BUILDING_GRID_DIVISIONS,
+        );
+        self.remove_objects_overlapping(rect2);
+
+        for local_row in 0..rect.rows {
+            for local_col in 0..rect.cols {
+                let target = self.index(rect.col + local_col, rect.row + local_row);
+                let source =
+                    patch.index(local_col + patch_col_offset, local_row + patch_row_offset);
+                self.backgrounds[target] = patch.backgrounds[source];
+                self.water_states[target] = patch.water_states[source];
+                self.under_foregrounds[target] = patch.under_foregrounds[source];
+                self.foregrounds[target] = patch.foregrounds[source];
+                self.fog[target] = patch.fog[source];
+            }
+        }
+
+        let offset_x2 = (rect.col * BUILDING_GRID_DIVISIONS) as isize - inner_x2 as isize;
+        let offset_y2 = (rect.row * BUILDING_GRID_DIVISIONS) as isize - inner_y2 as isize;
+        for building in patch.buildings {
+            let footprint = building_footprint_rect2(building);
+            if !rects_overlap(
+                (inner_x2 as isize, inner_y2 as isize, inner_w2, inner_h2),
+                footprint,
+            ) {
+                continue;
+            }
+            self.buildings.push(PlacedBuilding {
+                kind: building.kind,
+                x2: building.x2 + offset_x2,
+                y2: building.y2 + offset_y2,
+            });
+        }
+        for prop in patch.props {
+            let footprint = prop_footprint_rect2(prop);
+            if !rects_overlap(
+                (inner_x2 as isize, inner_y2 as isize, inner_w2, inner_h2),
+                footprint,
+            ) {
+                continue;
+            }
+            let Ok(x2) = usize::try_from(prop.x2 as isize + offset_x2) else {
+                continue;
+            };
+            let Ok(y2) = usize::try_from(prop.y2 as isize + offset_y2) else {
+                continue;
+            };
+            if x2 < self.cols * BUILDING_GRID_DIVISIONS && y2 < self.rows * BUILDING_GRID_DIVISIONS
+            {
+                self.props.push(PlacedProp {
+                    kind: prop.kind,
+                    x2,
+                    y2,
+                });
+            }
+        }
+        self.sort_props();
+    }
+
+    fn replace_with_generated_source_rect(&mut self, rect: IdleRetileRect, seed: u64) -> bool {
+        let Some(mut generated) = self.generated_source.clone() else {
+            return false;
+        };
+        if generated.cols != self.cols
+            || generated.rows != self.rows
+            || generated.validate().is_err()
+        {
+            self.generated_source = None;
+            return false;
+        }
+
+        let reroll_mask =
+            generated.feature_reroll_mask_for_rect(rect.col, rect.row, rect.cols, rect.rows);
+        if !reroll_mask.iter().any(|&reroll| reroll) {
+            return false;
+        }
+        generated.reroll_features_in_mask(&reroll_mask, seed);
+        let mut pending_generator = wldgenerator::RunningGenerator::from_world(generated, seed);
+        pending_generator.fill_visual_voids_once(self.cols.saturating_mul(self.rows));
+        let generated = pending_generator.world().clone();
+        let visual_world = generated.to_visual_tile_world();
+        let copy_rect =
+            reroll_mask_bounding_rect(self.cols, self.rows, &reroll_mask, 1).unwrap_or(rect);
+
+        self.copy_visual_rect_from_generated_world(&visual_world.tiles, copy_rect);
+        self.generated_source = Some(generated);
+        true
+    }
+
+    fn copy_visual_rect_from_generated_world(&mut self, source: &TileWorld, rect: IdleRetileRect) {
+        let Some(rect) = clamp_idle_retile_rect(rect, self.cols, self.rows) else {
+            return;
+        };
+        let rect2 = (
+            (rect.col * BUILDING_GRID_DIVISIONS) as isize,
+            (rect.row * BUILDING_GRID_DIVISIONS) as isize,
+            rect.cols * BUILDING_GRID_DIVISIONS,
+            rect.rows * BUILDING_GRID_DIVISIONS,
+        );
+        self.remove_objects_overlapping(rect2);
+
+        for row in rect.row..rect.row + rect.rows {
+            for col in rect.col..rect.col + rect.cols {
+                let target = self.index(col, row);
+                let source_index = source.index(col, row);
+                self.backgrounds[target] = source.backgrounds[source_index];
+                self.water_states[target] = source.water_states[source_index];
+                self.under_foregrounds[target] = source.under_foregrounds[source_index];
+                self.foregrounds[target] = source.foregrounds[source_index];
+            }
+        }
+
+        for building in &source.buildings {
+            if rects_overlap(rect2, building_footprint_rect2(*building)) {
+                self.buildings.push(*building);
+            }
+        }
+        for prop in &source.props {
+            if rects_overlap(rect2, prop_footprint_rect2(*prop)) {
+                self.props.push(*prop);
+            }
+        }
+        self.sort_props();
+    }
+
     fn save_to_path(&self, path: impl AsRef<Path>) -> Result<(), String> {
         let json = serde_json::to_string_pretty(self)
             .map_err(|error| format!("world json encode failed: {error}"))?;
@@ -7172,6 +7978,12 @@ impl TileWorld {
                 return Err(format!("{name} length {len} does not match {cells} cells"));
             }
         }
+        if let Some(generated) = &self.generated_source {
+            if generated.cols != self.cols || generated.rows != self.rows {
+                return Err("generated source dimensions do not match visual world".to_string());
+            }
+            generated.validate()?;
+        }
         Ok(())
     }
 
@@ -7184,6 +7996,13 @@ impl TileWorld {
             if *state == WaterState::Animation {
                 *state = WaterState::Nothing;
             }
+        }
+        if self.generated_source.as_ref().is_some_and(|generated| {
+            generated.cols != self.cols
+                || generated.rows != self.rows
+                || generated.validate().is_err()
+        }) {
+            self.generated_source = None;
         }
         self.sort_props();
     }
@@ -8440,5 +9259,103 @@ mod idle_world_tests {
             viewer.units[unit_index].state,
             IdleWorldUnitState::Moving { running: false, .. }
         ));
+    }
+
+    #[test]
+    fn idle_retile_patch_supports_minimum_rect_size() {
+        let mut world = TileWorld::new(4, 4);
+        world.replace_with_generated_rect(
+            IdleRetileRect {
+                col: 1,
+                row: 1,
+                cols: IDLE_MONK_RETILE_MIN_SIZE,
+                rows: IDLE_MONK_RETILE_MIN_SIZE,
+            },
+            DEFAULT_SEED,
+        );
+
+        assert_eq!(world.cols, 4);
+        assert_eq!(world.rows, 4);
+        assert_eq!(world.backgrounds.len(), 16);
+        assert_eq!(world.foregrounds.len(), 16);
+    }
+
+    #[test]
+    fn generated_source_round_trips_with_tile_world_json() {
+        let mut generator = wldgenerator::RunningGenerator::new(12, 12, DEFAULT_SEED);
+        generator.complete_initial_seeds();
+        generator.fill_visual_voids_once(12 * 12);
+        let mut world = generator.world().to_visual_tile_world().tiles;
+        world.generated_source = Some(generator.world().clone());
+
+        let json = serde_json::to_string(&world).expect("tile world should serialize");
+        assert!(json.contains("generated_source"));
+        let mut decoded =
+            serde_json::from_str::<TileWorld>(&json).expect("tile world should deserialize");
+        decoded.normalize_loaded_state();
+        decoded
+            .validate()
+            .expect("generated metadata should validate");
+        assert!(decoded.generated_source.is_some());
+    }
+
+    #[test]
+    fn generated_source_drives_idle_retile_replacement() {
+        let mut generator = wldgenerator::RunningGenerator::new(18, 18, DEFAULT_SEED);
+        generator.complete_initial_seeds();
+        generator.fill_visual_voids_once(18 * 18);
+        let mut world = generator.world().to_visual_tile_world().tiles;
+        world.generated_source = Some(generator.world().clone());
+
+        world.replace_with_generated_rect(
+            IdleRetileRect {
+                col: 4,
+                row: 4,
+                cols: 5,
+                rows: 5,
+            },
+            DEFAULT_SEED ^ 0xA11E_2026,
+        );
+
+        assert!(world.generated_source.is_some());
+        world
+            .validate()
+            .expect("retiled generated source should stay valid");
+    }
+
+    #[test]
+    fn monk_retile_procs_when_move_arrival_starts_attack() {
+        let mut viewer = IdleWorldViewer::new();
+        let monk_index = 2;
+        let target = viewer.units[monk_index].position;
+
+        viewer.update_units();
+        assert!(viewer.retile_transition.is_none());
+
+        viewer.selected_units = vec![monk_index];
+        viewer.issue_move_order(target);
+        viewer.update_units();
+
+        assert!(viewer.retile_transition.is_some());
+        assert!(matches!(
+            viewer.units[monk_index].state,
+            IdleWorldUnitState::Attacking { .. }
+        ));
+    }
+
+    #[test]
+    fn monk_retile_has_no_cooldown_between_attack_procs() {
+        let mut viewer = IdleWorldViewer::new();
+        let monk_index = 2;
+        let target = viewer.units[monk_index].position;
+
+        for _ in 0..2 {
+            viewer.retile_transition = None;
+            viewer.units[monk_index].state = IdleWorldUnitState::Idle;
+            viewer.selected_units = vec![monk_index];
+            viewer.issue_move_order(target);
+            viewer.update_units();
+            assert!(viewer.retile_transition.is_some());
+        }
     }
 }
