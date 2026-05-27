@@ -1,13 +1,14 @@
 use super::cli::{self, Lobby};
 use super::*;
+use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::sync::{
     Arc,
     atomic::{AtomicBool, Ordering},
-    mpsc::{self, Receiver, TryRecvError},
+    mpsc::{self, Receiver, RecvTimeoutError, Sender, TryRecvError},
 };
 use std::thread;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 const WOOD_TABLE_TEXTURE: u32 = 15;
 const WOOD_TABLE_BYTES: &[u8] =
@@ -70,6 +71,7 @@ const LOBBY_CARD_GAP: f32 = 20.0;
 const LOBBY_CARD_TILE: f32 = 64.0;
 const LOBBY_CARD_PAD_X: f32 = 26.0;
 const LOBBY_ARROW_SIZE: f32 = 34.0;
+const PAPER_TITLE_Y: f32 = 32.0;
 const TOP_BUTTON_COUNT: usize = 6;
 const TOP_BUTTON_SIZE: f32 = 42.0;
 const TOP_BUTTON_GAP: f32 = 8.0;
@@ -90,6 +92,14 @@ const LOADSCREEN_BACKGROUND_SCALE: f32 = 2.0 / 3.0;
 const LOADSCREEN_BACKGROUND_RESEED_SECS: u64 = 10;
 const LOADSCREEN_BACKGROUND_PAN_X: f32 = 14.0;
 const LOADSCREEN_BACKGROUND_PAN_Y: f32 = 5.0;
+const LOADSCREEN_TABLE_DRAW_SCALE: f32 = 0.90;
+const CHAT_SERVER_BASE: &str = "https://trueos.eu:3";
+const CHAT_ROOM: &str = "lobby";
+const CHAT_USER: &str = "Loadscreen";
+const CHAT_POLL_MS: u64 = 1_000;
+const CHAT_CONNECT_TIMEOUT_MS: u64 = 2_000;
+const CHAT_MESSAGE_LIMIT: usize = 96;
+const CHAT_INPUT_LIMIT: usize = 160;
 const LOBBY_TEXT: Rgba8 = Rgba8 {
     r: 235,
     g: 226,
@@ -132,6 +142,12 @@ pub(super) struct LoadScreen {
     lobby_error: Option<String>,
     lobby_rx: Option<Receiver<Result<Vec<Lobby>, String>>>,
     lobby_request_kind: LobbyRequestKind,
+    chat_tx: Sender<ChatCommand>,
+    chat_rx: Receiver<ChatClientEvent>,
+    chat_messages: Vec<ChatMessage>,
+    chat_error: Option<String>,
+    chat_input: String,
+    chat_focused: bool,
     world_editor_request: Arc<AtomicBool>,
     world_viewer_request: Arc<AtomicBool>,
     unit_walk_viewer_request: Arc<AtomicBool>,
@@ -152,6 +168,33 @@ enum LobbyRequestKind {
     CreateGame,
 }
 
+#[derive(Clone, Debug, Deserialize)]
+struct ChatMessage {
+    id: u64,
+    user: String,
+    text: String,
+}
+
+#[derive(Deserialize)]
+struct ChatMessagesResponse {
+    messages: Vec<ChatMessage>,
+}
+
+#[derive(Serialize)]
+struct ChatPost<'a> {
+    user: &'a str,
+    text: &'a str,
+}
+
+enum ChatCommand {
+    Send(String),
+}
+
+enum ChatClientEvent {
+    Messages(Vec<ChatMessage>),
+    Error(String),
+}
+
 impl LoadScreen {
     pub(super) fn new(
         world_editor_request: Arc<AtomicBool>,
@@ -163,6 +206,7 @@ impl LoadScreen {
         exit_request: Arc<AtomicBool>,
     ) -> Self {
         let lobby_rx = spawn_lobby_refresh();
+        let (chat_tx, chat_rx) = spawn_chat_client();
         let terrain = TextureAtlas::from_png_bytes(TERRAIN_TEXTURE, TERRAIN_BYTES, TERRAIN_TILE_PX);
         let water_visuals = load_water_visual_assets();
         let plant_props = load_plant_prop_assets();
@@ -264,6 +308,12 @@ impl LoadScreen {
             lobby_error: None,
             lobby_rx: Some(lobby_rx),
             lobby_request_kind: LobbyRequestKind::Refresh,
+            chat_tx,
+            chat_rx,
+            chat_messages: Vec::new(),
+            chat_error: None,
+            chat_input: String::new(),
+            chat_focused: false,
             world_editor_request,
             world_viewer_request,
             unit_walk_viewer_request,
@@ -455,6 +505,39 @@ impl LoadScreen {
         }
     }
 
+    fn poll_chat(&mut self) {
+        loop {
+            match self.chat_rx.try_recv() {
+                Ok(ChatClientEvent::Messages(messages)) => {
+                    self.chat_error = None;
+                    for message in messages {
+                        if self
+                            .chat_messages
+                            .iter()
+                            .any(|existing| existing.id == message.id)
+                        {
+                            continue;
+                        }
+                        self.chat_messages.push(message);
+                    }
+                    self.chat_messages.sort_by_key(|message| message.id);
+                    let overflow = self.chat_messages.len().saturating_sub(CHAT_MESSAGE_LIMIT);
+                    if overflow > 0 {
+                        self.chat_messages.drain(0..overflow);
+                    }
+                }
+                Ok(ChatClientEvent::Error(error)) => {
+                    self.chat_error = Some(error);
+                }
+                Err(TryRecvError::Empty) => break,
+                Err(TryRecvError::Disconnected) => {
+                    self.chat_error = Some("chat stopped".to_owned());
+                    break;
+                }
+            }
+        }
+    }
+
     fn start_create_game(&mut self) {
         if self.lobby_rx.is_some() {
             return;
@@ -463,6 +546,32 @@ impl LoadScreen {
         self.lobby_error = None;
         self.lobby_rx = Some(spawn_lobby_create_game());
         self.lobby_request_kind = LobbyRequestKind::CreateGame;
+    }
+
+    fn send_chat_input(&mut self) {
+        let text = self.chat_input.trim();
+        if text.is_empty() {
+            return;
+        }
+
+        let text = text.chars().take(CHAT_INPUT_LIMIT).collect::<String>();
+        if self.chat_tx.send(ChatCommand::Send(text)).is_ok() {
+            self.chat_input.clear();
+            self.chat_error = None;
+        } else {
+            self.chat_error = Some("chat stopped".to_owned());
+        }
+    }
+
+    fn push_chat_text(&mut self, text: &str) {
+        for ch in text.chars() {
+            if self.chat_input.chars().count() >= CHAT_INPUT_LIMIT {
+                break;
+            }
+            if is_chat_input_char(ch) {
+                self.chat_input.push(ch);
+            }
+        }
     }
 
     fn update_background_scene(&mut self) {
@@ -950,6 +1059,134 @@ impl LoadScreen {
         let _ = adapter.draw_rgb_triangles_no_present(&status.solid_bytes);
     }
 
+    fn draw_chat(&self, adapter: &mut Adapter, table: TableRect, input: TableRect) {
+        let panel = chat_panel_rect(table);
+        let mut paper = ts_ui::UiBatch::new(self.window_width, self.window_height);
+        paper.paper_panel(
+            panel.x,
+            panel.y,
+            panel.w,
+            panel.h,
+            LOBBY_CARD_TILE,
+            Rgba8::WHITE,
+        );
+        let _ = adapter
+            .draw_tex_triangles_no_present(self.special_paper.texture_id, &paper.texture_bytes);
+
+        let mut solid = SolidBatch::new(self.window_width, self.window_height);
+        solid.rect(
+            input.x,
+            input.y,
+            input.w,
+            input.h,
+            Rgba8::new(52, 64, 78, 236),
+        );
+        outline_rect(
+            &mut solid,
+            input.x,
+            input.y,
+            input.w,
+            input.h,
+            2.0,
+            if self.chat_focused {
+                Rgba8::new(235, 226, 206, 255)
+            } else {
+                Rgba8::new(121, 138, 150, 255)
+            },
+        );
+        let _ = adapter.draw_rgb_triangles_no_present(&solid.bytes);
+
+        let mut labels = ts_ui::UiBatch::new(self.window_width, self.window_height);
+        draw_centered_text(
+            &mut labels,
+            "CHAT",
+            panel.x,
+            panel.y + PAPER_TITLE_Y,
+            panel.w,
+            2.0,
+            LOBBY_TEXT,
+        );
+
+        let message_x = panel.x + 18.0;
+        let message_y = panel.y + 62.0;
+        let message_w = panel.w - 36.0;
+        let line_h = 15.0;
+        let max_lines = ((panel.y + panel.h - message_y - 32.0) / line_h)
+            .floor()
+            .max(1.0) as usize;
+        if self.chat_messages.is_empty() {
+            let status = if self.chat_error.is_some() {
+                "CHAT OFFLINE"
+            } else {
+                "NO MESSAGES"
+            };
+            draw_centered_text(
+                &mut labels,
+                status,
+                panel.x,
+                message_y + line_h,
+                panel.w,
+                1.0,
+                LOBBY_MUTED_TEXT,
+            );
+        } else {
+            let first = self.chat_messages.len().saturating_sub(max_lines);
+            for (index, message) in self.chat_messages[first..].iter().enumerate() {
+                let text = format!("{}: {}", message.user, message.text);
+                labels.text(
+                    &fit_chat_text(&text, message_w, 1.0),
+                    message_x,
+                    message_y + index as f32 * line_h,
+                    1.0,
+                    LOBBY_TEXT,
+                );
+            }
+        }
+
+        if let Some(error) = &self.chat_error {
+            labels.text(
+                &fit_chat_text(error, panel.w - 30.0, 1.0),
+                panel.x + 15.0,
+                panel.y + panel.h - 22.0,
+                1.0,
+                Rgba8::new(222, 145, 128, 255),
+            );
+        }
+
+        let input_text = if self.chat_input.is_empty() && !self.chat_focused {
+            "MESSAGE".to_owned()
+        } else {
+            self.chat_input.clone()
+        };
+        labels.text(
+            &fit_chat_input_text(&input_text, input.w - 24.0, 1.0),
+            input.x + 12.0,
+            input.y + 11.0,
+            1.0,
+            if self.chat_input.is_empty() && !self.chat_focused {
+                LOBBY_MUTED_TEXT
+            } else {
+                LOBBY_TEXT
+            },
+        );
+
+        if self.chat_focused {
+            let cursor_x = input.x
+                + 12.0
+                + ts_ui::text_width(&fit_chat_input_text(&input_text, input.w - 24.0, 1.0), 1.0)
+                + 3.0;
+            labels.text(
+                "-",
+                cursor_x.min(input.x + input.w - 14.0),
+                input.y + 11.0,
+                1.0,
+                LOBBY_TEXT,
+            );
+        }
+
+        let _ = adapter.draw_rgb_triangles_no_present(&labels.solid_bytes);
+    }
+
     fn draw_frame(&self, adapter: &mut Adapter) {
         let window_w = self.window_width as f32;
         let window_h = self.window_height as f32;
@@ -1050,6 +1287,7 @@ impl LoadScreen {
         );
         let close = close_button_rect(self.window_width as f32);
         let create_game = create_game_button_rect(table_layout[0]);
+        let chat_input = chat_input_rect(table_layout[1], table_layout[2]);
         if inside_rect(point.x, point.y, close.x, close.y, close.w, close.h)
             || inside_rect(
                 point.x,
@@ -1058,6 +1296,14 @@ impl LoadScreen {
                 create_game.y,
                 create_game.w,
                 create_game.h,
+            )
+            || inside_rect(
+                point.x,
+                point.y,
+                chat_input.x,
+                chat_input.y,
+                chat_input.w,
+                chat_input.h,
             )
             || top_table_button_at(point, table_layout[1]).is_some()
         {
@@ -1137,6 +1383,7 @@ impl LoadScreen {
             close.w,
             close.h,
         ) {
+            self.chat_focused = false;
             self.exit_request.store(true, Ordering::Relaxed);
             return;
         }
@@ -1150,10 +1397,25 @@ impl LoadScreen {
             create_game.w,
             create_game.h,
         ) {
+            self.chat_focused = false;
             self.start_create_game();
             return;
         }
 
+        let chat_input = chat_input_rect(table_layout[1], table_layout[2]);
+        if inside_rect(
+            self.mouse.x,
+            self.mouse.y,
+            chat_input.x,
+            chat_input.y,
+            chat_input.w,
+            chat_input.h,
+        ) {
+            self.chat_focused = true;
+            return;
+        }
+
+        self.chat_focused = false;
         match top_table_button_at(self.mouse, table_layout[1]) {
             Some(TOP_WORLD_BUTTON_INDEX) => {
                 self.world_editor_request.store(true, Ordering::Relaxed);
@@ -1187,6 +1449,10 @@ impl FrameProducer for LoadScreen {
         false
     }
 
+    fn window_resizable(&self) -> bool {
+        false
+    }
+
     fn window_drag_region(&self) -> bool {
         self.window_drag_region_at(self.mouse)
     }
@@ -1208,12 +1474,32 @@ impl FrameProducer for LoadScreen {
                 button: InputMouseButton::Left,
                 state: InputButtonState::Released,
             } => {}
+            InputEvent::TextInput(text) if self.chat_focused => self.push_chat_text(&text),
+            InputEvent::DigitPressed(digit) if self.chat_focused => {
+                self.push_chat_text(&digit.to_string());
+            }
+            InputEvent::KeyPressed(key) if self.chat_focused => match key {
+                InputKey::U => self.push_chat_text("u"),
+                InputKey::J => self.push_chat_text("j"),
+                InputKey::H => self.push_chat_text("h"),
+                InputKey::K => self.push_chat_text("k"),
+            },
+            InputEvent::BackspacePressed if self.chat_focused => {
+                self.chat_input.pop();
+            }
+            InputEvent::EnterPressed if self.chat_focused => {
+                self.send_chat_input();
+            }
+            InputEvent::EscapePressed if self.chat_focused => {
+                self.chat_focused = false;
+            }
             _ => {}
         }
     }
 
     fn build_frame(&mut self, adapter: &mut Adapter) {
         self.poll_lobbies();
+        self.poll_chat();
         self.update_background_scene();
         self.upload_assets(adapter);
 
@@ -1229,6 +1515,7 @@ impl FrameProducer for LoadScreen {
         self.draw_frame(adapter);
         let mut tables = SpriteBatch::new(self.window_width, self.window_height);
         for table in table_layout {
+            let table = scaled_table_rect(table, LOADSCREEN_TABLE_DRAW_SCALE);
             draw_wood_table(
                 &mut tables,
                 &self.wood_table,
@@ -1244,6 +1531,11 @@ impl FrameProducer for LoadScreen {
         self.draw_lobby_cards(adapter, large_table);
         self.draw_create_game_button(adapter, large_table);
         self.draw_top_table_buttons(adapter, table_layout[1]);
+        self.draw_chat(
+            adapter,
+            table_layout[2],
+            chat_input_rect(table_layout[1], table_layout[2]),
+        );
         self.draw_close_button(adapter);
 
         self.draw_cursor(adapter);
@@ -1283,9 +1575,9 @@ fn draw_status_card_text(
     let title = fit_lobby_text(title, w - LOBBY_CARD_PAD_X * 2.0, 2.0);
     let server = fit_lobby_text(server, w - LOBBY_CARD_PAD_X * 2.0, 1.0);
     let detail = fit_lobby_text(detail, w - LOBBY_CARD_PAD_X * 2.0, 1.0);
-    draw_centered_text(batch, &title, x, y + 26.0, w, 2.0, LOBBY_TEXT);
-    draw_centered_text(batch, &server, x, y + 64.0, w, 1.0, LOBBY_MUTED_TEXT);
-    draw_centered_text(batch, &detail, x, y + 88.0, w, 1.0, LOBBY_MUTED_TEXT);
+    draw_centered_text(batch, &title, x, y + PAPER_TITLE_Y, w, 2.0, LOBBY_TEXT);
+    draw_centered_text(batch, &server, x, y + 70.0, w, 1.0, LOBBY_MUTED_TEXT);
+    draw_centered_text(batch, &detail, x, y + 94.0, w, 1.0, LOBBY_MUTED_TEXT);
 }
 
 fn draw_centered_text(
@@ -1298,7 +1590,13 @@ fn draw_centered_text(
     color: Rgba8,
 ) {
     let text_w = ts_ui::text_width(text, scale);
-    batch.text(text, x + (w - text_w).max(0.0) * 0.5, y, scale, color);
+    batch.text(
+        text,
+        (x + (w - text_w).max(0.0) * 0.5).round(),
+        y.round(),
+        scale,
+        color,
+    );
 }
 
 fn top_table_button_origin(table: TableRect) -> (f32, f32) {
@@ -1339,6 +1637,28 @@ fn create_game_button_rect(table: TableRect) -> TableRect {
     }
 }
 
+fn chat_panel_rect(table: TableRect) -> TableRect {
+    TableRect {
+        x: table.x + 44.0,
+        y: table.y + 48.0,
+        w: (table.w - 88.0).max(120.0),
+        h: (table.h - 96.0).max(120.0),
+    }
+}
+
+fn chat_input_rect(top_table: TableRect, bottom_table: TableRect) -> TableRect {
+    let w = (bottom_table.w - 124.0).clamp(180.0, 360.0);
+    let h = 34.0;
+    let gap_top = top_table.y + top_table.h;
+    let gap_h = (bottom_table.y - gap_top).max(h);
+    TableRect {
+        x: bottom_table.x + (bottom_table.w - w) * 0.5,
+        y: gap_top + (gap_h - h) * 0.5,
+        w,
+        h,
+    }
+}
+
 fn close_button_rect(window_w: f32) -> TableRect {
     let half_button = CLOSE_BUTTON_SIZE * 0.5;
     TableRect {
@@ -1367,6 +1687,84 @@ fn spawn_lobby_request(
     lobby_rx
 }
 
+fn spawn_chat_client() -> (Sender<ChatCommand>, Receiver<ChatClientEvent>) {
+    let (command_tx, command_rx) = mpsc::channel();
+    let (event_tx, event_rx) = mpsc::channel();
+    thread::spawn(move || {
+        let mut since = 0;
+        let mut last_poll = Instant::now() - Duration::from_millis(CHAT_POLL_MS);
+        loop {
+            match command_rx.recv_timeout(Duration::from_millis(100)) {
+                Ok(ChatCommand::Send(text)) => match post_chat_message(&text) {
+                    Ok(()) => {
+                        last_poll = Instant::now() - Duration::from_millis(CHAT_POLL_MS);
+                    }
+                    Err(error) => {
+                        let _ = event_tx.send(ChatClientEvent::Error(error));
+                    }
+                },
+                Err(RecvTimeoutError::Timeout) => {}
+                Err(RecvTimeoutError::Disconnected) => break,
+            }
+
+            if last_poll.elapsed() < Duration::from_millis(CHAT_POLL_MS) {
+                continue;
+            }
+            last_poll = Instant::now();
+
+            match fetch_chat_messages(since) {
+                Ok(messages) => {
+                    if let Some(max_id) = messages.iter().map(|message| message.id).max() {
+                        since = since.max(max_id);
+                    }
+                    if !messages.is_empty() {
+                        let _ = event_tx.send(ChatClientEvent::Messages(messages));
+                    }
+                }
+                Err(error) => {
+                    let _ = event_tx.send(ChatClientEvent::Error(error));
+                }
+            }
+        }
+    });
+    (command_tx, event_rx)
+}
+
+fn fetch_chat_messages(since: u64) -> Result<Vec<ChatMessage>, String> {
+    let url = format!("{CHAT_SERVER_BASE}/api/rooms/{CHAT_ROOM}/messages?since={since}");
+    let response = chat_http_client()?
+        .get(url)
+        .send()
+        .map_err(|error| format!("chat get: {error}"))?
+        .error_for_status()
+        .map_err(|error| format!("chat status: {error}"))?
+        .json::<ChatMessagesResponse>()
+        .map_err(|error| format!("chat parse failed: {error}"))?;
+    Ok(response.messages)
+}
+
+fn post_chat_message(text: &str) -> Result<(), String> {
+    let url = format!("{CHAT_SERVER_BASE}/api/rooms/{CHAT_ROOM}/messages");
+    chat_http_client()?
+        .post(url)
+        .json(&ChatPost {
+            user: CHAT_USER,
+            text,
+        })
+        .send()
+        .map_err(|error| format!("chat post: {error}"))?
+        .error_for_status()
+        .map_err(|error| format!("chat status: {error}"))?;
+    Ok(())
+}
+
+fn chat_http_client() -> Result<reqwest::blocking::Client, String> {
+    reqwest::blocking::Client::builder()
+        .timeout(Duration::from_millis(CHAT_CONNECT_TIMEOUT_MS))
+        .build()
+        .map_err(|error| format!("chat client: {error}"))
+}
+
 fn generate_loadscreen_background_scene(
     scene_index: u64,
     cloud_assets: &[ImageAsset],
@@ -1386,6 +1784,17 @@ fn offset_table_layout(mut layout: [TableRect; 3], offset: Point) -> [TableRect;
         table.y += offset.y;
     }
     layout
+}
+
+fn scaled_table_rect(table: TableRect, scale: f32) -> TableRect {
+    let w = table.w * scale;
+    let h = table.h * scale;
+    TableRect {
+        x: table.x + (table.w - w) * 0.5,
+        y: table.y + (table.h - h) * 0.5,
+        w,
+        h,
+    }
 }
 
 fn fit_lobby_text(text: &str, max_w: f32, scale: f32) -> String {
@@ -1409,6 +1818,52 @@ fn fit_lobby_text(text: &str, max_w: f32, scale: f32) -> String {
     let mut shortened: String = cleaned.chars().take(take_count).collect();
     shortened.push('-');
     shortened
+}
+
+fn fit_chat_text(text: &str, max_w: f32, scale: f32) -> String {
+    let max_chars = (max_w / (6.0 * scale)).floor().max(1.0) as usize;
+    let cleaned = sanitize_chat_display_text(text);
+    if cleaned.chars().count() <= max_chars {
+        return cleaned;
+    }
+
+    let take_count = max_chars.saturating_sub(1);
+    let mut shortened: String = cleaned.chars().take(take_count).collect();
+    shortened.push('-');
+    shortened
+}
+
+fn fit_chat_input_text(text: &str, max_w: f32, scale: f32) -> String {
+    let max_chars = (max_w / (6.0 * scale)).floor().max(1.0) as usize;
+    let cleaned = sanitize_chat_display_text(text);
+    let char_count = cleaned.chars().count();
+    if char_count <= max_chars {
+        return cleaned;
+    }
+
+    cleaned.chars().skip(char_count - max_chars).collect()
+}
+
+fn sanitize_chat_display_text(text: &str) -> String {
+    text.chars()
+        .map(|ch| match ch.to_ascii_uppercase() {
+            'A'..='I' | 'K'..='P' | 'R'..='W' | 'Y' | '0'..='9' | '-' | '+' | ':' => {
+                ch.to_ascii_uppercase()
+            }
+            _ => ' ',
+        })
+        .collect::<String>()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn is_chat_input_char(ch: char) -> bool {
+    ch.is_ascii_alphanumeric()
+        || matches!(
+            ch,
+            ' ' | '-' | '+' | ':' | '.' | ',' | '!' | '?' | '\'' | '"' | '/'
+        )
 }
 
 fn loadscreen_table_layout(width: f32, height: f32) -> [TableRect; 3] {

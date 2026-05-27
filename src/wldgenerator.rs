@@ -170,8 +170,11 @@ pub(super) struct GeneratedWorld {
     pub(super) cols: usize,
     pub(super) rows: usize,
     pub(super) cells: Vec<GeneratedCell>,
+    #[serde(default)]
     pub(super) platforms: Vec<GeneratedPlatform>,
+    #[serde(default)]
     pub(super) terrain_crosses: Vec<GeneratedTerrainCross>,
+    #[serde(default)]
     pub(super) wall_tiles: Vec<GeneratedWallTile>,
 }
 
@@ -1758,7 +1761,7 @@ fn try_push_generated_bush(world: &mut TileWorld, kind: PlantKind, x2: usize, y2
         return false;
     }
 
-    world.props.push(PlacedProp { kind: prop, x2, y2 });
+    world.props.push(PlacedProp::new(prop, x2, y2));
     true
 }
 

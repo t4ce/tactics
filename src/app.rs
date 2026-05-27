@@ -6,9 +6,11 @@ use adapterlibgfx::vertex::{Rgba8, TexVertex};
 use adapterlibgfx::window::{
     FrameProducer, InputButtonState, InputEvent, InputKey, InputMouseButton,
 };
-use std::collections::{BTreeMap, HashSet};
+use std::cmp::Ordering;
+use std::collections::{BTreeMap, BinaryHeap, HashSet};
 use std::fs;
 use std::path::Path;
+use std::sync::Arc;
 use std::time::Instant;
 
 #[path = "cli.rs"]
@@ -212,7 +214,14 @@ const IDLE_WORLD_VIRTUAL_HEIGHT: f32 = WINDOW_HEIGHT as f32;
 const IDLE_WORLD_MIN_SELECTION_DRAG_PX: f32 = 5.0;
 const IDLE_WORLD_UNIT_SPEED: f32 = 150.0;
 const IDLE_WORLD_RUN_COMMAND_DISTANCE_PX: f32 = 5.0;
+const IDLE_PATH_CARDINAL_COST: u32 = 10;
+const IDLE_PATH_DIAGONAL_COST: u32 = 14;
+const IDLE_PATH_WATER_PENALTY: u32 = 80;
+const IDLE_PATH_OBJECT_PENALTY: u32 = 120;
+const IDLE_PATH_CLIFF_PENALTY: u32 = 160;
 const IDLE_RESOURCE_WORK_MS: u32 = 5_000;
+const IDLE_TREE_MIN_HP: u8 = 5;
+const IDLE_TREE_MAX_HP: u8 = 7;
 const IDLE_WORLD_HOUSE_PREVIEW_TEXTURE_BASE: u32 = 8700;
 const IDLE_HOTKEY_ENTRIES: [ts_ui::HotkeyEntry<'static>; 10] = [
     ts_ui::HotkeyEntry {
@@ -471,6 +480,13 @@ enum Brush {
 }
 
 impl Brush {
+    fn invalidates_generated_source(self) -> bool {
+        matches!(
+            self,
+            Self::Background(_) | Self::Foreground(_) | Self::Ramp(_)
+        )
+    }
+
     fn preview_tile(self) -> Option<AtlasTile> {
         match self {
             Self::Background(BackgroundTile::Grass) => Some(GRASS_BG_TILE),
@@ -765,6 +781,16 @@ impl PlantKind {
         matches!(self, Self::Tree1 | Self::Tree2 | Self::Tree3 | Self::Tree4)
     }
 
+    fn stump(self) -> Option<Self> {
+        match self {
+            Self::Tree1 => Some(Self::Stump1),
+            Self::Tree2 => Some(Self::Stump2),
+            Self::Tree3 => Some(Self::Stump3),
+            Self::Tree4 => Some(Self::Stump4),
+            _ => None,
+        }
+    }
+
     fn is_big_bush(self) -> bool {
         matches!(self, Self::Bush1 | Self::Bush3)
     }
@@ -1050,6 +1076,7 @@ struct IdleWorldViewer {
     cloud_instances: Vec<CloudInstance>,
     units: Vec<IdleWorldUnit>,
     pawn_templates: Vec<PawnClipTemplate>,
+    path_worker: IdlePathWorker,
     selected_units: Vec<usize>,
     right_click_indicators: Vec<RightClickIndicator>,
     selection_start: Option<Point>,
@@ -1149,6 +1176,18 @@ struct IdleResourceTask {
     house: Option<Point>,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum IdleWorldEvent {
+    ResourceCollected(IdleResourceCollected),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct IdleResourceCollected {
+    kind: IdleResourceKind,
+    position: Point,
+    depleted: bool,
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum IdleResourcePhase {
     ToolPickup,
@@ -1160,6 +1199,73 @@ enum IdleResourcePhase {
 struct IdleWorldMoveCommand {
     target: Point,
     selected_units: Vec<usize>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct IdlePathCell {
+    col: usize,
+    row: usize,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct IdlePathQueueEntry {
+    estimated_total: u32,
+    cost: u32,
+    index: usize,
+}
+
+impl Ord for IdlePathQueueEntry {
+    fn cmp(&self, other: &Self) -> Ordering {
+        other
+            .estimated_total
+            .cmp(&self.estimated_total)
+            .then_with(|| other.cost.cmp(&self.cost))
+            .then_with(|| other.index.cmp(&self.index))
+    }
+}
+
+impl PartialOrd for IdlePathQueueEntry {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum IdlePathIntent {
+    Move {
+        running: bool,
+        started_ms: u32,
+    },
+    Resource {
+        task: IdleResourceTask,
+        phase: IdleResourcePhase,
+        running: bool,
+        started_ms: u32,
+    },
+}
+
+#[derive(Clone, Debug)]
+struct IdlePathRequest {
+    unit_index: usize,
+    generation: u64,
+    from: Point,
+    to: Point,
+    intent: IdlePathIntent,
+}
+
+#[derive(Clone, Debug)]
+struct IdlePathResult {
+    unit_index: usize,
+    generation: u64,
+    to: Point,
+    path: Vec<Point>,
+    intent: IdlePathIntent,
+}
+
+struct IdlePathWorker {
+    runtime: tokio::runtime::Runtime,
+    tx: tokio::sync::mpsc::UnboundedSender<IdlePathResult>,
+    rx: tokio::sync::mpsc::UnboundedReceiver<IdlePathResult>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1176,6 +1282,40 @@ struct IdleRetileTransition {
     flyout_tiles: Vec<IdleRetileFlyoutTile>,
     started: Instant,
     finish_ms: u32,
+}
+
+impl IdlePathWorker {
+    fn new() -> Self {
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(1)
+            .thread_name("idle-a-star")
+            .build()
+            .expect("idle path worker runtime should build");
+        let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+        Self { runtime, tx, rx }
+    }
+
+    fn request(&self, world: Arc<TileWorld>, request: IdlePathRequest) {
+        let tx = self.tx.clone();
+        self.runtime.spawn(async move {
+            let path = world.idle_move_path(request.from, request.to);
+            let _ = tx.send(IdlePathResult {
+                unit_index: request.unit_index,
+                generation: request.generation,
+                to: request.to,
+                path,
+                intent: request.intent,
+            });
+        });
+    }
+
+    fn drain_results(&mut self) -> Vec<IdlePathResult> {
+        let mut results = Vec::new();
+        while let Ok(result) = self.rx.try_recv() {
+            results.push(result);
+        }
+        results
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1421,6 +1561,8 @@ struct IdleWorldUnit {
     movement: UnitWalkClip,
     attacks: Vec<UnitWalkClip>,
     position: Point,
+    movement_path: Vec<Point>,
+    path_generation: u64,
     facing_left: bool,
     is_pawn: bool,
     is_monk: bool,
@@ -1671,7 +1813,7 @@ impl TerrainDrawCache {
 }
 
 fn initial_editor_world() -> TileWorld {
-    match TileWorld::load_from_path(WORLD_SAVE_PATH) {
+    match TileWorld::load_for_editor_from_path(WORLD_SAVE_PATH) {
         Ok(world) => {
             eprintln!("loaded world from {WORLD_SAVE_PATH}");
             world
@@ -2151,7 +2293,11 @@ impl Game {
                 let Some((col, row)) = self.world_cell_at(self.mouse.x, self.mouse.y) else {
                     return;
                 };
-                self.world.generated_source = None;
+                if brush.invalidates_generated_source()
+                    || (brush == Brush::ClearForeground && self.world.has_tile_overlay(col, row))
+                {
+                    self.world.generated_source = None;
+                }
                 self.world.paint(col, row, brush);
                 self.terrain_cache.mark_dirty();
             }
@@ -2162,7 +2308,9 @@ impl Game {
         let Some((col, row)) = self.world_cell_at(self.mouse.x, self.mouse.y) else {
             return;
         };
-        self.world.generated_source = None;
+        if self.world.has_tile_overlay(col, row) {
+            self.world.generated_source = None;
+        }
         self.world.clear_foreground(col, row);
         self.terrain_cache.mark_dirty();
     }
@@ -3459,7 +3607,7 @@ impl Game {
     }
 
     fn load_world(&mut self) {
-        match TileWorld::load_from_path(WORLD_SAVE_PATH) {
+        match TileWorld::load_for_editor_from_path(WORLD_SAVE_PATH) {
             Ok(world) => {
                 self.world = world;
                 self.fog_drag_start = None;
@@ -3723,6 +3871,7 @@ impl IdleWorldViewer {
             cloud_instances,
             units,
             pawn_templates,
+            path_worker: IdlePathWorker::new(),
             selected_units: Vec::new(),
             right_click_indicators: Vec::new(),
             selection_start: None,
@@ -3987,6 +4136,94 @@ impl IdleWorldViewer {
         }
     }
 
+    fn next_unit_path_generation(unit: &mut IdleWorldUnit) -> u64 {
+        unit.path_generation = unit.path_generation.wrapping_add(1);
+        unit.path_generation
+    }
+
+    fn queue_idle_path_requests(&mut self, requests: Vec<IdlePathRequest>) {
+        if requests.is_empty() {
+            return;
+        }
+
+        let world = Arc::new(self.world.clone());
+        for request in requests {
+            self.path_worker.request(Arc::clone(&world), request);
+        }
+    }
+
+    fn apply_idle_path_results(&mut self) {
+        for result in self.path_worker.drain_results() {
+            let Some(unit) = self.units.get_mut(result.unit_index) else {
+                continue;
+            };
+            if unit.path_generation != result.generation {
+                continue;
+            }
+
+            let mut path = result.path;
+            while path
+                .first()
+                .is_some_and(|&target| point_distance(unit.position, target) <= 1.0)
+            {
+                path.remove(0);
+            }
+            let target = if path.is_empty() {
+                result.to
+            } else {
+                path.remove(0)
+            };
+
+            match (result.intent, unit.state) {
+                (
+                    IdlePathIntent::Move {
+                        running,
+                        started_ms,
+                    },
+                    IdleWorldUnitState::Moving { .. },
+                ) => {
+                    unit.movement_path = path;
+                    let dx = target.x - unit.position.x;
+                    if dx.abs() > 0.5 {
+                        unit.facing_left = dx < 0.0;
+                    }
+                    unit.state = IdleWorldUnitState::Moving {
+                        target,
+                        running,
+                        started_ms,
+                    };
+                }
+                (
+                    IdlePathIntent::Resource {
+                        task,
+                        phase,
+                        running,
+                        started_ms,
+                    },
+                    IdleWorldUnitState::ResourceMoving {
+                        task: current_task,
+                        phase: current_phase,
+                        ..
+                    },
+                ) if task == current_task && phase == current_phase => {
+                    unit.movement_path = path;
+                    let dx = target.x - unit.position.x;
+                    if dx.abs() > 0.5 {
+                        unit.facing_left = dx < 0.0;
+                    }
+                    unit.state = IdleWorldUnitState::ResourceMoving {
+                        task,
+                        phase,
+                        target,
+                        running,
+                        started_ms,
+                    };
+                }
+                _ => {}
+            }
+        }
+    }
+
     fn update_units(&mut self) {
         let now = Instant::now();
         let dt = now.duration_since(self.last_frame).as_secs_f32().min(0.05);
@@ -3996,16 +4233,21 @@ impl IdleWorldViewer {
         self.update_idle_camera(dt);
         self.update_right_click_indicators();
         self.update_idle_retile_transition();
+        self.apply_idle_path_results();
         let attack_rng = &mut self.attack_rng;
 
         let mut pawn_clip_changes = Vec::new();
         let mut monk_retile_requests = Vec::new();
+        let mut path_requests = Vec::new();
+        let mut idle_world_events = Vec::new();
 
         for (index, unit) in self.units.iter_mut().enumerate() {
             match unit.state {
                 IdleWorldUnitState::Idle => {}
                 IdleWorldUnitState::Moving {
-                    target, running, ..
+                    target,
+                    running,
+                    started_ms,
                 } => {
                     let dx = target.x - unit.position.x;
                     let dy = target.y - unit.position.y;
@@ -4018,6 +4260,15 @@ impl IdleWorldViewer {
                     let step = speed * dt;
                     if distance <= step.max(1.0) {
                         unit.position = target;
+                        if !unit.movement_path.is_empty() {
+                            let target = unit.movement_path.remove(0);
+                            unit.state = IdleWorldUnitState::Moving {
+                                target,
+                                running,
+                                started_ms,
+                            };
+                            continue;
+                        }
                         unit.state = if unit.attacks.is_empty() {
                             IdleWorldUnitState::Idle
                         } else {
@@ -4050,7 +4301,7 @@ impl IdleWorldViewer {
                     phase,
                     target,
                     running,
-                    ..
+                    started_ms,
                 } => {
                     let dx = target.x - unit.position.x;
                     let dy = target.y - unit.position.y;
@@ -4063,29 +4314,88 @@ impl IdleWorldViewer {
                     let step = speed * dt;
                     if distance <= step.max(1.0) {
                         unit.position = target;
+                        if !unit.movement_path.is_empty() {
+                            let target = unit.movement_path.remove(0);
+                            unit.state = IdleWorldUnitState::ResourceMoving {
+                                task,
+                                phase,
+                                target,
+                                running,
+                                started_ms,
+                            };
+                            continue;
+                        }
                         unit.state = match phase {
                             IdleResourcePhase::ToolPickup => {
                                 pawn_clip_changes.push((index, task.kind.tool_idle_tag()));
-                                IdleWorldUnitState::ResourceMoving {
-                                    task,
-                                    phase: IdleResourcePhase::ToResource,
-                                    target: task.resource,
-                                    running: true,
-                                    started_ms: elapsed_ms,
+                                if !self.world.idle_resource_available(task) {
+                                    Self::next_unit_path_generation(unit);
+                                    unit.movement_path.clear();
+                                    IdleWorldUnitState::Idle
+                                } else {
+                                    let generation = Self::next_unit_path_generation(unit);
+                                    unit.movement_path.clear();
+                                    path_requests.push(IdlePathRequest {
+                                        unit_index: index,
+                                        generation,
+                                        from: unit.position,
+                                        to: task.resource,
+                                        intent: IdlePathIntent::Resource {
+                                            task,
+                                            phase: IdleResourcePhase::ToResource,
+                                            running: true,
+                                            started_ms: elapsed_ms,
+                                        },
+                                    });
+                                    IdleWorldUnitState::ResourceMoving {
+                                        task,
+                                        phase: IdleResourcePhase::ToResource,
+                                        target: task.resource,
+                                        running: true,
+                                        started_ms: elapsed_ms,
+                                    }
                                 }
                             }
-                            IdleResourcePhase::ToResource => IdleWorldUnitState::ResourceWorking {
-                                task,
-                                started_ms: elapsed_ms,
-                            },
+                            IdleResourcePhase::ToResource => {
+                                Self::next_unit_path_generation(unit);
+                                unit.movement_path.clear();
+                                if self.world.idle_resource_available(task) {
+                                    IdleWorldUnitState::ResourceWorking {
+                                        task,
+                                        started_ms: elapsed_ms,
+                                    }
+                                } else {
+                                    IdleWorldUnitState::Idle
+                                }
+                            }
                             IdleResourcePhase::ToHouse => {
                                 pawn_clip_changes.push((index, task.kind.tool_idle_tag()));
-                                IdleWorldUnitState::ResourceMoving {
-                                    task,
-                                    phase: IdleResourcePhase::ToResource,
-                                    target: task.resource,
-                                    running: true,
-                                    started_ms: elapsed_ms,
+                                if !self.world.idle_resource_available(task) {
+                                    Self::next_unit_path_generation(unit);
+                                    unit.movement_path.clear();
+                                    IdleWorldUnitState::Idle
+                                } else {
+                                    let generation = Self::next_unit_path_generation(unit);
+                                    unit.movement_path.clear();
+                                    path_requests.push(IdlePathRequest {
+                                        unit_index: index,
+                                        generation,
+                                        from: unit.position,
+                                        to: task.resource,
+                                        intent: IdlePathIntent::Resource {
+                                            task,
+                                            phase: IdleResourcePhase::ToResource,
+                                            running: true,
+                                            started_ms: elapsed_ms,
+                                        },
+                                    });
+                                    IdleWorldUnitState::ResourceMoving {
+                                        task,
+                                        phase: IdleResourcePhase::ToResource,
+                                        target: task.resource,
+                                        running: true,
+                                        started_ms: elapsed_ms,
+                                    }
                                 }
                             }
                         };
@@ -4097,29 +4407,76 @@ impl IdleWorldViewer {
                 }
                 IdleWorldUnitState::ResourceWorking { task, started_ms } => {
                     if elapsed_ms.saturating_sub(started_ms) >= IDLE_RESOURCE_WORK_MS {
-                        pawn_clip_changes.push((index, task.kind.carrying_idle_tag()));
-                        unit.state = if let Some(house) = task.house {
-                            IdleWorldUnitState::ResourceMoving {
-                                task,
-                                phase: IdleResourcePhase::ToHouse,
-                                target: house,
-                                running: false,
-                                started_ms: elapsed_ms,
-                            }
+                        if let Some(event) = self.world.collect_idle_resource(task) {
+                            idle_world_events.push(event);
+                            pawn_clip_changes.push((index, task.kind.carrying_idle_tag()));
+                            unit.state = if let Some(house) = task.house {
+                                let generation = Self::next_unit_path_generation(unit);
+                                unit.movement_path.clear();
+                                path_requests.push(IdlePathRequest {
+                                    unit_index: index,
+                                    generation,
+                                    from: unit.position,
+                                    to: house,
+                                    intent: IdlePathIntent::Resource {
+                                        task,
+                                        phase: IdleResourcePhase::ToHouse,
+                                        running: false,
+                                        started_ms: elapsed_ms,
+                                    },
+                                });
+                                IdleWorldUnitState::ResourceMoving {
+                                    task,
+                                    phase: IdleResourcePhase::ToHouse,
+                                    target: house,
+                                    running: false,
+                                    started_ms: elapsed_ms,
+                                }
+                            } else {
+                                Self::next_unit_path_generation(unit);
+                                unit.movement_path.clear();
+                                IdleWorldUnitState::Idle
+                            };
                         } else {
-                            IdleWorldUnitState::Idle
+                            Self::next_unit_path_generation(unit);
+                            unit.movement_path.clear();
+                            unit.state = IdleWorldUnitState::Idle;
                         };
                     }
                 }
             }
         }
 
+        self.handle_idle_world_events(&idle_world_events);
+
         for (index, idle_tag) in pawn_clip_changes {
             self.apply_pawn_idle_tag(index, idle_tag);
         }
 
+        self.queue_idle_path_requests(path_requests);
+
         if let Some((index, position)) = monk_retile_requests.into_iter().next() {
             self.proc_monk_retile_from_attack(index, position, elapsed_ms);
+        }
+    }
+
+    fn handle_idle_world_events(&mut self, events: &[IdleWorldEvent]) {
+        for event in events {
+            let IdleWorldEvent::ResourceCollected(collected) = *event;
+            if collected.kind == IdleResourceKind::Wood && collected.depleted {
+                self.plant_animations.retain(|animation| {
+                    let position = idle_resource_prop_target_in_world(
+                        self.world.cols,
+                        self.world.rows,
+                        PlacedProp::new(
+                            PropKind::Plant(animation.kind),
+                            animation.col,
+                            animation.row,
+                        ),
+                    );
+                    point_distance(position, collected.position) > 1.0
+                });
+            }
         }
     }
 
@@ -4584,6 +4941,7 @@ impl IdleWorldViewer {
         center.x /= count;
         center.y /= count;
 
+        let mut path_requests = Vec::new();
         for &index in &selected_units {
             if let Some(unit) = self.units.get_mut(index) {
                 let target = Point {
@@ -4594,6 +4952,18 @@ impl IdleWorldViewer {
                 if dx.abs() > 0.5 {
                     unit.facing_left = dx < 0.0;
                 }
+                let generation = Self::next_unit_path_generation(unit);
+                unit.movement_path.clear();
+                path_requests.push(IdlePathRequest {
+                    unit_index: index,
+                    generation,
+                    from: unit.position,
+                    to: target,
+                    intent: IdlePathIntent::Move {
+                        running,
+                        started_ms,
+                    },
+                });
                 unit.state = IdleWorldUnitState::Moving {
                     target,
                     running,
@@ -4601,6 +4971,7 @@ impl IdleWorldViewer {
                 };
             }
         }
+        self.queue_idle_path_requests(path_requests);
 
         self.last_move_command = Some(IdleWorldMoveCommand {
             target,
@@ -4616,6 +4987,7 @@ impl IdleWorldViewer {
         let selected_units = self.selected_units.clone();
         let started_ms = self.elapsed_ms();
         let mut pawn_clip_changes = Vec::new();
+        let mut path_requests = Vec::new();
 
         for index in selected_units {
             let Some(unit) = self.units.get(index) else {
@@ -4639,12 +5011,27 @@ impl IdleWorldViewer {
                 if dx.abs() > 0.5 {
                     unit.facing_left = dx < 0.0;
                 }
-                unit.state = IdleWorldUnitState::ResourceMoving {
-                    task: IdleResourceTask {
-                        kind: resource_target.kind,
-                        resource: resource_target.position,
-                        house,
+                let generation = Self::next_unit_path_generation(unit);
+                unit.movement_path.clear();
+                let task = IdleResourceTask {
+                    kind: resource_target.kind,
+                    resource: resource_target.position,
+                    house,
+                };
+                path_requests.push(IdlePathRequest {
+                    unit_index: index,
+                    generation,
+                    from: unit.position,
+                    to: target,
+                    intent: IdlePathIntent::Resource {
+                        task,
+                        phase,
+                        running: true,
+                        started_ms,
                     },
+                });
+                unit.state = IdleWorldUnitState::ResourceMoving {
+                    task,
                     phase,
                     target,
                     running: true,
@@ -4656,6 +5043,7 @@ impl IdleWorldViewer {
         for (index, idle_tag) in pawn_clip_changes {
             self.apply_pawn_idle_tag(index, idle_tag);
         }
+        self.queue_idle_path_requests(path_requests);
         self.last_move_command = None;
     }
 
@@ -4792,7 +5180,7 @@ impl IdleWorldViewer {
             if image_point_has_alpha(image, self.mouse, rect) {
                 return Some(IdleResourceTarget {
                     kind,
-                    position: Self::idle_resource_prop_target(*prop),
+                    position: self.idle_resource_prop_target(*prop),
                 });
             }
         }
@@ -4839,11 +5227,8 @@ impl IdleWorldViewer {
         }
     }
 
-    fn idle_resource_prop_target(prop: PlacedProp) -> Point {
-        Point {
-            x: half_grid_to_px(prop.x2) + TILE_SIZE * 0.5,
-            y: half_grid_to_px(prop.y2 + BUILDING_GRID_DIVISIONS),
-        }
+    fn idle_resource_prop_target(&self, prop: PlacedProp) -> Point {
+        self.world.idle_resource_prop_target(prop)
     }
 
     fn idle_bottom_aligned_image_half_rect(
@@ -6060,6 +6445,8 @@ fn load_idle_world_units(next_texture_id: &mut u32) -> Vec<IdleWorldUnit> {
                 movement,
                 attacks,
                 position: idle_world_unit_foot_position(index, 13),
+                movement_path: Vec::new(),
+                path_generation: 0,
                 facing_left: false,
                 is_pawn: false,
                 is_monk,
@@ -6215,6 +6602,8 @@ fn load_pawn_idle_world_units(
                 movement,
                 attacks,
                 position: idle_world_unit_foot_position(start_index + offset, count),
+                movement_path: Vec::new(),
+                path_generation: 0,
                 facing_left: false,
                 is_pawn: true,
                 is_monk: false,
@@ -7631,6 +8020,30 @@ struct PlacedProp {
     kind: PropKind,
     x2: usize,
     y2: usize,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    hp: Option<u8>,
+}
+
+impl PlacedProp {
+    fn new(kind: PropKind, x2: usize, y2: usize) -> Self {
+        Self {
+            kind,
+            x2,
+            y2,
+            hp: None,
+        }
+    }
+
+    fn effective_tree_hp(self) -> Option<u8> {
+        let PropKind::Plant(kind) = self.kind else {
+            return None;
+        };
+        kind.is_tree().then(|| {
+            self.hp
+                .unwrap_or_else(|| initial_tree_hp(kind, self.x2, self.y2))
+                .clamp(1, IDLE_TREE_MAX_HP)
+        })
+    }
 }
 
 impl TileWorld {
@@ -7800,6 +8213,84 @@ impl TileWorld {
         self.props.sort_by_key(|prop| (prop.y2, prop.x2));
     }
 
+    fn normalize_prop_hp(&mut self) {
+        for prop in &mut self.props {
+            match prop.kind {
+                PropKind::Plant(kind) if kind.is_tree() => {
+                    if prop.hp == Some(0) {
+                        if let Some(stump) = kind.stump() {
+                            prop.kind = PropKind::Plant(stump);
+                            prop.hp = None;
+                        }
+                    } else if let Some(hp) = prop.hp {
+                        prop.hp = Some(hp.clamp(1, IDLE_TREE_MAX_HP));
+                    }
+                }
+                _ => prop.hp = None,
+            }
+        }
+    }
+
+    fn idle_resource_available(&self, task: IdleResourceTask) -> bool {
+        match task.kind {
+            IdleResourceKind::Wood => self.idle_tree_prop_index_at_target(task.resource).is_some(),
+            IdleResourceKind::Meat => true,
+            IdleResourceKind::Ore => self.props.iter().any(|prop| {
+                matches!(prop.kind, PropKind::Gold(_) | PropKind::Rock(_))
+                    && point_distance(self.idle_resource_prop_target(*prop), task.resource) <= 1.0
+            }),
+        }
+    }
+
+    fn collect_idle_resource(&mut self, task: IdleResourceTask) -> Option<IdleWorldEvent> {
+        match task.kind {
+            IdleResourceKind::Wood => self.collect_idle_tree_resource(task.resource),
+            IdleResourceKind::Meat | IdleResourceKind::Ore => self
+                .idle_resource_available(task)
+                .then_some(IdleWorldEvent::ResourceCollected(IdleResourceCollected {
+                    kind: task.kind,
+                    position: task.resource,
+                    depleted: false,
+                })),
+        }
+    }
+
+    fn collect_idle_tree_resource(&mut self, target: Point) -> Option<IdleWorldEvent> {
+        let index = self.idle_tree_prop_index_at_target(target)?;
+        let prop = self.props[index];
+        let PropKind::Plant(kind) = prop.kind else {
+            return None;
+        };
+        let hp = prop.effective_tree_hp()?;
+        let next_hp = hp.saturating_sub(1);
+        let depleted = next_hp == 0;
+
+        if depleted {
+            let stump = kind.stump()?;
+            self.props[index].kind = PropKind::Plant(stump);
+            self.props[index].hp = None;
+        } else {
+            self.props[index].hp = Some(next_hp);
+        }
+
+        Some(IdleWorldEvent::ResourceCollected(IdleResourceCollected {
+            kind: IdleResourceKind::Wood,
+            position: target,
+            depleted,
+        }))
+    }
+
+    fn idle_tree_prop_index_at_target(&self, target: Point) -> Option<usize> {
+        self.props.iter().position(|prop| {
+            matches!(prop.kind, PropKind::Plant(kind) if kind.is_tree())
+                && point_distance(self.idle_resource_prop_target(*prop), target) <= 1.0
+        })
+    }
+
+    fn idle_resource_prop_target(&self, prop: PlacedProp) -> Point {
+        idle_resource_prop_target_in_world(self.cols, self.rows, prop)
+    }
+
     fn replace_with_generated_rect(&mut self, rect: IdleRetileRect, seed: u64) {
         let Some(rect) = clamp_idle_retile_rect(rect, self.cols, self.rows) else {
             return;
@@ -7867,11 +8358,7 @@ impl TileWorld {
             };
             if x2 < self.cols * BUILDING_GRID_DIVISIONS && y2 < self.rows * BUILDING_GRID_DIVISIONS
             {
-                self.props.push(PlacedProp {
-                    kind: prop.kind,
-                    x2,
-                    y2,
-                });
+                self.props.push(PlacedProp::new(prop.kind, x2, y2));
             }
         }
         self.sort_props();
@@ -7959,6 +8446,13 @@ impl TileWorld {
         Ok(world)
     }
 
+    fn load_for_editor_from_path(path: impl AsRef<Path>) -> Result<Self, String> {
+        let mut world = Self::load_from_path(path)?;
+        world.align_visuals_with_generated_source();
+        world.validate()?;
+        Ok(world)
+    }
+
     fn validate(&self) -> Result<(), String> {
         if self.cols == 0 || self.rows == 0 {
             return Err("world dimensions must be non-zero".to_string());
@@ -8004,7 +8498,29 @@ impl TileWorld {
         }) {
             self.generated_source = None;
         }
+        self.normalize_prop_hp();
         self.sort_props();
+    }
+
+    fn align_visuals_with_generated_source(&mut self) -> bool {
+        let Some(generated) = self.generated_source.clone() else {
+            return false;
+        };
+        if generated.cols != self.cols
+            || generated.rows != self.rows
+            || generated.validate().is_err()
+        {
+            self.generated_source = None;
+            return false;
+        }
+
+        let visual = generated.to_visual_tile_world().tiles;
+        self.backgrounds = visual.backgrounds;
+        self.water_states = visual.water_states;
+        self.under_foregrounds = visual.under_foregrounds;
+        self.foregrounds = visual.foregrounds;
+        self.sort_props();
+        true
     }
 
     fn background(&self, col: usize, row: usize) -> BackgroundTile {
@@ -8053,6 +8569,11 @@ impl TileWorld {
         self.under_foregrounds[self.index(col, row)]
     }
 
+    fn has_tile_overlay(&self, col: usize, row: usize) -> bool {
+        let index = self.index(col, row);
+        self.under_foregrounds[index].is_some() || self.foregrounds[index].is_some()
+    }
+
     fn render_background(&self, col: usize, row: usize) -> BackgroundTile {
         let background = self.background(col, row);
         if self
@@ -8063,6 +8584,208 @@ impl TileWorld {
         } else {
             background
         }
+    }
+
+    fn idle_move_path(&self, from: Point, to: Point) -> Vec<Point> {
+        let Some(start) = self.idle_path_cell_at(from) else {
+            return vec![to];
+        };
+        let Some(goal) = self.idle_path_cell_at(to) else {
+            return vec![to];
+        };
+        let Some(cells) = self.idle_astar_cells(start, goal) else {
+            return vec![to];
+        };
+        if cells.len() <= 1 {
+            return vec![to];
+        }
+
+        let mut points = Vec::with_capacity(cells.len() - 1);
+        for (index, cell) in cells.iter().skip(1).enumerate() {
+            if index + 2 == cells.len() {
+                points.push(to);
+            } else {
+                points.push(Self::idle_path_cell_center(*cell));
+            }
+        }
+        points
+    }
+
+    fn idle_astar_cells(
+        &self,
+        start: IdlePathCell,
+        goal: IdlePathCell,
+    ) -> Option<Vec<IdlePathCell>> {
+        let cells = self.cols.checked_mul(self.rows)?;
+        let start_index = self.index(start.col, start.row);
+        let goal_index = self.index(goal.col, goal.row);
+        let mut costs = vec![u32::MAX; cells];
+        let mut came_from = vec![None; cells];
+        let mut frontier = BinaryHeap::new();
+
+        costs[start_index] = 0;
+        frontier.push(IdlePathQueueEntry {
+            estimated_total: Self::idle_path_heuristic(start, goal),
+            cost: 0,
+            index: start_index,
+        });
+
+        while let Some(entry) = frontier.pop() {
+            if entry.cost != costs[entry.index] {
+                continue;
+            }
+            if entry.index == goal_index {
+                return Some(self.reconstruct_idle_path(start_index, goal_index, &came_from));
+            }
+
+            let current = self.idle_path_cell_for_index(entry.index);
+            for row_delta in -1..=1 {
+                for col_delta in -1..=1 {
+                    if col_delta == 0 && row_delta == 0 {
+                        continue;
+                    }
+                    let Some(next) = self.idle_neighbor_cell(current, col_delta, row_delta) else {
+                        continue;
+                    };
+                    let next_index = self.index(next.col, next.row);
+                    let step_cost = if col_delta != 0 && row_delta != 0 {
+                        IDLE_PATH_DIAGONAL_COST
+                    } else {
+                        IDLE_PATH_CARDINAL_COST
+                    };
+                    let next_cost = entry
+                        .cost
+                        .saturating_add(step_cost)
+                        .saturating_add(self.idle_path_cell_penalty(next));
+                    if next_cost >= costs[next_index] {
+                        continue;
+                    }
+
+                    costs[next_index] = next_cost;
+                    came_from[next_index] = Some(entry.index);
+                    frontier.push(IdlePathQueueEntry {
+                        estimated_total: next_cost + Self::idle_path_heuristic(next, goal),
+                        cost: next_cost,
+                        index: next_index,
+                    });
+                }
+            }
+        }
+
+        None
+    }
+
+    fn reconstruct_idle_path(
+        &self,
+        start_index: usize,
+        goal_index: usize,
+        came_from: &[Option<usize>],
+    ) -> Vec<IdlePathCell> {
+        let mut current = goal_index;
+        let mut path = vec![self.idle_path_cell_for_index(current)];
+        while current != start_index {
+            let Some(previous) = came_from[current] else {
+                break;
+            };
+            current = previous;
+            path.push(self.idle_path_cell_for_index(current));
+        }
+        path.reverse();
+        path
+    }
+
+    fn idle_path_cell_penalty(&self, cell: IdlePathCell) -> u32 {
+        let mut penalty = 0;
+        if self.render_background(cell.col, cell.row) == BackgroundTile::Water {
+            penalty += IDLE_PATH_WATER_PENALTY;
+        }
+        if self
+            .foreground(cell.col, cell.row)
+            .is_some_and(is_idle_path_cliff_tile)
+            || self
+                .under_foreground(cell.col, cell.row)
+                .is_some_and(is_idle_path_cliff_tile)
+        {
+            penalty += IDLE_PATH_CLIFF_PENALTY;
+        }
+        if self
+            .foreground(cell.col, cell.row)
+            .is_some_and(is_idle_path_stone_tile)
+        {
+            penalty += IDLE_PATH_OBJECT_PENALTY;
+        }
+        if self.idle_path_cell_overlaps_object(cell) {
+            penalty += IDLE_PATH_OBJECT_PENALTY;
+        }
+        penalty
+    }
+
+    fn idle_path_cell_overlaps_object(&self, cell: IdlePathCell) -> bool {
+        let rect = (
+            (cell.col * BUILDING_GRID_DIVISIONS) as isize,
+            (cell.row * BUILDING_GRID_DIVISIONS) as isize,
+            BUILDING_GRID_DIVISIONS,
+            BUILDING_GRID_DIVISIONS,
+        );
+        self.props.iter().any(|prop| {
+            matches!(
+                prop.kind,
+                PropKind::Plant(_) | PropKind::Gold(_) | PropKind::Rock(_)
+            ) && rects_overlap(rect, prop_footprint_rect2(*prop))
+        }) || self
+            .buildings
+            .iter()
+            .any(|building| rects_overlap(rect, building_footprint_rect2(*building)))
+    }
+
+    fn idle_path_cell_at(&self, point: Point) -> Option<IdlePathCell> {
+        if self.cols == 0 || self.rows == 0 {
+            return None;
+        }
+        let col = (point.x / TILE_SIZE).floor() as isize;
+        let row = (point.y / TILE_SIZE).floor() as isize;
+        Some(IdlePathCell {
+            col: col.clamp(0, self.cols as isize - 1) as usize,
+            row: row.clamp(0, self.rows as isize - 1) as usize,
+        })
+    }
+
+    fn idle_neighbor_cell(
+        &self,
+        cell: IdlePathCell,
+        col_delta: isize,
+        row_delta: isize,
+    ) -> Option<IdlePathCell> {
+        let col = cell.col as isize + col_delta;
+        let row = cell.row as isize + row_delta;
+        (col >= 0 && row >= 0 && col < self.cols as isize && row < self.rows as isize).then_some(
+            IdlePathCell {
+                col: col as usize,
+                row: row as usize,
+            },
+        )
+    }
+
+    fn idle_path_cell_for_index(&self, index: usize) -> IdlePathCell {
+        IdlePathCell {
+            col: index % self.cols,
+            row: index / self.cols,
+        }
+    }
+
+    fn idle_path_cell_center(cell: IdlePathCell) -> Point {
+        Point {
+            x: cell.col as f32 * TILE_SIZE + TILE_SIZE * 0.5,
+            y: cell.row as f32 * TILE_SIZE + TILE_SIZE * 0.5,
+        }
+    }
+
+    fn idle_path_heuristic(a: IdlePathCell, b: IdlePathCell) -> u32 {
+        let dx = a.col.abs_diff(b.col) as u32;
+        let dy = a.row.abs_diff(b.row) as u32;
+        let diagonal = dx.min(dy);
+        let cardinal = dx.max(dy) - diagonal;
+        diagonal * IDLE_PATH_DIAGONAL_COST + cardinal * IDLE_PATH_CARDINAL_COST
     }
 
     fn fog(&self, col: usize, row: usize) -> bool {
@@ -8145,7 +8868,7 @@ impl TileWorld {
 
     fn paint_prop_half(&mut self, kind: PropKind, x2: usize, y2: usize) {
         if self.can_place_prop_half(kind, x2, y2) {
-            self.props.push(PlacedProp { kind, x2, y2 });
+            self.props.push(PlacedProp::new(kind, x2, y2));
             self.sort_props();
         }
     }
@@ -8871,6 +9594,24 @@ fn is_pillar_tile(tile: AtlasTile) -> bool {
     PILLAR_TILES.contains(&tile)
 }
 
+fn is_idle_path_stone_tile(tile: AtlasTile) -> bool {
+    is_pillar_tile(tile)
+        || tile == wldgenerator::STANDALONE_GRASS_PILLAR_TILE
+        || tile == wldgenerator::STANDALONE_WATER_PILLAR_TILE
+}
+
+fn is_idle_path_cliff_tile(tile: AtlasTile) -> bool {
+    wldgenerator::PLATFORM_GRASS_CLIFF_CAP_TILES.contains(&tile)
+        || wldgenerator::VERTICAL_GRASS_CLIFF_TILES.contains(&tile)
+        || wldgenerator::PLATFORM_GRASS_ROW_TILES.contains(&tile)
+        || wldgenerator::PLATFORM_WATER_ROW_TILES.contains(&tile)
+        || wldgenerator::PLATFORM_GRASS_BORDER_TILES
+            .iter()
+            .flatten()
+            .any(|&border| border == tile)
+        || tile == wldgenerator::CLIFF_GRASS_CAP_TILE
+}
+
 fn building_spec(kind: BuildingKind) -> BuildingSpec {
     BUILDING_SPECS[kind.index()]
 }
@@ -8982,6 +9723,26 @@ fn half_grid_to_px(value: usize) -> f32 {
 
 fn signed_half_grid_to_px(value: isize) -> f32 {
     value as f32 * TILE_SIZE / BUILDING_GRID_DIVISIONS as f32
+}
+
+fn idle_resource_prop_target_in_world(cols: usize, rows: usize, prop: PlacedProp) -> Point {
+    let (x2, y2, w2, h2) = prop_footprint_rect2(prop);
+    let front_y2 = y2 + h2 as isize;
+    if x2 >= 0
+        && front_y2 >= 0
+        && x2 + w2 as isize <= (cols * BUILDING_GRID_DIVISIONS) as isize
+        && front_y2 + BUILDING_GRID_DIVISIONS as isize <= (rows * BUILDING_GRID_DIVISIONS) as isize
+    {
+        return Point {
+            x: signed_half_grid_to_px(x2) + half_grid_to_px(w2) * 0.5,
+            y: signed_half_grid_to_px(front_y2) + TILE_SIZE * 0.5,
+        };
+    }
+
+    Point {
+        x: half_grid_to_px(prop.x2) + TILE_SIZE * 0.5,
+        y: half_grid_to_px(prop.y2 + BUILDING_GRID_DIVISIONS),
+    }
 }
 
 fn rects_overlap(a: (isize, isize, usize, usize), b: (isize, isize, usize, usize)) -> bool {
@@ -9101,6 +9862,16 @@ fn plant_visual_roll(kind: PlantKind, col: usize, row: usize) -> u8 {
             ^ ((row as u64).wrapping_mul(0xBF58_476D_1CE4_E5B9)),
     );
     (rng.next_u64() % 100) as u8
+}
+
+fn initial_tree_hp(kind: PlantKind, x2: usize, y2: usize) -> u8 {
+    let mut rng = SeededRng::new(
+        0x7AEE_5A9E_EC05_2026
+            ^ ((kind.index() as u64).wrapping_mul(0x94D0_49BB_1331_11EB))
+            ^ ((x2 as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15))
+            ^ ((y2 as u64).wrapping_mul(0xBF58_476D_1CE4_E5B9)),
+    );
+    IDLE_TREE_MIN_HP + (rng.next_u64() % u64::from(IDLE_TREE_MAX_HP - IDLE_TREE_MIN_HP + 1)) as u8
 }
 
 fn rock_visual_roll(kind: RockKind, col: usize, row: usize) -> u8 {
@@ -9262,6 +10033,109 @@ mod idle_world_tests {
     }
 
     #[test]
+    fn idle_move_path_avoids_water_when_grass_detour_exists() {
+        let mut world = TileWorld::new(5, 3);
+        world.set_background(2, 1, BackgroundTile::Water);
+
+        let path = world.idle_move_path(path_cell_center(0, 1), path_cell_center(4, 1));
+        let cells = path
+            .iter()
+            .filter_map(|&point| world.idle_path_cell_at(point))
+            .collect::<Vec<_>>();
+
+        assert!(!cells.contains(&IdlePathCell { col: 2, row: 1 }));
+        assert_eq!(cells.last(), Some(&IdlePathCell { col: 4, row: 1 }));
+    }
+
+    #[test]
+    fn idle_move_path_can_cross_water_when_no_detour_exists() {
+        let mut world = TileWorld::new(3, 1);
+        world.set_background(1, 0, BackgroundTile::Water);
+
+        let path = world.idle_move_path(path_cell_center(0, 0), path_cell_center(2, 0));
+        let cells = path
+            .iter()
+            .filter_map(|&point| world.idle_path_cell_at(point))
+            .collect::<Vec<_>>();
+
+        assert!(cells.contains(&IdlePathCell { col: 1, row: 0 }));
+        assert_eq!(cells.last(), Some(&IdlePathCell { col: 2, row: 0 }));
+    }
+
+    #[test]
+    fn idle_resource_prop_target_stops_in_front_tile_center() {
+        let mut viewer = IdleWorldViewer::new();
+        viewer.world = TileWorld::new(4, 4);
+        let prop = PlacedProp::new(
+            PropKind::Gold(GoldKind::Stone1),
+            BUILDING_GRID_DIVISIONS,
+            BUILDING_GRID_DIVISIONS,
+        );
+
+        assert_eq!(
+            viewer.idle_resource_prop_target(prop),
+            path_cell_center(1, 2)
+        );
+    }
+
+    #[test]
+    fn untouched_trees_have_deterministic_hp_between_five_and_seven() {
+        let prop = PlacedProp::new(PropKind::Plant(PlantKind::Tree2), 2, 4);
+        let hp = prop.effective_tree_hp().expect("tree should have hp");
+
+        assert!((IDLE_TREE_MIN_HP..=IDLE_TREE_MAX_HP).contains(&hp));
+        assert_eq!(prop.hp, None);
+        assert_eq!(prop.effective_tree_hp(), Some(hp));
+    }
+
+    #[test]
+    fn wood_collection_decrements_tree_hp_and_turns_it_into_stump() {
+        let mut world = TileWorld::new(4, 4);
+        world.paint_prop_half(PropKind::Plant(PlantKind::Tree1), 0, 0);
+        let target = world.idle_resource_prop_target(world.props[0]);
+        let task = IdleResourceTask {
+            kind: IdleResourceKind::Wood,
+            resource: target,
+            house: None,
+        };
+        let full_hp = world.props[0]
+            .effective_tree_hp()
+            .expect("tree should start with hp");
+
+        for expected_hp in (1..full_hp).rev() {
+            let event = world
+                .collect_idle_resource(task)
+                .expect("tree collection should succeed before depletion");
+            assert_eq!(
+                event,
+                IdleWorldEvent::ResourceCollected(IdleResourceCollected {
+                    kind: IdleResourceKind::Wood,
+                    position: target,
+                    depleted: false,
+                })
+            );
+            assert_eq!(world.props[0].kind, PropKind::Plant(PlantKind::Tree1));
+            assert_eq!(world.props[0].hp, Some(expected_hp));
+        }
+
+        let event = world
+            .collect_idle_resource(task)
+            .expect("last tree collection should succeed");
+        assert_eq!(
+            event,
+            IdleWorldEvent::ResourceCollected(IdleResourceCollected {
+                kind: IdleResourceKind::Wood,
+                position: target,
+                depleted: true,
+            })
+        );
+        assert_eq!(world.props[0].kind, PropKind::Plant(PlantKind::Stump1));
+        assert_eq!(world.props[0].hp, None);
+        assert!(!world.idle_resource_available(task));
+        assert_eq!(world.collect_idle_resource(task), None);
+    }
+
+    #[test]
     fn idle_retile_patch_supports_minimum_rect_size() {
         let mut world = TileWorld::new(4, 4);
         world.replace_with_generated_rect(
@@ -9297,6 +10171,61 @@ mod idle_world_tests {
             .validate()
             .expect("generated metadata should validate");
         assert!(decoded.generated_source.is_some());
+    }
+
+    #[test]
+    fn editor_load_realigns_generated_visuals_from_metadata() {
+        let mut generator = wldgenerator::RunningGenerator::new(12, 12, DEFAULT_SEED);
+        generator.complete_initial_seeds();
+        generator.fill_visual_voids_once(12 * 12);
+        let generated = generator.world().clone();
+        let expected = generated.to_visual_tile_world().tiles;
+        let mut saved = expected.clone();
+        saved.generated_source = Some(generated.clone());
+        saved.backgrounds[0] = match saved.backgrounds[0] {
+            BackgroundTile::Grass => BackgroundTile::Water,
+            BackgroundTile::Water => BackgroundTile::Grass,
+        };
+        saved.buildings.push(PlacedBuilding {
+            kind: BuildingKind::House1,
+            x2: 0,
+            y2: 0,
+        });
+
+        let path = std::env::temp_dir().join(format!(
+            "tactics_editor_generated_{}_{}.json",
+            std::process::id(),
+            DEFAULT_SEED
+        ));
+        let _ = std::fs::remove_file(&path);
+        saved
+            .save_to_path(&path)
+            .expect("generated test world should save");
+        let loaded = TileWorld::load_for_editor_from_path(&path)
+            .expect("generated editor world should load");
+        let _ = std::fs::remove_file(&path);
+
+        assert_eq!(loaded.generated_source.as_ref(), Some(&generated));
+        assert_eq!(loaded.backgrounds, expected.backgrounds);
+        assert_eq!(loaded.water_states, expected.water_states);
+        assert_eq!(loaded.under_foregrounds, expected.under_foregrounds);
+        assert_eq!(loaded.foregrounds, expected.foregrounds);
+        assert_eq!(loaded.buildings, saved.buildings);
+        assert_eq!(loaded.props, saved.props);
+    }
+
+    #[test]
+    fn object_brushes_keep_generated_source_usable() {
+        assert!(Brush::Background(BackgroundTile::Water).invalidates_generated_source());
+        assert!(Brush::Foreground(GRASS_BG_TILE).invalidates_generated_source());
+        assert!(Brush::Ramp(RAMP_A).invalidates_generated_source());
+
+        assert!(!Brush::Building(BuildingKind::House1).invalidates_generated_source());
+        assert!(!Brush::Prop(PropKind::Pillar(PILLAR_TILES[0])).invalidates_generated_source());
+        assert!(!Brush::GoldResource.invalidates_generated_source());
+        assert!(!Brush::RockResource.invalidates_generated_source());
+        assert!(!Brush::FogRect.invalidates_generated_source());
+        assert!(!Brush::ClearForeground.invalidates_generated_source());
     }
 
     #[test]
@@ -9356,6 +10285,13 @@ mod idle_world_tests {
             viewer.issue_move_order(target);
             viewer.update_units();
             assert!(viewer.retile_transition.is_some());
+        }
+    }
+
+    fn path_cell_center(col: usize, row: usize) -> Point {
+        Point {
+            x: col as f32 * TILE_SIZE + TILE_SIZE * 0.5,
+            y: row as f32 * TILE_SIZE + TILE_SIZE * 0.5,
         }
     }
 }

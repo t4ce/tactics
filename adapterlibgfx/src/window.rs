@@ -21,6 +21,10 @@ pub trait FrameProducer {
         true
     }
 
+    fn window_resizable(&self) -> bool {
+        true
+    }
+
     fn window_drag_region(&self) -> bool {
         false
     }
@@ -54,7 +58,7 @@ pub enum InputKey {
     K,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum InputEvent {
     CursorMoved { x: f32, y: f32 },
     MouseButton {
@@ -62,6 +66,9 @@ pub enum InputEvent {
         state: InputButtonState,
     },
     MouseWheel { x: f32, y: f32 },
+    TextInput(String),
+    BackspacePressed,
+    EnterPressed,
     KeyPressed(InputKey),
     DigitPressed(u8),
     ModifiersChanged { ctrl: bool },
@@ -708,7 +715,7 @@ impl<P: FrameProducer> ApplicationHandler for WgpuWindowApp<P> {
         }
         let attrs = WindowAttributes::default()
             .with_title(self.title.clone())
-            .with_resizable(true)
+            .with_resizable(self.producer.window_resizable())
             .with_decorations(self.producer.window_decorations())
             .with_inner_size(winit::dpi::PhysicalSize::new(
                 self.config.width,
@@ -785,6 +792,7 @@ impl<P: FrameProducer, S: FrameProducer> ApplicationHandler for WgpuTwoWindowApp
                 self.primary_config,
                 self.primary_producer.cursor_visible(),
                 self.primary_producer.window_decorations(),
+                self.primary_producer.window_resizable(),
             ) else {
                 event_loop.exit();
                 return;
@@ -800,6 +808,7 @@ impl<P: FrameProducer, S: FrameProducer> ApplicationHandler for WgpuTwoWindowApp
                 self.secondary_config,
                 self.secondary_producer.cursor_visible(),
                 self.secondary_producer.window_decorations(),
+                self.secondary_producer.window_resizable(),
             ) else {
                 event_loop.exit();
                 return;
@@ -857,6 +866,7 @@ impl<P: FrameProducer, S: FrameProducer, T: FrameProducer> ApplicationHandler
                 self.primary_config,
                 self.primary_producer.cursor_visible(),
                 self.primary_producer.window_decorations(),
+                self.primary_producer.window_resizable(),
             ) else {
                 event_loop.exit();
                 return;
@@ -872,6 +882,7 @@ impl<P: FrameProducer, S: FrameProducer, T: FrameProducer> ApplicationHandler
                 self.secondary_config,
                 self.secondary_producer.cursor_visible(),
                 self.secondary_producer.window_decorations(),
+                self.secondary_producer.window_resizable(),
             ) else {
                 event_loop.exit();
                 return;
@@ -887,6 +898,7 @@ impl<P: FrameProducer, S: FrameProducer, T: FrameProducer> ApplicationHandler
                 self.tertiary_config,
                 self.tertiary_producer.cursor_visible(),
                 self.tertiary_producer.window_decorations(),
+                self.tertiary_producer.window_resizable(),
             ) else {
                 event_loop.exit();
                 return;
@@ -956,6 +968,7 @@ impl<P: FrameProducer, S: FrameProducer, T: FrameProducer, U: FrameProducer> App
                 self.primary_config,
                 self.primary_producer.cursor_visible(),
                 self.primary_producer.window_decorations(),
+                self.primary_producer.window_resizable(),
             ) else {
                 event_loop.exit();
                 return;
@@ -971,6 +984,7 @@ impl<P: FrameProducer, S: FrameProducer, T: FrameProducer, U: FrameProducer> App
                 self.secondary_config,
                 self.secondary_producer.cursor_visible(),
                 self.secondary_producer.window_decorations(),
+                self.secondary_producer.window_resizable(),
             ) else {
                 event_loop.exit();
                 return;
@@ -986,6 +1000,7 @@ impl<P: FrameProducer, S: FrameProducer, T: FrameProducer, U: FrameProducer> App
                 self.tertiary_config,
                 self.tertiary_producer.cursor_visible(),
                 self.tertiary_producer.window_decorations(),
+                self.tertiary_producer.window_resizable(),
             ) else {
                 event_loop.exit();
                 return;
@@ -1001,6 +1016,7 @@ impl<P: FrameProducer, S: FrameProducer, T: FrameProducer, U: FrameProducer> App
                 self.quaternary_config,
                 self.quaternary_producer.cursor_visible(),
                 self.quaternary_producer.window_decorations(),
+                self.quaternary_producer.window_resizable(),
             ) else {
                 event_loop.exit();
                 return;
@@ -1087,6 +1103,7 @@ impl<P: FrameProducer, S: FrameProducer, T: FrameProducer, U: FrameProducer, V: 
                 self.primary_config,
                 self.primary_producer.cursor_visible(),
                 self.primary_producer.window_decorations(),
+                self.primary_producer.window_resizable(),
             ) else {
                 event_loop.exit();
                 return;
@@ -1102,6 +1119,7 @@ impl<P: FrameProducer, S: FrameProducer, T: FrameProducer, U: FrameProducer, V: 
                 self.secondary_config,
                 self.secondary_producer.cursor_visible(),
                 self.secondary_producer.window_decorations(),
+                self.secondary_producer.window_resizable(),
             ) else {
                 event_loop.exit();
                 return;
@@ -1117,6 +1135,7 @@ impl<P: FrameProducer, S: FrameProducer, T: FrameProducer, U: FrameProducer, V: 
                 self.tertiary_config,
                 self.tertiary_producer.cursor_visible(),
                 self.tertiary_producer.window_decorations(),
+                self.tertiary_producer.window_resizable(),
             ) else {
                 event_loop.exit();
                 return;
@@ -1132,6 +1151,7 @@ impl<P: FrameProducer, S: FrameProducer, T: FrameProducer, U: FrameProducer, V: 
                 self.quaternary_config,
                 self.quaternary_producer.cursor_visible(),
                 self.quaternary_producer.window_decorations(),
+                self.quaternary_producer.window_resizable(),
             ) else {
                 event_loop.exit();
                 return;
@@ -1147,6 +1167,7 @@ impl<P: FrameProducer, S: FrameProducer, T: FrameProducer, U: FrameProducer, V: 
                 self.quinary_config,
                 self.quinary_producer.cursor_visible(),
                 self.quinary_producer.window_decorations(),
+                self.quinary_producer.window_resizable(),
             ) else {
                 event_loop.exit();
                 return;
@@ -1251,6 +1272,7 @@ impl<
                 self.primary_config,
                 self.primary_producer.cursor_visible(),
                 self.primary_producer.window_decorations(),
+                self.primary_producer.window_resizable(),
             ) else {
                 event_loop.exit();
                 return;
@@ -1266,6 +1288,7 @@ impl<
                 self.secondary_config,
                 self.secondary_producer.cursor_visible(),
                 self.secondary_producer.window_decorations(),
+                self.secondary_producer.window_resizable(),
             ) else {
                 event_loop.exit();
                 return;
@@ -1281,6 +1304,7 @@ impl<
                 self.tertiary_config,
                 self.tertiary_producer.cursor_visible(),
                 self.tertiary_producer.window_decorations(),
+                self.tertiary_producer.window_resizable(),
             ) else {
                 event_loop.exit();
                 return;
@@ -1296,6 +1320,7 @@ impl<
                 self.quaternary_config,
                 self.quaternary_producer.cursor_visible(),
                 self.quaternary_producer.window_decorations(),
+                self.quaternary_producer.window_resizable(),
             ) else {
                 event_loop.exit();
                 return;
@@ -1311,6 +1336,7 @@ impl<
                 self.quinary_config,
                 self.quinary_producer.cursor_visible(),
                 self.quinary_producer.window_decorations(),
+                self.quinary_producer.window_resizable(),
             ) else {
                 event_loop.exit();
                 return;
@@ -1326,6 +1352,7 @@ impl<
                 self.senary_config,
                 self.senary_producer.cursor_visible(),
                 self.senary_producer.window_decorations(),
+                self.senary_producer.window_resizable(),
             ) else {
                 event_loop.exit();
                 return;
@@ -1443,6 +1470,7 @@ impl<
                 self.primary_config,
                 self.primary_producer.cursor_visible(),
                 self.primary_producer.window_decorations(),
+                self.primary_producer.window_resizable(),
             ) else {
                 event_loop.exit();
                 return;
@@ -1458,6 +1486,7 @@ impl<
                 self.secondary_config,
                 self.secondary_producer.cursor_visible(),
                 self.secondary_producer.window_decorations(),
+                self.secondary_producer.window_resizable(),
             ) else {
                 event_loop.exit();
                 return;
@@ -1473,6 +1502,7 @@ impl<
                 self.tertiary_config,
                 self.tertiary_producer.cursor_visible(),
                 self.tertiary_producer.window_decorations(),
+                self.tertiary_producer.window_resizable(),
             ) else {
                 event_loop.exit();
                 return;
@@ -1488,6 +1518,7 @@ impl<
                 self.quaternary_config,
                 self.quaternary_producer.cursor_visible(),
                 self.quaternary_producer.window_decorations(),
+                self.quaternary_producer.window_resizable(),
             ) else {
                 event_loop.exit();
                 return;
@@ -1503,6 +1534,7 @@ impl<
                 self.quinary_config,
                 self.quinary_producer.cursor_visible(),
                 self.quinary_producer.window_decorations(),
+                self.quinary_producer.window_resizable(),
             ) else {
                 event_loop.exit();
                 return;
@@ -1518,6 +1550,7 @@ impl<
                 self.senary_config,
                 self.senary_producer.cursor_visible(),
                 self.senary_producer.window_decorations(),
+                self.senary_producer.window_resizable(),
             ) else {
                 event_loop.exit();
                 return;
@@ -1533,6 +1566,7 @@ impl<
                 self.septenary_config,
                 self.septenary_producer.cursor_visible(),
                 self.septenary_producer.window_decorations(),
+                self.septenary_producer.window_resizable(),
             ) else {
                 event_loop.exit();
                 return;
@@ -1711,6 +1745,7 @@ impl<
                 self.primary_config,
                 self.primary_producer.cursor_visible(),
                 self.primary_producer.window_decorations(),
+                self.primary_producer.window_resizable(),
             ) else {
                 event_loop.exit();
                 return;
@@ -1731,6 +1766,7 @@ impl<
                 self.secondary_config,
                 self.secondary_producer.cursor_visible(),
                 self.secondary_producer.window_decorations(),
+                self.secondary_producer.window_resizable(),
             ) else {
                 event_loop.exit();
                 return;
@@ -1751,6 +1787,7 @@ impl<
                 self.tertiary_config,
                 self.tertiary_producer.cursor_visible(),
                 self.tertiary_producer.window_decorations(),
+                self.tertiary_producer.window_resizable(),
             ) else {
                 event_loop.exit();
                 return;
@@ -1771,6 +1808,7 @@ impl<
                 self.quinary_config,
                 self.quinary_producer.cursor_visible(),
                 self.quinary_producer.window_decorations(),
+                self.quinary_producer.window_resizable(),
             ) else {
                 event_loop.exit();
                 return;
@@ -1791,6 +1829,7 @@ impl<
                 self.senary_config,
                 self.senary_producer.cursor_visible(),
                 self.senary_producer.window_decorations(),
+                self.senary_producer.window_resizable(),
             ) else {
                 event_loop.exit();
                 return;
@@ -1811,6 +1850,7 @@ impl<
                 self.septenary_config,
                 self.septenary_producer.cursor_visible(),
                 self.septenary_producer.window_decorations(),
+                self.septenary_producer.window_resizable(),
             ) else {
                 event_loop.exit();
                 return;
@@ -1869,10 +1909,11 @@ fn create_window_renderer(
     config: AdapterConfig,
     cursor_visible: bool,
     decorations: bool,
+    resizable: bool,
 ) -> Option<(Arc<Window>, WgpuRenderer)> {
     let attrs = WindowAttributes::default()
         .with_title(title)
-        .with_resizable(true)
+        .with_resizable(resizable)
         .with_decorations(decorations)
         .with_inner_size(winit::dpi::PhysicalSize::new(config.width, config.height));
     let window = event_loop.create_window(attrs).ok()?;
@@ -1944,14 +1985,17 @@ fn input_event(event: &WindowEvent) -> Option<InputEvent> {
                 PhysicalKey::Code(KeyCode::KeyH) => Some(InputEvent::KeyPressed(InputKey::H)),
                 PhysicalKey::Code(KeyCode::KeyK) => Some(InputEvent::KeyPressed(InputKey::K)),
                 _ => match &event.logical_key {
-                Key::Named(NamedKey::Escape) => Some(InputEvent::EscapePressed),
-                Key::Character(text) => text
-                    .as_str()
-                    .parse::<u8>()
-                    .ok()
-                    .filter(|digit| *digit <= 9)
-                    .map(InputEvent::DigitPressed),
-                _ => None,
+                    Key::Named(NamedKey::Escape) => Some(InputEvent::EscapePressed),
+                    Key::Named(NamedKey::Backspace) => Some(InputEvent::BackspacePressed),
+                    Key::Named(NamedKey::Enter) => Some(InputEvent::EnterPressed),
+                    Key::Character(text) => text
+                        .as_str()
+                        .parse::<u8>()
+                        .ok()
+                        .filter(|digit| *digit <= 9)
+                        .map(InputEvent::DigitPressed)
+                        .or_else(|| Some(InputEvent::TextInput(text.to_string()))),
+                    _ => None,
                 },
             }
         }
