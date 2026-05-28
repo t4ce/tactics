@@ -1856,6 +1856,8 @@ impl FrameProducer for LoadScreen {
             loadscreen_table_layout(self.window_width as f32, self.window_height as f32),
             self.layout_offset,
         );
+
+        let _ = adapter.set_texture_effect(TextureEffect::World);
         self.draw_frame(adapter);
         let mut tables = SpriteBatch::new(self.window_width, self.window_height);
         for table in table_layout {
@@ -1883,6 +1885,7 @@ impl FrameProducer for LoadScreen {
         );
         self.draw_close_button(adapter);
 
+        let _ = adapter.set_texture_effect(TextureEffect::Plain);
         self.draw_cursor(adapter);
         let _ = adapter.end_frame();
     }

@@ -6,12 +6,12 @@ use crate::adapterlibgfx::window::{
 };
 use crate::terrain_rules::AtlasTile;
 use crate::{ase_assets, ts_ui};
-#[cfg(feature = "trueos-blueprint")]
-use std::cell::RefCell;
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, BinaryHeap, HashSet};
 use std::fs;
 use std::path::Path;
+#[cfg(feature = "trueos-blueprint")]
+use std::sync::mpsc;
 use std::sync::{
     Arc,
     atomic::{AtomicBool, Ordering as AtomicOrdering},
@@ -1612,7 +1612,9 @@ struct IdlePathWorker {
     #[cfg(not(feature = "trueos-blueprint"))]
     rx: tokio::sync::mpsc::UnboundedReceiver<IdlePathResult>,
     #[cfg(feature = "trueos-blueprint")]
-    results: RefCell<Vec<IdlePathResult>>,
+    tx: mpsc::Sender<IdlePathResult>,
+    #[cfg(feature = "trueos-blueprint")]
+    rx: mpsc::Receiver<IdlePathResult>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1678,9 +1680,8 @@ impl IdlePathWorker {
     fn new() -> Self {
         #[cfg(feature = "trueos-blueprint")]
         {
-            Self {
-                results: RefCell::new(Vec::new()),
-            }
+            let (tx, rx) = mpsc::channel();
+            Self { tx, rx }
         }
 
         #[cfg(not(feature = "trueos-blueprint"))]
@@ -1698,28 +1699,25 @@ impl IdlePathWorker {
     fn request(&self, world: Arc<TileWorld>, request: IdlePathRequest) {
         #[cfg(feature = "trueos-blueprint")]
         {
-            let path = world.idle_move_path(request.from, request.to);
-            self.results.borrow_mut().push(IdlePathResult {
-                unit_index: request.unit_index,
-                generation: request.generation,
-                to: request.to,
-                path,
-                intent: request.intent,
-            });
+            let tx = self.tx.clone();
+            let fallback_tx = tx.clone();
+            let fallback_world = Arc::clone(&world);
+            let fallback_request = request.clone();
+            if trueos::platform::spawn_blocking(move || {
+                let _ = tx.send(compute_idle_path_result(world, request));
+            })
+            .is_err()
+            {
+                let _ =
+                    fallback_tx.send(compute_idle_path_result(fallback_world, fallback_request));
+            }
         }
 
         #[cfg(not(feature = "trueos-blueprint"))]
         {
             let tx = self.tx.clone();
             self.runtime.spawn(async move {
-                let path = world.idle_move_path(request.from, request.to);
-                let _ = tx.send(IdlePathResult {
-                    unit_index: request.unit_index,
-                    generation: request.generation,
-                    to: request.to,
-                    path,
-                    intent: request.intent,
-                });
+                let _ = tx.send(compute_idle_path_result(world, request));
             });
         }
     }
@@ -1727,7 +1725,11 @@ impl IdlePathWorker {
     fn drain_results(&mut self) -> Vec<IdlePathResult> {
         #[cfg(feature = "trueos-blueprint")]
         {
-            return self.results.get_mut().drain(..).collect();
+            let mut results = Vec::new();
+            while let Ok(result) = self.rx.try_recv() {
+                results.push(result);
+            }
+            return results;
         }
 
         #[cfg(not(feature = "trueos-blueprint"))]
@@ -1738,6 +1740,17 @@ impl IdlePathWorker {
             }
             results
         }
+    }
+}
+
+fn compute_idle_path_result(world: Arc<TileWorld>, request: IdlePathRequest) -> IdlePathResult {
+    let path = world.idle_move_path(request.from, request.to);
+    IdlePathResult {
+        unit_index: request.unit_index,
+        generation: request.generation,
+        to: request.to,
+        path,
+        intent: request.intent,
     }
 }
 
