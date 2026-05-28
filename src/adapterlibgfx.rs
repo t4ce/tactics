@@ -697,30 +697,42 @@ pub mod window {
             W: FrameProducer + 'static,
             X: FrameProducer + 'static,
         {
-            let primary = bind_window(
-                &self.primary_title,
-                self.primary_config,
-                &self.primary_producer,
-                &mut self.primary_adapter,
-                31_000,
-                0,
-            )?;
-            let secondary = bind_window(
-                &self.secondary_title,
-                self.secondary_config,
-                &self.secondary_producer,
-                &mut self.secondary_adapter,
-                31_001,
-                40,
-            )?;
-            let tertiary = bind_window(
-                &self.tertiary_title,
-                self.tertiary_config,
-                &self.tertiary_producer,
-                &mut self.tertiary_adapter,
-                31_002,
-                80,
-            )?;
+            let mut primary = if should_build(&self.primary_create_request) {
+                Some(bind_window(
+                    &self.primary_title,
+                    self.primary_config,
+                    &self.primary_producer,
+                    &mut self.primary_adapter,
+                    31_000,
+                    0,
+                )?)
+            } else {
+                None
+            };
+            let mut secondary = if should_build(&self.secondary_create_request) {
+                Some(bind_window(
+                    &self.secondary_title,
+                    self.secondary_config,
+                    &self.secondary_producer,
+                    &mut self.secondary_adapter,
+                    31_001,
+                    40,
+                )?)
+            } else {
+                None
+            };
+            let mut tertiary = if should_build(&self.tertiary_create_request) {
+                Some(bind_window(
+                    &self.tertiary_title,
+                    self.tertiary_config,
+                    &self.tertiary_producer,
+                    &mut self.tertiary_adapter,
+                    31_002,
+                    80,
+                )?)
+            } else {
+                None
+            };
             let quaternary = bind_window(
                 &self.quaternary_title,
                 self.quaternary_config,
@@ -729,33 +741,43 @@ pub mod window {
                 31_003,
                 120,
             )?;
-            let quinary = bind_window(
-                &self.quinary_title,
-                self.quinary_config,
-                &self.quinary_producer,
-                &mut self.quinary_adapter,
-                31_004,
-                160,
-            )?;
-            let senary = bind_window(
-                &self.senary_title,
-                self.senary_config,
-                &self.senary_producer,
-                &mut self.senary_adapter,
-                31_005,
-                200,
-            )?;
-            let septenary = bind_window(
-                &self.septenary_title,
-                self.septenary_config,
-                &self.septenary_producer,
-                &mut self.septenary_adapter,
-                31_006,
-                240,
-            )?;
-            let _windows = [
-                primary, secondary, tertiary, quaternary, senary, quinary, septenary,
-            ];
+            let mut quinary = if should_build(&self.quinary_create_request) {
+                Some(bind_window(
+                    &self.quinary_title,
+                    self.quinary_config,
+                    &self.quinary_producer,
+                    &mut self.quinary_adapter,
+                    31_004,
+                    160,
+                )?)
+            } else {
+                None
+            };
+            let mut senary = if should_build(&self.senary_create_request) {
+                Some(bind_window(
+                    &self.senary_title,
+                    self.senary_config,
+                    &self.senary_producer,
+                    &mut self.senary_adapter,
+                    31_005,
+                    200,
+                )?)
+            } else {
+                None
+            };
+            let mut septenary = if should_build(&self.septenary_create_request) {
+                Some(bind_window(
+                    &self.septenary_title,
+                    self.septenary_config,
+                    &self.septenary_producer,
+                    &mut self.septenary_adapter,
+                    31_006,
+                    240,
+                )?)
+            } else {
+                None
+            };
+            let _quaternary = quaternary;
 
             loop {
                 if self
@@ -766,24 +788,86 @@ pub mod window {
                     return Ok(());
                 }
 
-                self.primary_producer.build_frame(&mut self.primary_adapter);
+                if should_build(&self.primary_create_request) {
+                    if primary.is_none() {
+                        primary = Some(bind_window(
+                            &self.primary_title,
+                            self.primary_config,
+                            &self.primary_producer,
+                            &mut self.primary_adapter,
+                            31_000,
+                            0,
+                        )?);
+                    }
+                    self.primary_producer.build_frame(&mut self.primary_adapter);
+                }
                 if should_build(&self.secondary_create_request) {
+                    if secondary.is_none() {
+                        secondary = Some(bind_window(
+                            &self.secondary_title,
+                            self.secondary_config,
+                            &self.secondary_producer,
+                            &mut self.secondary_adapter,
+                            31_001,
+                            40,
+                        )?);
+                    }
                     self.secondary_producer
                         .build_frame(&mut self.secondary_adapter);
                 }
                 if should_build(&self.tertiary_create_request) {
+                    if tertiary.is_none() {
+                        tertiary = Some(bind_window(
+                            &self.tertiary_title,
+                            self.tertiary_config,
+                            &self.tertiary_producer,
+                            &mut self.tertiary_adapter,
+                            31_002,
+                            80,
+                        )?);
+                    }
                     self.tertiary_producer
                         .build_frame(&mut self.tertiary_adapter);
                 }
                 self.quaternary_producer
                     .build_frame(&mut self.quaternary_adapter);
                 if should_build(&self.quinary_create_request) {
+                    if quinary.is_none() {
+                        quinary = Some(bind_window(
+                            &self.quinary_title,
+                            self.quinary_config,
+                            &self.quinary_producer,
+                            &mut self.quinary_adapter,
+                            31_004,
+                            160,
+                        )?);
+                    }
                     self.quinary_producer.build_frame(&mut self.quinary_adapter);
                 }
                 if should_build(&self.senary_create_request) {
+                    if senary.is_none() {
+                        senary = Some(bind_window(
+                            &self.senary_title,
+                            self.senary_config,
+                            &self.senary_producer,
+                            &mut self.senary_adapter,
+                            31_005,
+                            200,
+                        )?);
+                    }
                     self.senary_producer.build_frame(&mut self.senary_adapter);
                 }
                 if should_build(&self.septenary_create_request) {
+                    if septenary.is_none() {
+                        septenary = Some(bind_window(
+                            &self.septenary_title,
+                            self.septenary_config,
+                            &self.septenary_producer,
+                            &mut self.septenary_adapter,
+                            31_006,
+                            240,
+                        )?);
+                    }
                     self.septenary_producer
                         .build_frame(&mut self.septenary_adapter);
                 }

@@ -1,14 +1,21 @@
 use super::cli::{self, Lobby};
 use super::*;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
+#[cfg(feature = "chat")]
+use serde::Serialize;
 use std::collections::BTreeMap;
+#[cfg(feature = "chat")]
+use std::sync::mpsc::RecvTimeoutError;
 use std::sync::{
     Arc,
     atomic::{AtomicBool, Ordering},
     mpsc::{self, Receiver, Sender, TryRecvError},
 };
+#[cfg(any(feature = "chat", not(feature = "trueos-blueprint")))]
 use std::thread;
-use std::time::{Duration, Instant};
+#[cfg(feature = "chat")]
+use std::time::Duration;
+use std::time::Instant;
 
 const WOOD_TABLE_TEXTURE: u32 = 15;
 const WOOD_TABLE_BYTES: &[u8] =
@@ -123,6 +130,7 @@ const CHAT_USER: &str = "Loadscreen";
 const CHAT_POLL_MS: u64 = 1_000;
 #[cfg(feature = "chat")]
 const CHAT_CONNECT_TIMEOUT_MS: u64 = 2_000;
+#[cfg(feature = "chat")]
 const CHAT_MESSAGE_LIMIT: usize = 96;
 const CHAT_INPUT_LIMIT: usize = 160;
 const CHAT_PANEL_PAD_X: f32 = 44.0;
@@ -177,6 +185,7 @@ pub(super) struct LoadScreen {
     lobby_rx: Option<Receiver<Result<LobbyResponse, String>>>,
     lobby_request_kind: LobbyRequestKind,
     chat_tx: Sender<ChatCommand>,
+    #[cfg_attr(not(feature = "chat"), allow(dead_code))]
     chat_rx: Receiver<ChatClientEvent>,
     chat_messages: Vec<ChatMessage>,
     chat_error: Option<String>,
@@ -212,6 +221,7 @@ struct LobbyResponse {
 
 #[derive(Clone, Debug, Deserialize)]
 struct ChatMessage {
+    #[cfg_attr(not(feature = "chat"), allow(dead_code))]
     id: u64,
     user: String,
     text: String,
@@ -230,10 +240,12 @@ struct ChatPost<'a> {
     text: &'a str,
 }
 
+#[cfg_attr(not(feature = "chat"), allow(dead_code))]
 enum ChatCommand {
     Send(String),
 }
 
+#[cfg_attr(not(feature = "chat"), allow(dead_code))]
 enum ChatClientEvent {
     Messages(Vec<ChatMessage>),
     Error(String),
@@ -249,7 +261,10 @@ impl LoadScreen {
         idle_viewer_request: Arc<AtomicBool>,
         exit_request: Arc<AtomicBool>,
     ) -> Self {
-        let lobby_rx = spawn_lobby_refresh();
+        #[cfg(feature = "trueos-blueprint")]
+        let lobby_rx = None;
+        #[cfg(not(feature = "trueos-blueprint"))]
+        let lobby_rx = Some(spawn_lobby_refresh());
         let (chat_tx, chat_rx) = spawn_chat_client();
         let terrain = TextureAtlas::from_png_bytes(TERRAIN_TEXTURE, TERRAIN_BYTES, TERRAIN_TILE_PX);
         let water_visuals = load_water_visual_assets();
@@ -347,7 +362,7 @@ impl LoadScreen {
             lobbies: Vec::new(),
             active_lobby: None,
             lobby_error: None,
-            lobby_rx: Some(lobby_rx),
+            lobby_rx,
             lobby_request_kind: LobbyRequestKind::Refresh,
             chat_tx,
             chat_rx,
@@ -615,6 +630,12 @@ impl LoadScreen {
     }
 
     fn poll_chat(&mut self) {
+        #[cfg(not(feature = "chat"))]
+        {
+            return;
+        }
+
+        #[cfg(feature = "chat")]
         loop {
             match self.chat_rx.try_recv() {
                 Ok(ChatClientEvent::Messages(messages)) => {
@@ -2117,6 +2138,17 @@ fn spawn_lobby_request(
     request: impl FnOnce() -> Result<LobbyResponse, String> + Send + 'static,
 ) -> Receiver<Result<LobbyResponse, String>> {
     let (lobby_tx, lobby_rx) = mpsc::channel();
+    #[cfg(feature = "trueos-blueprint")]
+    {
+        eprintln!("[loadscreen] lobby request skipped in blueprint: {label}");
+        let _ = lobby_tx.send(Err(
+            "lobby networking is dormant in blueprint until thread spawn is available".to_owned(),
+        ));
+        let _ = request;
+        return lobby_rx;
+    }
+
+    #[cfg(not(feature = "trueos-blueprint"))]
     thread::spawn(move || {
         eprintln!("[loadscreen] lobby request thread started: {label}");
         let result = request();
@@ -2134,17 +2166,17 @@ fn spawn_lobby_request(
     lobby_rx
 }
 
+#[cfg(not(feature = "chat"))]
+fn spawn_chat_client() -> (Sender<ChatCommand>, Receiver<ChatClientEvent>) {
+    let (command_tx, _command_rx) = mpsc::channel();
+    let (_event_tx, event_rx) = mpsc::channel();
+    (command_tx, event_rx)
+}
+
+#[cfg(feature = "chat")]
 fn spawn_chat_client() -> (Sender<ChatCommand>, Receiver<ChatClientEvent>) {
     let (command_tx, command_rx) = mpsc::channel();
     let (event_tx, event_rx) = mpsc::channel();
-    #[cfg(not(feature = "chat"))]
-    {
-        let _ = command_rx;
-        let _ = event_tx;
-        return (command_tx, event_rx);
-    }
-
-    #[cfg(feature = "chat")]
     thread::spawn(move || {
         let runtime = match tokio::runtime::Builder::new_current_thread()
             .enable_all()

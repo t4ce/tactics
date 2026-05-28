@@ -6,6 +6,8 @@ use crate::adapterlibgfx::window::{
 };
 use crate::terrain_rules::AtlasTile;
 use crate::{ase_assets, ts_ui};
+#[cfg(feature = "trueos-blueprint")]
+use std::cell::RefCell;
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, BinaryHeap, HashSet};
 use std::fs;
@@ -1603,9 +1605,14 @@ struct IdlePathResult {
 }
 
 struct IdlePathWorker {
+    #[cfg(not(feature = "trueos-blueprint"))]
     runtime: tokio::runtime::Runtime,
+    #[cfg(not(feature = "trueos-blueprint"))]
     tx: tokio::sync::mpsc::UnboundedSender<IdlePathResult>,
+    #[cfg(not(feature = "trueos-blueprint"))]
     rx: tokio::sync::mpsc::UnboundedReceiver<IdlePathResult>,
+    #[cfg(feature = "trueos-blueprint")]
+    results: RefCell<Vec<IdlePathResult>>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1669,35 +1676,68 @@ impl IdleGeomancerWallPlacement {
 
 impl IdlePathWorker {
     fn new() -> Self {
-        let runtime = tokio::runtime::Builder::new_multi_thread()
-            .worker_threads(1)
-            .thread_name("idle-a-star")
-            .build()
-            .expect("idle path worker runtime should build");
-        let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
-        Self { runtime, tx, rx }
+        #[cfg(feature = "trueos-blueprint")]
+        {
+            Self {
+                results: RefCell::new(Vec::new()),
+            }
+        }
+
+        #[cfg(not(feature = "trueos-blueprint"))]
+        {
+            let runtime = tokio::runtime::Builder::new_multi_thread()
+                .worker_threads(1)
+                .thread_name("idle-a-star")
+                .build()
+                .expect("idle path worker runtime should build");
+            let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+            Self { runtime, tx, rx }
+        }
     }
 
     fn request(&self, world: Arc<TileWorld>, request: IdlePathRequest) {
-        let tx = self.tx.clone();
-        self.runtime.spawn(async move {
+        #[cfg(feature = "trueos-blueprint")]
+        {
             let path = world.idle_move_path(request.from, request.to);
-            let _ = tx.send(IdlePathResult {
+            self.results.borrow_mut().push(IdlePathResult {
                 unit_index: request.unit_index,
                 generation: request.generation,
                 to: request.to,
                 path,
                 intent: request.intent,
             });
-        });
+        }
+
+        #[cfg(not(feature = "trueos-blueprint"))]
+        {
+            let tx = self.tx.clone();
+            self.runtime.spawn(async move {
+                let path = world.idle_move_path(request.from, request.to);
+                let _ = tx.send(IdlePathResult {
+                    unit_index: request.unit_index,
+                    generation: request.generation,
+                    to: request.to,
+                    path,
+                    intent: request.intent,
+                });
+            });
+        }
     }
 
     fn drain_results(&mut self) -> Vec<IdlePathResult> {
-        let mut results = Vec::new();
-        while let Ok(result) = self.rx.try_recv() {
-            results.push(result);
+        #[cfg(feature = "trueos-blueprint")]
+        {
+            return self.results.get_mut().drain(..).collect();
         }
-        results
+
+        #[cfg(not(feature = "trueos-blueprint"))]
+        {
+            let mut results = Vec::new();
+            while let Ok(result) = self.rx.try_recv() {
+                results.push(result);
+            }
+            results
+        }
     }
 }
 
