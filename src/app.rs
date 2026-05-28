@@ -1,11 +1,11 @@
-use crate::terrain_rules::AtlasTile;
-use crate::{ase_assets, ts_ui};
-use adapterlibgfx::api::Adapter;
-use adapterlibgfx::command::{ScissorRect, TextureEffect};
-use adapterlibgfx::vertex::{Rgba8, TexVertex};
-use adapterlibgfx::window::{
+use crate::adapterlibgfx::api::Adapter;
+use crate::adapterlibgfx::command::{ScissorRect, TextureEffect};
+use crate::adapterlibgfx::vertex::{Rgba8, TexVertex};
+use crate::adapterlibgfx::window::{
     FrameProducer, InputButtonState, InputEvent, InputKey, InputMouseButton,
 };
+use crate::terrain_rules::AtlasTile;
+use crate::{ase_assets, ts_ui};
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, BinaryHeap, HashSet};
 use std::fs;
@@ -10113,30 +10113,32 @@ impl ImageAsset {
     }
 
     fn from_png_bytes(texture_id: u32, bytes: &[u8]) -> Self {
-        let image = image::load_from_memory(bytes)
-            .expect("image asset png should decode")
-            .to_rgba8();
-        let (width, height) = image.dimensions();
+        let DecodedRgbaPng {
+            width,
+            height,
+            rgba,
+        } = decode_png_rgba(bytes).expect("image asset png should decode");
 
         Self {
             texture_id,
             width,
             height,
-            rgba: image.into_raw(),
+            rgba,
         }
     }
 
     fn from_png_bytes_cropped(texture_id: u32, bytes: &[u8]) -> Self {
-        let image = image::load_from_memory(bytes)
-            .expect("image asset png should decode")
-            .to_rgba8();
-        let (width, height) = image.dimensions();
-        let Some((min_x, min_y, max_x, max_y)) = alpha_bounds(&image) else {
+        let DecodedRgbaPng {
+            width,
+            height,
+            rgba: image,
+        } = decode_png_rgba(bytes).expect("image asset png should decode");
+        let Some((min_x, min_y, max_x, max_y)) = alpha_bounds(width, height, &image) else {
             return Self {
                 texture_id,
                 width,
                 height,
-                rgba: image.into_raw(),
+                rgba: image,
             };
         };
 
@@ -10145,7 +10147,8 @@ impl ImageAsset {
         let mut rgba = Vec::with_capacity((crop_width * crop_height * 4) as usize);
         for y in min_y..=max_y {
             for x in min_x..=max_x {
-                rgba.extend_from_slice(&image.get_pixel(x, y).0);
+                let offset = ((y * width + x) * 4) as usize;
+                rgba.extend_from_slice(&image[offset..offset + 4]);
             }
         }
 
@@ -10160,10 +10163,11 @@ impl ImageAsset {
 
 impl TextureAtlas {
     fn from_png_bytes(texture_id: u32, bytes: &[u8], tile_px: u32) -> Self {
-        let image = image::load_from_memory(bytes)
-            .expect("terrain tileset png should decode")
-            .to_rgba8();
-        let (width, height) = image.dimensions();
+        let DecodedRgbaPng {
+            width,
+            height,
+            rgba,
+        } = decode_png_rgba(bytes).expect("terrain tileset png should decode");
         assert_eq!(width % tile_px, 0, "tileset width must align to tiles");
         assert_eq!(height % tile_px, 0, "tileset height must align to tiles");
 
@@ -10174,7 +10178,7 @@ impl TextureAtlas {
             tile_px,
             cols: width / tile_px,
             rows: height / tile_px,
-            rgba: image.into_raw(),
+            rgba,
         }
     }
 
@@ -10800,8 +10804,75 @@ fn shoreline_tile_accepts_wave(tile: AtlasTile) -> bool {
     )
 }
 
-fn alpha_bounds(image: &image::RgbaImage) -> Option<(u32, u32, u32, u32)> {
-    let (width, height) = image.dimensions();
+struct DecodedRgbaPng {
+    width: u32,
+    height: u32,
+    rgba: Vec<u8>,
+}
+
+fn decode_png_rgba(bytes: &[u8]) -> Result<DecodedRgbaPng, String> {
+    #[cfg(feature = "trueos-blueprint")]
+    let cursor = png::io::Cursor::new(bytes);
+    #[cfg(not(feature = "trueos-blueprint"))]
+    let cursor = std::io::Cursor::new(bytes);
+    let mut decoder = png::Decoder::new(cursor);
+    decoder.set_transformations(png::Transformations::EXPAND | png::Transformations::STRIP_16);
+    let mut reader = decoder
+        .read_info()
+        .map_err(|error| format!("png header: {error}"))?;
+    let out_len = reader
+        .output_buffer_size()
+        .ok_or_else(|| "png output size unavailable".to_owned())?;
+    let mut data = vec![0u8; out_len];
+    let info = reader
+        .next_frame(&mut data)
+        .map_err(|error| format!("png frame: {error}"))?;
+    data.truncate(info.buffer_size());
+    let rgba = expand_png_to_rgba(info.color_type, info.bit_depth, data)?;
+    Ok(DecodedRgbaPng {
+        width: info.width,
+        height: info.height,
+        rgba,
+    })
+}
+
+fn expand_png_to_rgba(
+    color_type: png::ColorType,
+    bit_depth: png::BitDepth,
+    data: Vec<u8>,
+) -> Result<Vec<u8>, String> {
+    if bit_depth != png::BitDepth::Eight {
+        return Err(format!("unsupported png bit depth {bit_depth:?}"));
+    }
+
+    match color_type {
+        png::ColorType::Rgba => Ok(data),
+        png::ColorType::Rgb => {
+            let mut rgba = Vec::with_capacity(data.len() / 3 * 4);
+            for pixel in data.chunks_exact(3) {
+                rgba.extend_from_slice(&[pixel[0], pixel[1], pixel[2], 255]);
+            }
+            Ok(rgba)
+        }
+        png::ColorType::GrayscaleAlpha => {
+            let mut rgba = Vec::with_capacity(data.len() / 2 * 4);
+            for pixel in data.chunks_exact(2) {
+                rgba.extend_from_slice(&[pixel[0], pixel[0], pixel[0], pixel[1]]);
+            }
+            Ok(rgba)
+        }
+        png::ColorType::Grayscale => {
+            let mut rgba = Vec::with_capacity(data.len() * 4);
+            for gray in data {
+                rgba.extend_from_slice(&[gray, gray, gray, 255]);
+            }
+            Ok(rgba)
+        }
+        other => Err(format!("unsupported png color type {other:?}")),
+    }
+}
+
+fn alpha_bounds(width: u32, height: u32, rgba: &[u8]) -> Option<(u32, u32, u32, u32)> {
     let mut min_x = width;
     let mut min_y = height;
     let mut max_x = 0;
@@ -10810,7 +10881,7 @@ fn alpha_bounds(image: &image::RgbaImage) -> Option<(u32, u32, u32, u32)> {
 
     for y in 0..height {
         for x in 0..width {
-            if image.get_pixel(x, y).0[3] != 0 {
+            if rgba[((y * width + x) * 4 + 3) as usize] != 0 {
                 min_x = min_x.min(x);
                 min_y = min_y.min(y);
                 max_x = max_x.max(x);

@@ -1,6 +1,6 @@
 use super::*;
-use adapterlibgfx::api::AdapterConfig;
-use adapterlibgfx::window::WgpuSevenWindowApp;
+use crate::adapterlibgfx::api::AdapterConfig;
+use crate::adapterlibgfx::window::WgpuSevenWindowApp;
 use std::sync::{Arc, atomic::AtomicBool};
 
 pub(super) fn tactics_window() {

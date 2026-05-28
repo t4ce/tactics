@@ -1,3 +1,4 @@
+mod adapterlibgfx;
 mod app;
 mod ase_assets;
 mod game_object;

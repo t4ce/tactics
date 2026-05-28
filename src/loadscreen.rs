@@ -2131,18 +2131,37 @@ fn spawn_chat_client() -> (Sender<ChatCommand>, Receiver<ChatClientEvent>) {
     let (command_tx, command_rx) = mpsc::channel();
     let (event_tx, event_rx) = mpsc::channel();
     thread::spawn(move || {
+        let runtime = match tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+        {
+            Ok(runtime) => runtime,
+            Err(error) => {
+                let _ = event_tx.send(ChatClientEvent::Error(format!("chat runtime: {error}")));
+                return;
+            }
+        };
+        let client = match chat_http_client() {
+            Ok(client) => client,
+            Err(error) => {
+                let _ = event_tx.send(ChatClientEvent::Error(error));
+                return;
+            }
+        };
         let mut since = 0;
         let mut last_poll = Instant::now() - Duration::from_millis(CHAT_POLL_MS);
         loop {
             match command_rx.recv_timeout(Duration::from_millis(100)) {
-                Ok(ChatCommand::Send(text)) => match post_chat_message(&text) {
-                    Ok(()) => {
-                        last_poll = Instant::now() - Duration::from_millis(CHAT_POLL_MS);
+                Ok(ChatCommand::Send(text)) => {
+                    match runtime.block_on(post_chat_message(&client, &text)) {
+                        Ok(()) => {
+                            last_poll = Instant::now() - Duration::from_millis(CHAT_POLL_MS);
+                        }
+                        Err(error) => {
+                            let _ = event_tx.send(ChatClientEvent::Error(error));
+                        }
                     }
-                    Err(error) => {
-                        let _ = event_tx.send(ChatClientEvent::Error(error));
-                    }
-                },
+                }
                 Err(RecvTimeoutError::Timeout) => {}
                 Err(RecvTimeoutError::Disconnected) => break,
             }
@@ -2152,7 +2171,7 @@ fn spawn_chat_client() -> (Sender<ChatCommand>, Receiver<ChatClientEvent>) {
             }
             last_poll = Instant::now();
 
-            match fetch_chat_messages(since) {
+            match runtime.block_on(fetch_chat_messages(&client, since)) {
                 Ok(messages) => {
                     if let Some(max_id) = messages.iter().map(|message| message.id).max() {
                         since = since.max(max_id);
@@ -2170,36 +2189,42 @@ fn spawn_chat_client() -> (Sender<ChatCommand>, Receiver<ChatClientEvent>) {
     (command_tx, event_rx)
 }
 
-fn fetch_chat_messages(since: u64) -> Result<Vec<ChatMessage>, String> {
+async fn fetch_chat_messages(
+    client: &reqwest::Client,
+    since: u64,
+) -> Result<Vec<ChatMessage>, String> {
     let url = format!("{CHAT_SERVER_BASE}/api/rooms/{CHAT_ROOM}/messages?since={since}");
-    let response = chat_http_client()?
+    let response = client
         .get(url)
         .send()
+        .await
         .map_err(|error| format!("chat get: {error}"))?
         .error_for_status()
         .map_err(|error| format!("chat status: {error}"))?
         .json::<ChatMessagesResponse>()
+        .await
         .map_err(|error| format!("chat parse failed: {error}"))?;
     Ok(response.messages)
 }
 
-fn post_chat_message(text: &str) -> Result<(), String> {
+async fn post_chat_message(client: &reqwest::Client, text: &str) -> Result<(), String> {
     let url = format!("{CHAT_SERVER_BASE}/api/rooms/{CHAT_ROOM}/messages");
-    chat_http_client()?
+    client
         .post(url)
         .json(&ChatPost {
             user: CHAT_USER,
             text,
         })
         .send()
+        .await
         .map_err(|error| format!("chat post: {error}"))?
         .error_for_status()
         .map_err(|error| format!("chat status: {error}"))?;
     Ok(())
 }
 
-fn chat_http_client() -> Result<reqwest::blocking::Client, String> {
-    reqwest::blocking::Client::builder()
+fn chat_http_client() -> Result<reqwest::Client, String> {
+    reqwest::Client::builder()
         .timeout(Duration::from_millis(CHAT_CONNECT_TIMEOUT_MS))
         .build()
         .map_err(|error| format!("chat client: {error}"))

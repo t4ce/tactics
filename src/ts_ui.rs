@@ -1,4 +1,4 @@
-use adapterlibgfx::vertex::{Rgba8, TexVertex};
+use crate::adapterlibgfx::vertex::{Rgba8, TexVertex};
 
 pub const BANNER_TEXTURE: u32 = 21;
 pub const BIG_RIBBONS_TEXTURE: u32 = 22;
