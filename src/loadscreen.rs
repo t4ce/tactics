@@ -839,10 +839,10 @@ impl LoadScreen {
         let _ = adapter
             .draw_tex_triangles_no_present(self.terrain.texture_id, &under_foregrounds.bytes);
         let _ = adapter.draw_tex_triangles_no_present(self.terrain.texture_id, &foregrounds.bytes);
-        let _ = adapter.set_texture_effect(TextureEffect::Plain);
 
         self.draw_background_world_assets(adapter, camera, start_col, start_row, end_col, end_row);
         self.draw_background_clouds(adapter, camera);
+        let _ = adapter.set_texture_effect(TextureEffect::Plain);
     }
 
     fn draw_blurred_background_scene(&self, adapter: &mut Adapter) {

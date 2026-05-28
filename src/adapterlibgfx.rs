@@ -142,6 +142,13 @@ pub mod api {
     use super::vertex::{decode_rgb_vertices, encode_rgb_vertices, usable_rgb_len, usable_tex_len};
     use trueos::ui2::gfx;
 
+    const PRESERVE_RENDER_TARGET_CLEAR_RGB: u32 = u32::MAX;
+    const SUPPRESS_REPAINT_WINDOW_ID: u32 = u32::MAX;
+    const ASYNC_TEX_STATUS_PENDING: i32 = 1;
+    const SURFACE_BACKPRESSURE_FRAMES: u8 = 1;
+    const SURFACE_BACKBUFFER_TEX_OFFSET: u32 = 20_000;
+    const SURFACE_BACKBUFFER_COUNT: u8 = 3;
+
     #[derive(Clone, Copy, Debug)]
     pub struct AdapterConfig {
         pub width: u32,
@@ -178,8 +185,11 @@ pub mod api {
         stats: FrameStats,
         last_frame: Option<Frame>,
         target_tex_id: u32,
+        surface_backbuffer_tex_id: u32,
+        surface_backbuffer_slot: u8,
         repaint_window_id: u32,
         current_render_target: u32,
+        surface_backpressure_frames: u8,
         uploaded: BTreeMap<u32, (u32, u32)>,
     }
 
@@ -202,14 +212,19 @@ pub mod api {
                 stats: FrameStats::default(),
                 last_frame: None,
                 target_tex_id: 0,
+                surface_backbuffer_tex_id: 0,
+                surface_backbuffer_slot: 0,
                 repaint_window_id: 0,
                 current_render_target: 0,
+                surface_backpressure_frames: 0,
                 uploaded: BTreeMap::new(),
             }
         }
 
         pub fn bind_surface(&mut self, target_tex_id: u32, repaint_window_id: u32) {
             self.target_tex_id = target_tex_id;
+            self.surface_backbuffer_tex_id = 0;
+            self.surface_backbuffer_slot = 0;
             self.repaint_window_id = repaint_window_id;
             self.uploaded.insert(
                 target_tex_id,
@@ -246,6 +261,18 @@ pub mod api {
         ) -> i32 {
             if self.frame_active {
                 return -1;
+            }
+            if self.surface_backpressure_frames > 0 {
+                self.surface_backpressure_frames -= 1;
+                return -2;
+            }
+            if self.target_tex_id != 0
+                && self.texture_status(self.target_tex_id) == ASYNC_TEX_STATUS_PENDING
+            {
+                return -2;
+            }
+            if self.target_tex_id != 0 && !self.select_surface_backbuffer() {
+                return -3;
             }
             self.frame_active = true;
             self.frame_seq = self.frame_seq.wrapping_add(1).max(1);
@@ -414,16 +441,25 @@ pub mod api {
         }
 
         fn present_frame(&mut self, frame: &Frame) {
-            let mut target_tex_id = self.target_tex_id;
+            let surface_tex_id = self.target_tex_id;
+            let backbuffer_tex_id = self.surface_backbuffer_tex_id;
+            let default_target_tex_id = if backbuffer_tex_id != 0 {
+                backbuffer_tex_id
+            } else {
+                surface_tex_id
+            };
+            let mut target_tex_id = default_target_tex_id;
             let mut target_width = frame.logical_width.max(1);
             let mut target_height = frame.logical_height.max(1);
             let mut clear_rgb = frame.clear_rgb;
+            let mut texture_effect = TextureEffect::Plain;
+            let mut failed = false;
 
-            for command in &frame.commands {
+            for command in frame.commands.iter() {
                 match command {
                     FrameCommand::SetRenderTarget(tex_id) => {
                         target_tex_id = if *tex_id == 0 {
-                            self.target_tex_id
+                            default_target_tex_id
                         } else {
                             *tex_id
                         };
@@ -436,37 +472,175 @@ pub mod api {
                         if target_tex_id == 0 || vertices.is_empty() {
                             continue;
                         }
+                        let flipped_vertices;
+                        let vertices = if texture_effect == TextureEffect::World {
+                            flipped_vertices = flip_rgb_vertices_y(vertices);
+                            &flipped_vertices
+                        } else {
+                            vertices
+                        };
                         let vertices = encode_rgb_vertices(vertices);
-                        let _ = gfx::render_rgb_triangles_to_texture(
+                        let rc = gfx::render_rgb_triangles_to_texture(
                             target_tex_id,
                             target_width,
                             target_height,
                             clear_rgb,
-                            self.repaint_window_id,
+                            SUPPRESS_REPAINT_WINDOW_ID,
                             &vertices,
                         );
-                        clear_rgb = 0x000000;
+                        if rc {
+                            clear_rgb = PRESERVE_RENDER_TARGET_CLEAR_RGB;
+                        } else {
+                            self.mark_surface_backpressure();
+                            failed = true;
+                            break;
+                        }
                     }
                     FrameCommand::DrawTex { tex_id, vertices } => {
                         if target_tex_id == 0 || vertices.is_empty() {
                             continue;
                         }
-                        let _ = gfx::render_tex_triangles_to_texture(
+                        let flipped_vertices;
+                        let vertices = if texture_effect == TextureEffect::World {
+                            flipped_vertices = flip_tex_vertices_y(vertices);
+                            &flipped_vertices
+                        } else {
+                            vertices
+                        };
+                        let rc = gfx::render_tex_triangles_to_texture(
                             target_tex_id,
                             *tex_id,
                             clear_rgb,
-                            self.repaint_window_id,
+                            SUPPRESS_REPAINT_WINDOW_ID,
                             vertices,
                         );
-                        clear_rgb = 0x000000;
+                        if rc {
+                            clear_rgb = PRESERVE_RENDER_TARGET_CLEAR_RGB;
+                        } else {
+                            self.mark_surface_backpressure();
+                            failed = true;
+                            break;
+                        }
+                    }
+                    FrameCommand::SetTextureEffect(effect) => {
+                        texture_effect = *effect;
                     }
                     FrameCommand::SetBlend
                     | FrameCommand::SetSampler
-                    | FrameCommand::SetTextureEffect(_)
                     | FrameCommand::SetScissor(_) => {}
                 }
             }
+
+            if !failed && surface_tex_id != 0 && backbuffer_tex_id != 0 {
+                let vertices = fullscreen_tex_vertices();
+                if !gfx::render_tex_triangles_to_texture(
+                    surface_tex_id,
+                    backbuffer_tex_id,
+                    PRESERVE_RENDER_TARGET_CLEAR_RGB,
+                    self.repaint_window_id,
+                    &vertices,
+                ) {
+                    self.mark_surface_backpressure();
+                }
+            }
         }
+
+        fn mark_surface_backpressure(&mut self) {
+            self.surface_backpressure_frames = self
+                .surface_backpressure_frames
+                .max(SURFACE_BACKPRESSURE_FRAMES);
+        }
+
+        fn select_surface_backbuffer(&mut self) -> bool {
+            if self.target_tex_id == 0 {
+                self.surface_backbuffer_tex_id = 0;
+                return true;
+            }
+            for offset in 0..SURFACE_BACKBUFFER_COUNT {
+                let slot = (self.surface_backbuffer_slot + offset) % SURFACE_BACKBUFFER_COUNT;
+                let tex_id = self.surface_backbuffer_tex_id_for_slot(slot);
+                if self.texture_status(tex_id) == ASYNC_TEX_STATUS_PENDING {
+                    continue;
+                }
+                if self.ensure_surface_backbuffer(tex_id) {
+                    self.surface_backbuffer_tex_id = tex_id;
+                    self.surface_backbuffer_slot = (slot + 1) % SURFACE_BACKBUFFER_COUNT;
+                    return true;
+                }
+            }
+            false
+        }
+
+        fn surface_backbuffer_tex_id_for_slot(&self, slot: u8) -> u32 {
+            self.target_tex_id
+                .saturating_add(SURFACE_BACKBUFFER_TEX_OFFSET)
+                .saturating_add(slot as u32)
+        }
+
+        fn ensure_surface_backbuffer(&mut self, tex_id: u32) -> bool {
+            let width = self.config.width.max(1);
+            let height = self.config.height.max(1);
+            if self.texture_dimensions(tex_id) == Some((width, height)) {
+                return true;
+            }
+            let Some(len) = (width as usize)
+                .checked_mul(height as usize)
+                .and_then(|pixels| pixels.checked_mul(4))
+            else {
+                return false;
+            };
+            let pixels = vec![0; len];
+            if gfx::upload_texture_rgba_image_now(tex_id, width, height, &pixels) {
+                self.uploaded.insert(tex_id, (width, height));
+                true
+            } else {
+                false
+            }
+        }
+    }
+
+    fn fullscreen_tex_vertices() -> Vec<u8> {
+        let mut bytes = Vec::with_capacity(6 * 20);
+        for (x, y, u, v) in [
+            (-1.0, 1.0, 0.0, 1.0),
+            (1.0, 1.0, 1.0, 1.0),
+            (1.0, -1.0, 1.0, 0.0),
+            (-1.0, 1.0, 0.0, 1.0),
+            (1.0, -1.0, 1.0, 0.0),
+            (-1.0, -1.0, 0.0, 0.0),
+        ] {
+            push_tex_vertex(&mut bytes, x, y, u, v, [255, 255, 255, 255]);
+        }
+        bytes
+    }
+
+    fn flip_tex_vertices_y(vertices: &[u8]) -> Vec<u8> {
+        const VTX_SIZE: usize = 20;
+        let mut out = vertices.to_vec();
+        for vertex in out.chunks_exact_mut(VTX_SIZE) {
+            let y = -f32::from_le_bytes(vertex[4..8].try_into().unwrap());
+            vertex[4..8].copy_from_slice(&y.to_le_bytes());
+        }
+        out
+    }
+
+    fn flip_rgb_vertices_y(vertices: &[super::vertex::RgbVertex]) -> Vec<super::vertex::RgbVertex> {
+        vertices
+            .iter()
+            .map(|vertex| super::vertex::RgbVertex {
+                x: vertex.x,
+                y: -vertex.y,
+                color: vertex.color,
+            })
+            .collect()
+    }
+
+    fn push_tex_vertex(bytes: &mut Vec<u8>, x: f32, y: f32, u: f32, v: f32, color: [u8; 4]) {
+        bytes.extend_from_slice(&x.to_le_bytes());
+        bytes.extend_from_slice(&y.to_le_bytes());
+        bytes.extend_from_slice(&u.to_le_bytes());
+        bytes.extend_from_slice(&v.to_le_bytes());
+        bytes.extend_from_slice(&color);
     }
 }
 
