@@ -18,19 +18,19 @@ pub(super) fn tactics_window() {
             width: WINDOW_WIDTH,
             height: WINDOW_HEIGHT,
         },
-        Game::new(),
+        Game::with_exit_request(exit_request.clone()),
         "tactics world viewer",
         AdapterConfig {
             width: WINDOW_WIDTH,
             height: WINDOW_HEIGHT,
         },
-        worldviewer::WorldViewer::new(),
+        worldviewer::WorldViewer::with_exit_request(exit_request.clone()),
         "tactics unit walk viewer",
         AdapterConfig {
             width: UNIT_VIEWER_WIDTH,
             height: UNIT_VIEWER_HEIGHT,
         },
-        UnitWalkViewer::new(),
+        UnitWalkViewer::with_exit_request(exit_request.clone()),
         "tactics loadscreen",
         AdapterConfig {
             width: WINDOW_WIDTH,
@@ -50,19 +50,19 @@ pub(super) fn tactics_window() {
             width: ICON_VIEWER_WIDTH,
             height: ICON_VIEWER_HEIGHT,
         },
-        IconViewer::new(),
+        IconViewer::with_exit_request(exit_request.clone()),
         "tactics event editor",
         AdapterConfig {
             width: EVENT_EDITOR_WIDTH,
             height: EVENT_EDITOR_HEIGHT,
         },
-        EventEditor::new(),
+        EventEditor::with_exit_request(exit_request.clone()),
         "tactics_window",
         AdapterConfig {
             width: WINDOW_WIDTH,
             height: WINDOW_HEIGHT,
         },
-        IdleWorldViewer::new(),
+        IdleWorldViewer::with_exit_request(exit_request.clone()),
     )
     .defer_primary_until(world_editor_request)
     .defer_secondary_until(world_viewer_request)

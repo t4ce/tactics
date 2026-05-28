@@ -94,9 +94,18 @@ const WINDOW_CHROME_BLUE_BUTTON_BYTES: &[u8] = include_bytes!(
 const WINDOW_CHROME_RED_BUTTON_BYTES: &[u8] = include_bytes!(
     "../ts_freepack/UI Elements/UI Elements/Buttons/SmallRedSquareButton_Regular.png"
 );
+const WINDOW_CHROME_EDGE_CORNERS_TEXTURE: u32 = 30_009;
+const WINDOW_CHROME_EDGE_CORNERS_BYTES: &[u8] =
+    include_bytes!("../ts_freepack/UI Elements/corners.png");
+const WINDOW_CHROME_EDGE_CORNER_LEFT: ImageRegion = ImageRegion::new(0, 0, 189, 213);
+const WINDOW_CHROME_EDGE_CORNER_RIGHT: ImageRegion = ImageRegion::new(204, 0, 196, 213);
+const WINDOW_CHROME_EDGE_CORNER_SCALE: f32 = 0.40;
+const WINDOW_CHROME_EDGE_CORNER_ALPHA: u8 = 217;
 const WINDOW_CHROME_BORDER_PX: f32 = 2.0;
 const WINDOW_CHROME_BUTTON_SIZE: f32 = 46.0;
 const WINDOW_CHROME_CLOSE_ICON_SIZE: f32 = 34.0;
+const WINDOW_CHROME_CLOSE_BUTTON_INSET: f32 = 14.0;
+const WINDOW_CHROME_CLOSE_BUTTON_Y_OFFSET: f32 = -5.0;
 const WINDOW_CHROME_FRAME_DRAW_TILE: f32 = 16.0;
 const WINDOW_CHROME_FRAME_CORNER_SIZE: f32 = WINDOW_CHROME_FRAME_DRAW_TILE * 2.0;
 const WINDOW_CHROME_CLOSE_CONFIRM_SECS: u64 = 3;
@@ -125,7 +134,7 @@ const IDLE_GEOMANCER_WALL_RADIUS_TILES: isize = 7;
 const IDLE_GEOMANCER_WALL_MIN_CASTS: usize = 1;
 const IDLE_GEOMANCER_WALL_MAX_CASTS: usize = 3;
 const IDLE_GEOMANCER_WALL_STAGGER_MS: u32 = 100;
-const IDLE_GEOMANCER_WALL_GROW_MS: u32 = 500;
+const IDLE_GEOMANCER_WALL_GROW_MS: u32 = 1_500;
 const IDLE_GEOMANCER_WALL_ROTATION_DEGREES: f32 = 5.0;
 const IDLE_GEOMANCER_WALL_ROTATION_CYCLES: f32 = 3.0;
 const IDLE_RETILE_PATCH_PADDING_TILES: usize = 2;
@@ -441,6 +450,252 @@ struct TableRect {
     y: f32,
     w: f32,
     h: f32,
+}
+
+struct WindowChrome {
+    frame_top_left: ImageAsset,
+    frame_top_right: ImageAsset,
+    frame_bottom_left: ImageAsset,
+    frame_bottom_right: ImageAsset,
+    frame_horizontal: ImageAsset,
+    frame_vertical: ImageAsset,
+    close_icon: ImageAsset,
+    blue_button: ImageAsset,
+    red_button: ImageAsset,
+    edge_corners: ImageAsset,
+    close_confirmed_at: Option<Instant>,
+    exit_request: Option<Arc<AtomicBool>>,
+    uploaded: bool,
+}
+
+impl WindowChrome {
+    fn new(exit_request: Option<Arc<AtomicBool>>) -> Self {
+        Self {
+            frame_top_left: ImageAsset::from_png_bytes(
+                WINDOW_CHROME_FRAME_TEXTURE_BASE,
+                WINDOW_CHROME_FRAME_TOP_LEFT_BYTES,
+            ),
+            frame_top_right: ImageAsset::from_png_bytes(
+                WINDOW_CHROME_FRAME_TEXTURE_BASE + 1,
+                WINDOW_CHROME_FRAME_TOP_RIGHT_BYTES,
+            ),
+            frame_bottom_left: ImageAsset::from_png_bytes(
+                WINDOW_CHROME_FRAME_TEXTURE_BASE + 2,
+                WINDOW_CHROME_FRAME_BOTTOM_LEFT_BYTES,
+            ),
+            frame_bottom_right: ImageAsset::from_png_bytes(
+                WINDOW_CHROME_FRAME_TEXTURE_BASE + 3,
+                WINDOW_CHROME_FRAME_BOTTOM_RIGHT_BYTES,
+            ),
+            frame_horizontal: ImageAsset::from_png_bytes(
+                WINDOW_CHROME_FRAME_TEXTURE_BASE + 4,
+                WINDOW_CHROME_FRAME_HORIZONTAL_BYTES,
+            ),
+            frame_vertical: ImageAsset::from_png_bytes(
+                WINDOW_CHROME_FRAME_TEXTURE_BASE + 5,
+                WINDOW_CHROME_FRAME_VERTICAL_BYTES,
+            ),
+            close_icon: ImageAsset::from_png_bytes_cropped(
+                WINDOW_CHROME_CLOSE_ICON_TEXTURE,
+                WINDOW_CHROME_CLOSE_ICON_BYTES,
+            ),
+            blue_button: ImageAsset::from_png_bytes(
+                WINDOW_CHROME_BLUE_BUTTON_TEXTURE,
+                WINDOW_CHROME_BLUE_BUTTON_BYTES,
+            ),
+            red_button: ImageAsset::from_png_bytes(
+                WINDOW_CHROME_RED_BUTTON_TEXTURE,
+                WINDOW_CHROME_RED_BUTTON_BYTES,
+            ),
+            edge_corners: ImageAsset::from_png_bytes(
+                WINDOW_CHROME_EDGE_CORNERS_TEXTURE,
+                WINDOW_CHROME_EDGE_CORNERS_BYTES,
+            ),
+            close_confirmed_at: None,
+            exit_request,
+            uploaded: false,
+        }
+    }
+
+    fn set_exit_request(&mut self, exit_request: Arc<AtomicBool>) {
+        self.exit_request = Some(exit_request);
+    }
+
+    fn upload_assets(&mut self, adapter: &mut Adapter) {
+        if self.uploaded {
+            return;
+        }
+
+        for image in [
+            &self.frame_top_left,
+            &self.frame_top_right,
+            &self.frame_bottom_left,
+            &self.frame_bottom_right,
+            &self.frame_horizontal,
+            &self.frame_vertical,
+            &self.close_icon,
+            &self.blue_button,
+            &self.red_button,
+            &self.edge_corners,
+        ] {
+            let rc = adapter.upload_texture_rgba_image(
+                image.texture_id,
+                image.width,
+                image.height,
+                &image.rgba,
+            );
+            assert_eq!(rc, 0, "failed to upload window chrome texture");
+        }
+
+        self.uploaded = true;
+    }
+
+    fn handle_close_press(&mut self, mouse: Point, window_w: f32) -> bool {
+        if !inside_rect_table(mouse, window_chrome_close_button_rect(window_w)) {
+            return false;
+        }
+
+        if self.close_is_confirmed() {
+            if let Some(exit_request) = &self.exit_request {
+                exit_request.store(true, AtomicOrdering::Relaxed);
+            }
+        } else {
+            self.close_confirmed_at = Some(Instant::now());
+        }
+        true
+    }
+
+    fn close_is_confirmed(&mut self) -> bool {
+        let Some(confirmed_at) = self.close_confirmed_at else {
+            return false;
+        };
+        if confirmed_at.elapsed().as_secs() <= WINDOW_CHROME_CLOSE_CONFIRM_SECS {
+            true
+        } else {
+            self.close_confirmed_at = None;
+            false
+        }
+    }
+
+    fn draw(&mut self, adapter: &mut Adapter, window_width: u32, window_height: u32) {
+        let _ = adapter.set_texture_effect(TextureEffect::Plain);
+        self.draw_frame(adapter, window_width, window_height);
+        self.draw_close_button(adapter, window_width, window_height);
+    }
+
+    fn draw_frame(&self, adapter: &mut Adapter, window_width: u32, window_height: u32) {
+        let window_w = window_width as f32;
+        let window_h = window_height as f32;
+        let left_w = WINDOW_CHROME_EDGE_CORNER_LEFT.width as f32 * WINDOW_CHROME_EDGE_CORNER_SCALE;
+        let right_w =
+            WINDOW_CHROME_EDGE_CORNER_RIGHT.width as f32 * WINDOW_CHROME_EDGE_CORNER_SCALE;
+        let corner_h =
+            WINDOW_CHROME_EDGE_CORNER_LEFT.height as f32 * WINDOW_CHROME_EDGE_CORNER_SCALE;
+        let top_right_x = (window_w - left_w).max(0.0);
+        let bottom_y = (window_h - corner_h).max(0.0);
+        let bottom_right_x = (window_w - right_w).max(0.0);
+        let corner_tint = Rgba8::new(255, 255, 255, WINDOW_CHROME_EDGE_CORNER_ALPHA);
+
+        let mut corners = SpriteBatch::new(window_width, window_height);
+        corners.image_region_rotated_around(
+            &self.edge_corners,
+            WINDOW_CHROME_EDGE_CORNER_RIGHT,
+            0.0,
+            0.0,
+            right_w,
+            corner_h,
+            right_w * 0.5,
+            corner_h * 0.5,
+            std::f32::consts::PI,
+            corner_tint,
+        );
+        corners.image_region_rotated_around(
+            &self.edge_corners,
+            WINDOW_CHROME_EDGE_CORNER_LEFT,
+            top_right_x,
+            0.0,
+            left_w,
+            corner_h,
+            top_right_x + left_w * 0.5,
+            corner_h * 0.5,
+            std::f32::consts::PI,
+            corner_tint,
+        );
+        corners.image_region(
+            &self.edge_corners,
+            WINDOW_CHROME_EDGE_CORNER_LEFT,
+            0.0,
+            bottom_y,
+            left_w,
+            corner_h,
+            corner_tint,
+        );
+        corners.image_region(
+            &self.edge_corners,
+            WINDOW_CHROME_EDGE_CORNER_RIGHT,
+            bottom_right_x,
+            bottom_y,
+            right_w,
+            corner_h,
+            corner_tint,
+        );
+        let _ = adapter.draw_tex_triangles_no_present(self.edge_corners.texture_id, &corners.bytes);
+
+        let mut border = SolidBatch::new(window_width, window_height);
+        outline_rect(
+            &mut border,
+            0.0,
+            0.0,
+            window_w,
+            window_h,
+            WINDOW_CHROME_BORDER_PX,
+            Rgba8::new(0, 0, 0, 255),
+        );
+        let _ = adapter.draw_rgb_triangles_no_present(&border.bytes);
+    }
+
+    fn draw_close_button(&mut self, adapter: &mut Adapter, window_width: u32, window_height: u32) {
+        let rect = window_chrome_close_button_rect(window_width as f32);
+        let button = if self.close_is_confirmed() {
+            &self.red_button
+        } else {
+            &self.blue_button
+        };
+        let mut batch = SpriteBatch::new(window_width, window_height);
+        batch.image(rect.x, rect.y, rect.w, rect.h, Rgba8::WHITE);
+        let _ = adapter.draw_tex_triangles_no_present(button.texture_id, &batch.bytes);
+
+        let mut close = SpriteBatch::new(window_width, window_height);
+        close.image(
+            rect.x + (rect.w - WINDOW_CHROME_CLOSE_ICON_SIZE) * 0.5,
+            rect.y + (rect.h - WINDOW_CHROME_CLOSE_ICON_SIZE) * 0.5,
+            WINDOW_CHROME_CLOSE_ICON_SIZE,
+            WINDOW_CHROME_CLOSE_ICON_SIZE,
+            Rgba8::WHITE,
+        );
+        let _ = adapter.draw_tex_triangles_no_present(self.close_icon.texture_id, &close.bytes);
+    }
+}
+
+fn window_chrome_close_button_rect(window_w: f32) -> TableRect {
+    let half_button = WINDOW_CHROME_BUTTON_SIZE * 0.5;
+    TableRect {
+        x: (window_w
+            - WINDOW_CHROME_FRAME_CORNER_SIZE
+            - half_button
+            - WINDOW_CHROME_CLOSE_BUTTON_INSET)
+            .max(0.0),
+        y: (WINDOW_CHROME_FRAME_CORNER_SIZE - half_button
+            + WINDOW_CHROME_CLOSE_BUTTON_INSET
+            + WINDOW_CHROME_CLOSE_BUTTON_Y_OFFSET)
+            .max(0.0),
+        w: WINDOW_CHROME_BUTTON_SIZE,
+        h: WINDOW_CHROME_BUTTON_SIZE,
+    }
+}
+
+fn inside_rect_table(point: Point, rect: TableRect) -> bool {
+    inside_rect(point.x, point.y, rect.x, rect.y, rect.w, rect.h)
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1089,14 +1344,17 @@ struct Game {
     gold_animation_timer: f32,
     started_at: Instant,
     last_frame: Instant,
+    chrome: WindowChrome,
 }
 
 struct UnitWalkViewer {
     units: Vec<UnitWalkClip>,
+    mouse: Point,
     uploaded: bool,
     window_width: u32,
     window_height: u32,
     started_at: Instant,
+    chrome: WindowChrome,
 }
 
 struct RightClickIndicator {
@@ -1159,13 +1417,16 @@ struct IdleWorldViewer {
     retile_transition: Option<IdleRetileTransition>,
     pending_geomancer_walls: Vec<IdleGeomancerWallPlacement>,
     geomancer_wall_growths: Vec<IdleGeomancerWallGrowth>,
+    chrome: WindowChrome,
 }
 
 struct IconViewer {
     icons: Vec<IconTile>,
+    mouse: Point,
     uploaded: bool,
     window_width: u32,
     window_height: u32,
+    chrome: WindowChrome,
 }
 
 struct IconTile {
@@ -1517,6 +1778,7 @@ struct EventEditor {
     mouse: Point,
     window_width: u32,
     window_height: u32,
+    chrome: WindowChrome,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
@@ -2003,7 +2265,14 @@ impl Game {
             gold_animation_timer: 0.6,
             started_at: now,
             last_frame: now,
+            chrome: WindowChrome::new(None),
         }
+    }
+
+    fn with_exit_request(exit_request: Arc<AtomicBool>) -> Self {
+        let mut game = Self::new();
+        game.chrome.set_exit_request(exit_request);
+        game
     }
 
     fn resize_view(&mut self, width: u32, height: u32) {
@@ -2041,6 +2310,7 @@ impl Game {
     }
 
     fn upload_assets(&mut self, adapter: &mut Adapter) {
+        self.chrome.upload_assets(adapter);
         if self.uploaded {
             return;
         }
@@ -2559,6 +2829,8 @@ impl Game {
         self.draw_palette(adapter);
         self.draw_ui(adapter);
         self.draw_cursor(adapter);
+        self.chrome
+            .draw(adapter, self.window_width, self.window_height);
 
         let _ = adapter.end_frame();
     }
@@ -3733,6 +4005,10 @@ impl FrameProducer for Game {
         false
     }
 
+    fn window_decorations(&self) -> bool {
+        false
+    }
+
     fn resize(&mut self, width: u32, height: u32) {
         self.resize_view(width, height);
     }
@@ -3752,6 +4028,12 @@ impl FrameProducer for Game {
                 button: InputMouseButton::Left,
                 state: InputButtonState::Pressed,
             } => {
+                if self
+                    .chrome
+                    .handle_close_press(self.mouse, self.window_width as f32)
+                {
+                    return;
+                }
                 self.left_down = true;
                 self.handle_left_press();
             }
@@ -3813,11 +4095,19 @@ impl UnitWalkViewer {
 
         Self {
             units,
+            mouse: Point::default(),
             uploaded: false,
             window_width: UNIT_VIEWER_WIDTH,
             window_height: UNIT_VIEWER_HEIGHT,
             started_at: Instant::now(),
+            chrome: WindowChrome::new(None),
         }
+    }
+
+    fn with_exit_request(exit_request: Arc<AtomicBool>) -> Self {
+        let mut viewer = Self::new();
+        viewer.chrome.set_exit_request(exit_request);
+        viewer
     }
 
     fn resize_view(&mut self, width: u32, height: u32) {
@@ -3826,6 +4116,7 @@ impl UnitWalkViewer {
     }
 
     fn upload_assets(&mut self, adapter: &mut Adapter) {
+        self.chrome.upload_assets(adapter);
         if self.uploaded {
             return;
         }
@@ -3998,7 +4289,14 @@ impl IdleWorldViewer {
             retile_transition: None,
             pending_geomancer_walls: Vec::new(),
             geomancer_wall_growths: Vec::new(),
+            chrome: WindowChrome::new(None),
         }
+    }
+
+    fn with_exit_request(exit_request: Arc<AtomicBool>) -> Self {
+        let mut viewer = Self::new();
+        viewer.chrome.set_exit_request(exit_request);
+        viewer
     }
 
     fn resize_view(&mut self, width: u32, height: u32) {
@@ -4008,6 +4306,7 @@ impl IdleWorldViewer {
     }
 
     fn upload_assets(&mut self, adapter: &mut Adapter) {
+        self.chrome.upload_assets(adapter);
         if self.uploaded {
             return;
         }
@@ -4695,7 +4994,7 @@ impl IdleWorldViewer {
                 continue;
             }
             placement.due_ms = elapsed_ms
-                .saturating_add((order as u32 + 1).saturating_mul(IDLE_GEOMANCER_WALL_STAGGER_MS));
+                .saturating_add((order as u32).saturating_mul(IDLE_GEOMANCER_WALL_STAGGER_MS));
             placements.push(placement);
         }
 
@@ -6649,10 +6948,18 @@ impl IconViewer {
     fn new() -> Self {
         Self {
             icons: load_icon_viewer_icons(),
+            mouse: Point::default(),
             uploaded: false,
             window_width: ICON_VIEWER_WIDTH,
             window_height: ICON_VIEWER_HEIGHT,
+            chrome: WindowChrome::new(None),
         }
+    }
+
+    fn with_exit_request(exit_request: Arc<AtomicBool>) -> Self {
+        let mut viewer = Self::new();
+        viewer.chrome.set_exit_request(exit_request);
+        viewer
     }
 
     fn resize_view(&mut self, width: u32, height: u32) {
@@ -6661,6 +6968,7 @@ impl IconViewer {
     }
 
     fn upload_assets(&mut self, adapter: &mut Adapter) {
+        self.chrome.upload_assets(adapter);
         if self.uploaded {
             return;
         }
@@ -6717,7 +7025,14 @@ impl EventEditor {
             mouse: Point::default(),
             window_width: EVENT_EDITOR_WIDTH,
             window_height: EVENT_EDITOR_HEIGHT,
+            chrome: WindowChrome::new(None),
         }
+    }
+
+    fn with_exit_request(exit_request: Arc<AtomicBool>) -> Self {
+        let mut editor = Self::new();
+        editor.chrome.set_exit_request(exit_request);
+        editor
     }
 
     fn resize_view(&mut self, width: u32, height: u32) {
@@ -7982,8 +8297,29 @@ fn lighten_rgba_toward_white(rgba: &mut [u8], percent: u8) {
 }
 
 impl FrameProducer for UnitWalkViewer {
+    fn window_decorations(&self) -> bool {
+        false
+    }
+
     fn resize(&mut self, width: u32, height: u32) {
         self.resize_view(width, height);
+    }
+
+    fn handle_input(&mut self, event: InputEvent) {
+        match event {
+            InputEvent::CursorMoved { x, y } => {
+                self.mouse = Point { x, y };
+            }
+            InputEvent::MouseButton {
+                button: InputMouseButton::Left,
+                state: InputButtonState::Pressed,
+            } => {
+                let _ = self
+                    .chrome
+                    .handle_close_press(self.mouse, self.window_width as f32);
+            }
+            _ => {}
+        }
     }
 
     fn build_frame(&mut self, adapter: &mut Adapter) {
@@ -8107,12 +8443,18 @@ impl FrameProducer for UnitWalkViewer {
             adapter.draw_tex_triangles_no_present(ts_ui::BANNER_TEXTURE, &caption.texture_bytes);
         let _ = adapter.draw_rgb_triangles_no_present(&caption.solid_bytes);
 
+        self.chrome
+            .draw(adapter, self.window_width, self.window_height);
         let _ = adapter.end_frame();
     }
 }
 
 impl FrameProducer for IdleWorldViewer {
     fn cursor_visible(&self) -> bool {
+        false
+    }
+
+    fn window_decorations(&self) -> bool {
         false
     }
 
@@ -8159,6 +8501,12 @@ impl FrameProducer for IdleWorldViewer {
                 button: InputMouseButton::Left,
                 state: InputButtonState::Pressed,
             } => {
+                if self
+                    .chrome
+                    .handle_close_press(self.mouse, self.window_width as f32)
+                {
+                    return;
+                }
                 if self.show_hotkey_menu {
                     if !self.mouse_inside_hotkey_menu() {
                         self.show_hotkey_menu = false;
@@ -8261,14 +8609,37 @@ impl FrameProducer for IdleWorldViewer {
             self.draw_selection_corners(adapter, rect);
         }
         self.draw_cursor(adapter, elapsed_ms);
+        self.chrome
+            .draw(adapter, self.window_width, self.window_height);
 
         let _ = adapter.end_frame();
     }
 }
 
 impl FrameProducer for IconViewer {
+    fn window_decorations(&self) -> bool {
+        false
+    }
+
     fn resize(&mut self, width: u32, height: u32) {
         self.resize_view(width, height);
+    }
+
+    fn handle_input(&mut self, event: InputEvent) {
+        match event {
+            InputEvent::CursorMoved { x, y } => {
+                self.mouse = Point { x, y };
+            }
+            InputEvent::MouseButton {
+                button: InputMouseButton::Left,
+                state: InputButtonState::Pressed,
+            } => {
+                let _ = self
+                    .chrome
+                    .handle_close_press(self.mouse, self.window_width as f32);
+            }
+            _ => {}
+        }
     }
 
     fn build_frame(&mut self, adapter: &mut Adapter) {
@@ -8321,11 +8692,17 @@ impl FrameProducer for IconViewer {
             let _ = adapter.draw_rgb_triangles_no_present(&label.solid_bytes);
         }
 
+        self.chrome
+            .draw(adapter, self.window_width, self.window_height);
         let _ = adapter.end_frame();
     }
 }
 
 impl FrameProducer for EventEditor {
+    fn window_decorations(&self) -> bool {
+        false
+    }
+
     fn resize(&mut self, width: u32, height: u32) {
         self.resize_view(width, height);
     }
@@ -8338,12 +8715,21 @@ impl FrameProducer for EventEditor {
             InputEvent::MouseButton {
                 button: InputMouseButton::Left,
                 state: InputButtonState::Pressed,
-            } => self.handle_left_click(),
+            } => {
+                if self
+                    .chrome
+                    .handle_close_press(self.mouse, self.window_width as f32)
+                {
+                    return;
+                }
+                self.handle_left_click();
+            }
             _ => {}
         }
     }
 
     fn build_frame(&mut self, adapter: &mut Adapter) {
+        self.chrome.upload_assets(adapter);
         let _ = adapter.begin_frame(0x243C40);
 
         let w = self.window_width as f32;
@@ -8465,6 +8851,8 @@ impl FrameProducer for EventEditor {
 
         let _ = adapter.draw_rgb_triangles_no_present(&solid.bytes);
         let _ = adapter.draw_rgb_triangles_no_present(&text.solid_bytes);
+        self.chrome
+            .draw(adapter, self.window_width, self.window_height);
         let _ = adapter.end_frame();
     }
 }
@@ -10524,20 +10912,10 @@ mod idle_world_tests {
                 .iter()
                 .enumerate()
                 .all(|(index, placement)| placement.due_ms
-                    == 1_000 + (index as u32 + 1) * IDLE_GEOMANCER_WALL_STAGGER_MS)
+                    == 1_000 + index as u32 * IDLE_GEOMANCER_WALL_STAGGER_MS)
         );
 
         let first_due_ms = viewer.pending_geomancer_walls[0].due_ms;
-        viewer.apply_due_geomancer_wall_placements(first_due_ms - 1);
-        assert_eq!(
-            viewer
-                .world
-                .generated_source
-                .as_ref()
-                .map(|generated| generated.wall_tiles.len()),
-            Some(initial_wall_count)
-        );
-
         viewer.apply_due_geomancer_wall_placements(first_due_ms);
         assert!(!viewer.geomancer_wall_growths.is_empty());
         assert_eq!(

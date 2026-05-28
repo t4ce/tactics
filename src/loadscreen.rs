@@ -34,6 +34,7 @@ const LOADSCREEN_BUTTON_HOVER_TEXTURE: u32 = 15_021;
 const LOADSCREEN_CREATE_GAME_TEXTURE: u32 = 15_022;
 const LOADSCREEN_BLUE_STATUS_TEXTURE: u32 = 15_023;
 const LOADSCREEN_RED_STATUS_TEXTURE: u32 = 15_024;
+const LOADSCREEN_RED_CLOSE_BUTTON_TEXTURE: u32 = 15_025;
 const LOADSCREEN_EDGE_CORNERS_TEXTURE: u32 = 15_030;
 const LOADSCREEN_EDGE_CORNER_LEFT: ImageRegion = ImageRegion::new(0, 0, 189, 213);
 const LOADSCREEN_EDGE_CORNER_RIGHT: ImageRegion = ImageRegion::new(204, 0, 196, 213);
@@ -53,6 +54,9 @@ const LOADSCREEN_BLUE_STATUS_BYTES: &[u8] = include_bytes!(
 );
 const LOADSCREEN_RED_STATUS_BYTES: &[u8] = include_bytes!(
     "../ts_freepack/UI Elements/UI Elements/Buttons/SmallRedRoundButton_Regular.png"
+);
+const LOADSCREEN_RED_CLOSE_BUTTON_BYTES: &[u8] = include_bytes!(
+    "../ts_freepack/UI Elements/UI Elements/Buttons/SmallRedSquareButton_Regular.png"
 );
 const LOADSCREEN_EDGE_CORNERS_BYTES: &[u8] =
     include_bytes!("../ts_freepack/UI Elements/corners.png");
@@ -95,6 +99,7 @@ const TOP_PAPER_PAD_TOP: f32 = 44.0;
 const TOP_PAPER_PAD_BOTTOM: f32 = 42.0;
 const CLOSE_BUTTON_SIZE: f32 = 46.0;
 const CLOSE_ICON_SIZE: f32 = 34.0;
+const CLOSE_CONFIRM_SECS: u64 = 3;
 const CLOSE_BUTTON_INSET: f32 = 14.0;
 const CLOSE_BUTTON_Y_OFFSET: f32 = -5.0;
 const SERVER_STATUS_ICON_SIZE: f32 = 30.0;
@@ -147,6 +152,7 @@ pub(super) struct LoadScreen {
     small_blue_square_button_hover: ImageAsset,
     small_blue_round_button: ImageAsset,
     small_red_round_button: ImageAsset,
+    small_red_square_button: ImageAsset,
     arrow_icon: ImageAsset,
     close_icon: ImageAsset,
     create_game_icon: ImageAsset,
@@ -179,6 +185,7 @@ pub(super) struct LoadScreen {
     exit_request: Arc<AtomicBool>,
     mouse: Point,
     layout_offset: Point,
+    close_confirmed_at: Option<Instant>,
     uploaded: bool,
     window_width: u32,
     window_height: u32,
@@ -273,6 +280,10 @@ impl LoadScreen {
                 LOADSCREEN_RED_STATUS_TEXTURE,
                 LOADSCREEN_RED_STATUS_BYTES,
             ),
+            small_red_square_button: ImageAsset::from_png_bytes(
+                LOADSCREEN_RED_CLOSE_BUTTON_TEXTURE,
+                LOADSCREEN_RED_CLOSE_BUTTON_BYTES,
+            ),
             arrow_icon: ImageAsset::from_png_bytes_cropped(
                 LOADSCREEN_ARROW_TEXTURE,
                 LOADSCREEN_ARROW_BYTES,
@@ -345,6 +356,7 @@ impl LoadScreen {
             exit_request,
             mouse: Point::default(),
             layout_offset: Point::default(),
+            close_confirmed_at: None,
             uploaded: false,
             window_width: WINDOW_WIDTH,
             window_height: WINDOW_HEIGHT,
@@ -417,6 +429,13 @@ impl LoadScreen {
             &self.small_red_round_button.rgba,
         );
         assert_eq!(rc, 0, "failed to upload loadscreen red status texture");
+        let rc = adapter.upload_texture_rgba_image(
+            self.small_red_square_button.texture_id,
+            self.small_red_square_button.width,
+            self.small_red_square_button.height,
+            &self.small_red_square_button.rgba,
+        );
+        assert_eq!(rc, 0, "failed to upload loadscreen red close texture");
         let rc = adapter.upload_texture_rgba_image(
             self.arrow_icon.texture_id,
             self.arrow_icon.width,
@@ -1532,14 +1551,28 @@ impl LoadScreen {
         )
     }
 
-    fn draw_close_button(&self, adapter: &mut Adapter) {
+    fn close_is_confirmed(&mut self) -> bool {
+        let Some(confirmed_at) = self.close_confirmed_at else {
+            return false;
+        };
+        if confirmed_at.elapsed().as_secs() <= CLOSE_CONFIRM_SECS {
+            true
+        } else {
+            self.close_confirmed_at = None;
+            false
+        }
+    }
+
+    fn draw_close_button(&mut self, adapter: &mut Adapter) {
         let rect = close_button_rect(self.window_width as f32);
-        let button_asset =
-            if inside_rect(self.mouse.x, self.mouse.y, rect.x, rect.y, rect.w, rect.h) {
-                &self.small_blue_square_button_hover
-            } else {
-                &self.small_blue_square_button
-            };
+        let close_confirmed = self.close_is_confirmed();
+        let button_asset = if close_confirmed {
+            &self.small_red_square_button
+        } else if inside_rect(self.mouse.x, self.mouse.y, rect.x, rect.y, rect.w, rect.h) {
+            &self.small_blue_square_button_hover
+        } else {
+            &self.small_blue_square_button
+        };
         let mut button = SpriteBatch::new(self.window_width, self.window_height);
         button.image(rect.x, rect.y, rect.w, rect.h, Rgba8::WHITE);
         let _ = adapter.draw_tex_triangles_no_present(button_asset.texture_id, &button.bytes);
@@ -1598,7 +1631,11 @@ impl LoadScreen {
             close.h,
         ) {
             self.chat_focused = false;
-            self.exit_request.store(true, Ordering::Relaxed);
+            if self.close_is_confirmed() {
+                self.exit_request.store(true, Ordering::Relaxed);
+            } else {
+                self.close_confirmed_at = Some(Instant::now());
+            }
             return;
         }
 

@@ -224,6 +224,7 @@ pub(super) struct WorldViewer {
     uploaded: bool,
     window_width: u32,
     window_height: u32,
+    chrome: WindowChrome,
 }
 
 impl WorldViewer {
@@ -255,7 +256,14 @@ impl WorldViewer {
             uploaded: false,
             window_width: WINDOW_WIDTH,
             window_height: WINDOW_HEIGHT,
+            chrome: WindowChrome::new(None),
         }
+    }
+
+    pub(super) fn with_exit_request(exit_request: Arc<AtomicBool>) -> Self {
+        let mut viewer = Self::new();
+        viewer.chrome.set_exit_request(exit_request);
+        viewer
     }
 
     fn resize_view(&mut self, width: u32, height: u32) {
@@ -265,6 +273,7 @@ impl WorldViewer {
     }
 
     fn upload_assets(&mut self, adapter: &mut Adapter) {
+        self.chrome.upload_assets(adapter);
         if self.uploaded {
             return;
         }
@@ -400,6 +409,8 @@ impl WorldViewer {
         self.draw_wall_preview(adapter);
 
         let _ = adapter.set_scissor(None);
+        self.chrome
+            .draw(adapter, self.window_width, self.window_height);
         let _ = adapter.end_frame();
     }
 
@@ -1115,6 +1126,10 @@ impl WorldViewer {
 }
 
 impl FrameProducer for WorldViewer {
+    fn window_decorations(&self) -> bool {
+        false
+    }
+
     fn resize(&mut self, width: u32, height: u32) {
         self.resize_view(width, height);
     }
@@ -1148,6 +1163,12 @@ impl FrameProducer for WorldViewer {
                 button: InputMouseButton::Left,
                 state: InputButtonState::Pressed,
             } => {
+                if self
+                    .chrome
+                    .handle_close_press(self.mouse, self.window_width as f32)
+                {
+                    return;
+                }
                 if self.waiting_for_initial_platform_click {
                     self.waiting_for_initial_platform_click = false;
                     self.generator.complete_initial_seeds();

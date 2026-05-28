@@ -2,6 +2,7 @@ use serde_json::Value;
 use serde_json::json;
 use std::io::{BufRead, BufReader, Write};
 use std::net::{TcpStream, ToSocketAddrs};
+use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
 pub const DEFAULT_SERVER_ADDR: &str = "trueos.eu:1337";
@@ -37,6 +38,17 @@ fn timeout_error(context: &str) -> std::io::Error {
 
 fn log_lobby_client(message: impl std::fmt::Display) {
     eprintln!("[lobby-client] {message}");
+}
+
+fn lobby_session_id() -> &'static str {
+    static SESSION_ID: OnceLock<String> = OnceLock::new();
+    SESSION_ID.get_or_init(|| {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos();
+        format!("tactics-{}-{now:x}", std::process::id())
+    })
 }
 
 fn send(stream: &mut TcpStream, value: serde_json::Value) -> std::io::Result<()> {
@@ -91,10 +103,7 @@ pub(super) fn create_game_from(
     let mut client = TacticsClient::connect(addr)?;
     client.create_game(name, game, max_players)?;
     client.wait_for_create_game_ack()?.ok_or_else(|| {
-        std::io::Error::new(
-            std::io::ErrorKind::TimedOut,
-            "server did not confirm created game",
-        )
+        std::io::Error::new(std::io::ErrorKind::TimedOut, "server did not confirm created game")
     })
 }
 
@@ -129,10 +138,7 @@ pub(super) fn create_game_and_get_lobbies_with_created_from(
     let mut client = TacticsClient::connect(addr)?;
     client.create_game(name, game, max_players)?;
     let lobby = client.wait_for_create_game_ack()?.ok_or_else(|| {
-        std::io::Error::new(
-            std::io::ErrorKind::TimedOut,
-            "server did not confirm created game",
-        )
+        std::io::Error::new(std::io::ErrorKind::TimedOut, "server did not confirm created game")
     })?;
     let lobbies = client.get_lobbies()?;
     Ok((lobbies, lobby))
@@ -150,8 +156,8 @@ pub(super) fn free_game_and_get_lobbies_from(
     log_lobby_client(format_args!("free game game={game} game_id={game_id}"));
     let mut client = TacticsClient::connect(addr.clone())?;
     client.free_game(game_id)?;
-    drop(client);
-    get_lobbies_from(addr, game)
+    client.wait_for_action_ack("free_game", "free_game")?;
+    client.get_lobbies()
 }
 
 impl TacticsClient {
@@ -174,7 +180,8 @@ impl TacticsClient {
                 "name": name,
                 "ping_ms": 0,
                 "latency_ms": 0,
-                "game": game
+                "game": game,
+                "session_id": lobby_session_id()
             }),
         )
     }
@@ -226,10 +233,7 @@ impl TacticsClient {
                         std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
                     ) =>
                 {
-                    log_lobby_client(format_args!(
-                        "game_list read timed out ({:?})",
-                        error.kind()
-                    ));
+                    log_lobby_client(format_args!("game_list read timed out ({:?})", error.kind()));
                     return Err(timeout_error("game_list"));
                 }
                 Err(error) => {
@@ -247,7 +251,8 @@ impl TacticsClient {
                 "type": "create_game",
                 "name": name,
                 "game": game,
-                "max_players": max_players
+                "max_players": max_players,
+                "session_id": lobby_session_id()
             }),
         )
     }
@@ -257,9 +262,71 @@ impl TacticsClient {
             &mut self.stream,
             json!({
                 "type": "free_game",
-                "game_id": game_id
+                "game_id": game_id,
+                "session_id": lobby_session_id()
             }),
         )
+    }
+
+    fn wait_for_action_ack(&mut self, action: &str, context: &str) -> std::io::Result<()> {
+        let mut read = BufReader::new(self.stream.try_clone()?);
+        let started = Instant::now();
+        let mut line = String::new();
+
+        loop {
+            if started.elapsed() > Duration::from_secs(2) {
+                log_lobby_client(format_args!("{context} ack wait exceeded 2s"));
+                return Err(timeout_error(context));
+            }
+
+            line.clear();
+            match read.read_line(&mut line) {
+                Ok(0) => {
+                    log_lobby_client(format_args!("{context} ack connection closed"));
+                    return Err(connection_closed_error(context));
+                }
+                Ok(_) => {
+                    let raw = line.trim();
+                    log_lobby_client(format_args!("recv {context}_ack {raw}"));
+                    let Ok(value) = serde_json::from_str::<Value>(raw) else {
+                        log_lobby_client(format_args!(
+                            "ignored non-json {context}_ack frame {raw:?}"
+                        ));
+                        continue;
+                    };
+                    if value.get("type").and_then(Value::as_str) == Some("error") {
+                        let message = value
+                            .get("message")
+                            .and_then(Value::as_str)
+                            .unwrap_or("server returned an error");
+                        log_lobby_client(format_args!("{context} server error {message:?}"));
+                        return Err(std::io::Error::other(message.to_owned()));
+                    }
+                    if value.get("type").and_then(Value::as_str) == Some("ack")
+                        && value.get("action").and_then(Value::as_str) == Some(action)
+                    {
+                        return Ok(());
+                    }
+                    log_lobby_client(format_args!("ignored {context}_ack frame {value}"));
+                }
+                Err(error)
+                    if matches!(
+                        error.kind(),
+                        std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+                    ) =>
+                {
+                    log_lobby_client(format_args!(
+                        "{context} ack read timed out ({:?})",
+                        error.kind()
+                    ));
+                    return Err(timeout_error(context));
+                }
+                Err(error) => {
+                    log_lobby_client(format_args!("{context} ack read failed: {error}"));
+                    return Err(error);
+                }
+            }
+        }
     }
 
     fn wait_for_create_game_ack(&mut self) -> std::io::Result<Option<Lobby>> {
@@ -503,6 +570,7 @@ fn main() -> std::io::Result<()> {
     let mut stream = TcpStream::connect(DEFAULT_SERVER_ADDR)?;
     stream.set_nodelay(true)?;
 
+    let session_id = lobby_session_id();
     let started = Instant::now();
     send(
         &mut stream,
@@ -511,7 +579,8 @@ fn main() -> std::io::Result<()> {
             "name": "Ada",
             "ping_ms": 0,
             "latency_ms": 0,
-            "game": DEFAULT_GAME
+            "game": DEFAULT_GAME,
+            "session_id": session_id
         }),
     )?;
     send(&mut stream, json!({"type": "game_list"}))?;
@@ -521,19 +590,17 @@ fn main() -> std::io::Result<()> {
             "type": "create_game",
             "name": "Friday lobby",
             "game": DEFAULT_GAME,
-            "max_players": 4
+            "max_players": 4,
+            "session_id": session_id
         }),
     )?;
-    send(&mut stream, json!({"type": "start_game", "game_id": 1}))?;
+    send(&mut stream, json!({"type": "start_game", "game_id": 1, "session_id": session_id}))?;
 
     let mut read = BufReader::new(stream.try_clone()?);
     let mut line = String::new();
     loop {
         if started.elapsed() > Duration::from_secs(1) {
-            send(
-                &mut stream,
-                json!({"type": "heartbeat", "ping_ms": 12, "latency_ms": 6}),
-            )?;
+            send(&mut stream, json!({"type": "heartbeat", "ping_ms": 12, "latency_ms": 6}))?;
             send(
                 &mut stream,
                 json!({
@@ -557,8 +624,8 @@ fn main() -> std::io::Result<()> {
 Useful commands:
 {"type":"chat","text":"hello"}
 {"type":"join_game","game_id":1}
-{"type":"pause_game","game_id":1}
-{"type":"resume_game","game_id":1}
+{"type":"pause_game","game_id":1,"session_id":"same-as-create"}
+{"type":"resume_game","game_id":1,"session_id":"same-as-create"}
 {"type":"game_command","game_id":1,"seq":42,"command":{"move":{"dx":1,"dy":0}}}
-{"type":"free_game","game_id":1}
+{"type":"free_game","game_id":1,"session_id":"same-as-create"}
 */
