@@ -85,6 +85,24 @@ fn tex_fs(in: TexOut) -> @location(0) vec4<f32> {
 fn world_tex_fs(in: TexOut) -> @location(0) vec4<f32> {
     return textureSample(tex_image, tex_sampler, in.uv) * in.color;
 }
+
+@fragment
+fn blur_tex_fs(in: TexOut) -> @location(0) vec4<f32> {
+    let dims = max(vec2<f32>(textureDimensions(tex_image, 0u)), vec2<f32>(1.0, 1.0));
+    let texel = 1.0 / dims;
+    let center = textureSample(tex_image, tex_sampler, in.uv) * 4.0;
+    let cardinal =
+        textureSample(tex_image, tex_sampler, in.uv + vec2<f32>(-texel.x, 0.0)) * 2.0 +
+        textureSample(tex_image, tex_sampler, in.uv + vec2<f32>( texel.x, 0.0)) * 2.0 +
+        textureSample(tex_image, tex_sampler, in.uv + vec2<f32>(0.0, -texel.y)) * 2.0 +
+        textureSample(tex_image, tex_sampler, in.uv + vec2<f32>(0.0,  texel.y)) * 2.0;
+    let diagonal =
+        textureSample(tex_image, tex_sampler, in.uv + vec2<f32>(-texel.x, -texel.y)) +
+        textureSample(tex_image, tex_sampler, in.uv + vec2<f32>( texel.x, -texel.y)) +
+        textureSample(tex_image, tex_sampler, in.uv + vec2<f32>(-texel.x,  texel.y)) +
+        textureSample(tex_image, tex_sampler, in.uv + vec2<f32>( texel.x,  texel.y));
+    return ((center + cardinal + diagonal) / 16.0) * in.color;
+}
 "#;
 
 #[cfg(feature = "shaderson")]
@@ -170,6 +188,24 @@ fn world_tex_fs(in: TexOut) -> @location(0) vec4<f32> {
     rgb *= 0.995 + grain * 0.018 + dither;
 
     return day_night_tint(vec4<f32>(clamp(rgb, vec3<f32>(0.0), vec3<f32>(1.0)), base.a));
+}
+
+@fragment
+fn blur_tex_fs(in: TexOut) -> @location(0) vec4<f32> {
+    let dims = max(vec2<f32>(textureDimensions(tex_image, 0u)), vec2<f32>(1.0, 1.0));
+    let texel = 1.0 / dims;
+    let center = textureSample(tex_image, tex_sampler, in.uv) * 4.0;
+    let cardinal =
+        textureSample(tex_image, tex_sampler, in.uv + vec2<f32>(-texel.x, 0.0)) * 2.0 +
+        textureSample(tex_image, tex_sampler, in.uv + vec2<f32>( texel.x, 0.0)) * 2.0 +
+        textureSample(tex_image, tex_sampler, in.uv + vec2<f32>(0.0, -texel.y)) * 2.0 +
+        textureSample(tex_image, tex_sampler, in.uv + vec2<f32>(0.0,  texel.y)) * 2.0;
+    let diagonal =
+        textureSample(tex_image, tex_sampler, in.uv + vec2<f32>(-texel.x, -texel.y)) +
+        textureSample(tex_image, tex_sampler, in.uv + vec2<f32>( texel.x, -texel.y)) +
+        textureSample(tex_image, tex_sampler, in.uv + vec2<f32>(-texel.x,  texel.y)) +
+        textureSample(tex_image, tex_sampler, in.uv + vec2<f32>( texel.x,  texel.y));
+    return ((center + cardinal + diagonal) / 16.0) * in.color;
 }
 "#;
 
@@ -796,6 +832,7 @@ impl WgpuRenderer {
                 match key.texture_effect {
                     TextureEffect::Plain => "rgb_fs",
                     TextureEffect::World => "world_rgb_fs",
+                    TextureEffect::Blur => "rgb_fs",
                 },
                 vec![GpuRgbVertex::layout()],
                 self.device
@@ -810,6 +847,7 @@ impl WgpuRenderer {
                 match key.texture_effect {
                     TextureEffect::Plain => "tex_fs",
                     TextureEffect::World => "world_tex_fs",
+                    TextureEffect::Blur => "blur_tex_fs",
                 },
                 vec![GpuTexVertex::layout()],
                 self.device

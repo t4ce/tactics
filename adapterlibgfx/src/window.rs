@@ -1419,6 +1419,11 @@ impl<
                 &mut self.last_error,
             );
         } else if self.senary_window.as_ref().map(|w| w.id()) == Some(window_id) {
+            if let Some(window) = &self.senary_window {
+                if start_window_drag_if_requested(&event, &self.senary_producer, window) {
+                    return;
+                }
+            }
             handle_window_event(
                 event_loop,
                 event,
@@ -1693,6 +1698,11 @@ impl<
                 &mut self.last_error,
             );
         } else if self.senary_window.as_ref().map(|w| w.id()) == Some(window_id) {
+            if let Some(window) = &self.senary_window {
+                if start_window_drag_if_requested(&event, &self.senary_producer, window) {
+                    return;
+                }
+            }
             handle_window_event(
                 event_loop,
                 event,
@@ -1731,6 +1741,66 @@ impl<
         {
             event_loop.exit();
             return;
+        }
+
+        if self.primary_window.is_some()
+            && self
+                .primary_create_request
+                .as_ref()
+                .is_some_and(|request| !request.load(Ordering::Relaxed))
+        {
+            self.primary_window = None;
+            self.primary_renderer = None;
+        }
+
+        if self.secondary_window.is_some()
+            && self
+                .secondary_create_request
+                .as_ref()
+                .is_some_and(|request| !request.load(Ordering::Relaxed))
+        {
+            self.secondary_window = None;
+            self.secondary_renderer = None;
+        }
+
+        if self.tertiary_window.is_some()
+            && self
+                .tertiary_create_request
+                .as_ref()
+                .is_some_and(|request| !request.load(Ordering::Relaxed))
+        {
+            self.tertiary_window = None;
+            self.tertiary_renderer = None;
+        }
+
+        if self.quinary_window.is_some()
+            && self
+                .quinary_create_request
+                .as_ref()
+                .is_some_and(|request| !request.load(Ordering::Relaxed))
+        {
+            self.quinary_window = None;
+            self.quinary_renderer = None;
+        }
+
+        if self.senary_window.is_some()
+            && self
+                .senary_create_request
+                .as_ref()
+                .is_some_and(|request| !request.load(Ordering::Relaxed))
+        {
+            self.senary_window = None;
+            self.senary_renderer = None;
+        }
+
+        if self.septenary_window.is_some()
+            && self
+                .septenary_create_request
+                .as_ref()
+                .is_some_and(|request| !request.load(Ordering::Relaxed))
+        {
+            self.septenary_window = None;
+            self.septenary_renderer = None;
         }
 
         if self.primary_window.is_none()

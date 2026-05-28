@@ -111,12 +111,14 @@ pub enum TextureEffect {
     #[default]
     Plain,
     World,
+    Blur,
 }
 
 impl TextureEffect {
     pub fn from_raw(value: u32) -> Self {
         match value {
             1 => Self::World,
+            2 => Self::Blur,
             _ => Self::Plain,
         }
     }

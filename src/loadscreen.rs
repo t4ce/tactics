@@ -36,6 +36,7 @@ const LOADSCREEN_BLUE_STATUS_TEXTURE: u32 = 15_023;
 const LOADSCREEN_RED_STATUS_TEXTURE: u32 = 15_024;
 const LOADSCREEN_RED_CLOSE_BUTTON_TEXTURE: u32 = 15_025;
 const LOADSCREEN_EDGE_CORNERS_TEXTURE: u32 = 15_030;
+const LOADSCREEN_BACKGROUND_BLUR_TEXTURE: u32 = 15_040;
 const LOADSCREEN_EDGE_CORNER_LEFT: ImageRegion = ImageRegion::new(0, 0, 189, 213);
 const LOADSCREEN_EDGE_CORNER_RIGHT: ImageRegion = ImageRegion::new(204, 0, 196, 213);
 const LOADSCREEN_EDGE_CORNER_SCALE: f32 = 0.40;
@@ -106,7 +107,7 @@ const SERVER_STATUS_ICON_SIZE: f32 = 30.0;
 const SERVER_STATUS_PAD_X: f32 = 72.0;
 const SERVER_STATUS_PAD_BOTTOM: f32 = 78.0;
 const FRAME_CORNER_SIZE: f32 = 32.0;
-const LOADSCREEN_BACKGROUND_ALPHA: u8 = 191;
+const LOADSCREEN_BACKGROUND_ALPHA: u8 = 255;
 const LOADSCREEN_BACKGROUND_SCALE: f32 = 2.0 / 3.0;
 const LOADSCREEN_BACKGROUND_RESEED_SECS: u64 = 10;
 const LOADSCREEN_BACKGROUND_PAN_X: f32 = 14.0;
@@ -521,6 +522,29 @@ impl LoadScreen {
         self.uploaded = true;
     }
 
+    fn ensure_background_blur_target(&self, adapter: &mut Adapter) {
+        let width = self.window_width.max(1);
+        let height = self.window_height.max(1);
+        if adapter.texture_dimensions(LOADSCREEN_BACKGROUND_BLUR_TEXTURE) == Some((width, height)) {
+            return;
+        }
+
+        let Some(len) = (width as usize)
+            .checked_mul(height as usize)
+            .and_then(|pixels| pixels.checked_mul(4))
+        else {
+            return;
+        };
+        let pixels = vec![0; len];
+        let rc = adapter.upload_texture_rgba_image(
+            LOADSCREEN_BACKGROUND_BLUR_TEXTURE,
+            width,
+            height,
+            &pixels,
+        );
+        assert_eq!(rc, 0, "failed to upload loadscreen background target");
+    }
+
     fn draw_cursor(&self, adapter: &mut Adapter) {
         let mut cursor = SpriteBatch::new(self.window_width, self.window_height);
         cursor.image(
@@ -719,6 +743,13 @@ impl LoadScreen {
     }
 
     fn draw_background_scene(&self, adapter: &mut Adapter) {
+        let _ = adapter.set_render_target(LOADSCREEN_BACKGROUND_BLUR_TEXTURE);
+        self.draw_background_scene_to_current_target(adapter);
+        let _ = adapter.set_render_target(0);
+        self.draw_blurred_background_scene(adapter);
+    }
+
+    fn draw_background_scene_to_current_target(&self, adapter: &mut Adapter) {
         let camera = self.background_camera();
         let tile_size = TILE_SIZE * LOADSCREEN_BACKGROUND_SCALE;
         let view_w = self.window_width as f32 / LOADSCREEN_BACKGROUND_SCALE;
@@ -784,6 +815,21 @@ impl LoadScreen {
 
         self.draw_background_world_assets(adapter, camera, start_col, start_row, end_col, end_row);
         self.draw_background_clouds(adapter, camera);
+    }
+
+    fn draw_blurred_background_scene(&self, adapter: &mut Adapter) {
+        let mut background = SpriteBatch::new(self.window_width, self.window_height);
+        background.image(
+            0.0,
+            0.0,
+            self.window_width as f32,
+            self.window_height as f32,
+            Rgba8::WHITE,
+        );
+        let _ = adapter.set_texture_effect(TextureEffect::Blur);
+        let _ = adapter
+            .draw_tex_triangles_no_present(LOADSCREEN_BACKGROUND_BLUR_TEXTURE, &background.bytes);
+        let _ = adapter.set_texture_effect(TextureEffect::Plain);
     }
 
     fn draw_background_world_assets(
@@ -1771,6 +1817,7 @@ impl FrameProducer for LoadScreen {
         self.poll_chat();
         self.update_background_scene();
         self.upload_assets(adapter);
+        self.ensure_background_blur_target(adapter);
 
         let _ = adapter.begin_frame(0xFFFFFF);
         let _ = adapter.set_sampler_raw(0, 0, 0, 0);

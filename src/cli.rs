@@ -103,7 +103,10 @@ pub(super) fn create_game_from(
     let mut client = TacticsClient::connect(addr)?;
     client.create_game(name, game, max_players)?;
     client.wait_for_create_game_ack()?.ok_or_else(|| {
-        std::io::Error::new(std::io::ErrorKind::TimedOut, "server did not confirm created game")
+        std::io::Error::new(
+            std::io::ErrorKind::TimedOut,
+            "server did not confirm created game",
+        )
     })
 }
 
@@ -138,7 +141,10 @@ pub(super) fn create_game_and_get_lobbies_with_created_from(
     let mut client = TacticsClient::connect(addr)?;
     client.create_game(name, game, max_players)?;
     let lobby = client.wait_for_create_game_ack()?.ok_or_else(|| {
-        std::io::Error::new(std::io::ErrorKind::TimedOut, "server did not confirm created game")
+        std::io::Error::new(
+            std::io::ErrorKind::TimedOut,
+            "server did not confirm created game",
+        )
     })?;
     let lobbies = client.get_lobbies()?;
     Ok((lobbies, lobby))
@@ -233,7 +239,10 @@ impl TacticsClient {
                         std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
                     ) =>
                 {
-                    log_lobby_client(format_args!("game_list read timed out ({:?})", error.kind()));
+                    log_lobby_client(format_args!(
+                        "game_list read timed out ({:?})",
+                        error.kind()
+                    ));
                     return Err(timeout_error("game_list"));
                 }
                 Err(error) => {
@@ -594,13 +603,19 @@ fn main() -> std::io::Result<()> {
             "session_id": session_id
         }),
     )?;
-    send(&mut stream, json!({"type": "start_game", "game_id": 1, "session_id": session_id}))?;
+    send(
+        &mut stream,
+        json!({"type": "start_game", "game_id": 1, "session_id": session_id}),
+    )?;
 
     let mut read = BufReader::new(stream.try_clone()?);
     let mut line = String::new();
     loop {
         if started.elapsed() > Duration::from_secs(1) {
-            send(&mut stream, json!({"type": "heartbeat", "ping_ms": 12, "latency_ms": 6}))?;
+            send(
+                &mut stream,
+                json!({"type": "heartbeat", "ping_ms": 12, "latency_ms": 6}),
+            )?;
             send(
                 &mut stream,
                 json!({

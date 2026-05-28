@@ -133,8 +133,8 @@ const IDLE_MONK_RETILE_MAX_SIZE: usize = 15;
 const IDLE_GEOMANCER_WALL_RADIUS_TILES: isize = 7;
 const IDLE_GEOMANCER_WALL_MIN_CASTS: usize = 1;
 const IDLE_GEOMANCER_WALL_MAX_CASTS: usize = 3;
-const IDLE_GEOMANCER_WALL_STAGGER_MS: u32 = 100;
-const IDLE_GEOMANCER_WALL_GROW_MS: u32 = 1_500;
+const IDLE_GEOMANCER_WALL_CAST_DELAY_MS: u32 = 500;
+const IDLE_GEOMANCER_WALL_GROW_MS: u32 = 1_000;
 const IDLE_GEOMANCER_WALL_ROTATION_DEGREES: f32 = 5.0;
 const IDLE_GEOMANCER_WALL_ROTATION_CYCLES: f32 = 3.0;
 const IDLE_RETILE_PATCH_PADDING_TILES: usize = 2;
@@ -463,13 +463,14 @@ struct WindowChrome {
     blue_button: ImageAsset,
     red_button: ImageAsset,
     edge_corners: ImageAsset,
+    cursor_default: ImageAsset,
     close_confirmed_at: Option<Instant>,
-    exit_request: Option<Arc<AtomicBool>>,
+    close_request: Option<Arc<AtomicBool>>,
     uploaded: bool,
 }
 
 impl WindowChrome {
-    fn new(exit_request: Option<Arc<AtomicBool>>) -> Self {
+    fn new(close_request: Option<Arc<AtomicBool>>) -> Self {
         Self {
             frame_top_left: ImageAsset::from_png_bytes(
                 WINDOW_CHROME_FRAME_TEXTURE_BASE,
@@ -511,14 +512,18 @@ impl WindowChrome {
                 WINDOW_CHROME_EDGE_CORNERS_TEXTURE,
                 WINDOW_CHROME_EDGE_CORNERS_BYTES,
             ),
+            cursor_default: ImageAsset::from_png_bytes_cropped(
+                CURSOR_DEFAULT_TEXTURE,
+                CURSOR_DEFAULT_BYTES,
+            ),
             close_confirmed_at: None,
-            exit_request,
+            close_request,
             uploaded: false,
         }
     }
 
-    fn set_exit_request(&mut self, exit_request: Arc<AtomicBool>) {
-        self.exit_request = Some(exit_request);
+    fn set_close_request(&mut self, close_request: Arc<AtomicBool>) {
+        self.close_request = Some(close_request);
     }
 
     fn upload_assets(&mut self, adapter: &mut Adapter) {
@@ -537,6 +542,7 @@ impl WindowChrome {
             &self.blue_button,
             &self.red_button,
             &self.edge_corners,
+            &self.cursor_default,
         ] {
             let rc = adapter.upload_texture_rgba_image(
                 image.texture_id,
@@ -556,8 +562,9 @@ impl WindowChrome {
         }
 
         if self.close_is_confirmed() {
-            if let Some(exit_request) = &self.exit_request {
-                exit_request.store(true, AtomicOrdering::Relaxed);
+            self.close_confirmed_at = None;
+            if let Some(close_request) = &self.close_request {
+                close_request.store(false, AtomicOrdering::Relaxed);
             }
         } else {
             self.close_confirmed_at = Some(Instant::now());
@@ -674,6 +681,19 @@ impl WindowChrome {
             Rgba8::WHITE,
         );
         let _ = adapter.draw_tex_triangles_no_present(self.close_icon.texture_id, &close.bytes);
+    }
+
+    fn draw_cursor(
+        &self,
+        adapter: &mut Adapter,
+        window_width: u32,
+        window_height: u32,
+        mouse: Point,
+    ) {
+        let mut cursor = SpriteBatch::new(window_width, window_height);
+        cursor.image(mouse.x, mouse.y, 28.0, 28.0, Rgba8::WHITE);
+        let _ =
+            adapter.draw_tex_triangles_no_present(self.cursor_default.texture_id, &cursor.bytes);
     }
 }
 
@@ -2269,9 +2289,9 @@ impl Game {
         }
     }
 
-    fn with_exit_request(exit_request: Arc<AtomicBool>) -> Self {
+    fn with_close_request(close_request: Arc<AtomicBool>) -> Self {
         let mut game = Self::new();
-        game.chrome.set_exit_request(exit_request);
+        game.chrome.set_close_request(close_request);
         game
     }
 
@@ -2828,9 +2848,9 @@ impl Game {
         let _ = adapter.set_scissor(None);
         self.draw_palette(adapter);
         self.draw_ui(adapter);
-        self.draw_cursor(adapter);
         self.chrome
             .draw(adapter, self.window_width, self.window_height);
+        self.draw_cursor(adapter);
 
         let _ = adapter.end_frame();
     }
@@ -4104,9 +4124,9 @@ impl UnitWalkViewer {
         }
     }
 
-    fn with_exit_request(exit_request: Arc<AtomicBool>) -> Self {
+    fn with_close_request(close_request: Arc<AtomicBool>) -> Self {
         let mut viewer = Self::new();
-        viewer.chrome.set_exit_request(exit_request);
+        viewer.chrome.set_close_request(close_request);
         viewer
     }
 
@@ -4293,9 +4313,9 @@ impl IdleWorldViewer {
         }
     }
 
-    fn with_exit_request(exit_request: Arc<AtomicBool>) -> Self {
+    fn with_close_request(close_request: Arc<AtomicBool>) -> Self {
         let mut viewer = Self::new();
-        viewer.chrome.set_exit_request(exit_request);
+        viewer.chrome.set_close_request(close_request);
         viewer
     }
 
@@ -4971,7 +4991,7 @@ impl IdleWorldViewer {
         let center_row = (position.y / TILE_SIZE).floor() as isize;
         let mut placements = Vec::with_capacity(requested);
 
-        for order in 0..requested {
+        for _ in 0..requested {
             let candidates = geomancer_wall_candidates_near(
                 &generated,
                 center_col,
@@ -4993,8 +5013,7 @@ impl IdleWorldViewer {
             if !added {
                 continue;
             }
-            placement.due_ms = elapsed_ms
-                .saturating_add((order as u32).saturating_mul(IDLE_GEOMANCER_WALL_STAGGER_MS));
+            placement.due_ms = elapsed_ms.saturating_add(IDLE_GEOMANCER_WALL_CAST_DELAY_MS);
             placements.push(placement);
         }
 
@@ -6956,9 +6975,9 @@ impl IconViewer {
         }
     }
 
-    fn with_exit_request(exit_request: Arc<AtomicBool>) -> Self {
+    fn with_close_request(close_request: Arc<AtomicBool>) -> Self {
         let mut viewer = Self::new();
-        viewer.chrome.set_exit_request(exit_request);
+        viewer.chrome.set_close_request(close_request);
         viewer
     }
 
@@ -7029,9 +7048,9 @@ impl EventEditor {
         }
     }
 
-    fn with_exit_request(exit_request: Arc<AtomicBool>) -> Self {
+    fn with_close_request(close_request: Arc<AtomicBool>) -> Self {
         let mut editor = Self::new();
-        editor.chrome.set_exit_request(exit_request);
+        editor.chrome.set_close_request(close_request);
         editor
     }
 
@@ -7081,6 +7100,56 @@ impl EventEditor {
                 return;
             }
         }
+    }
+
+    fn window_drag_region_at(&self, point: Point) -> bool {
+        if inside_rect_table(
+            point,
+            window_chrome_close_button_rect(self.window_width as f32),
+        ) {
+            return false;
+        }
+
+        for (x, y, w, h) in [
+            (24.0, 78.0, 218.0, 54.0),
+            (258.0, 78.0, 218.0, 54.0),
+            (492.0, 78.0, 218.0, 54.0),
+            (24.0, 142.0, 130.0, 34.0),
+        ] {
+            if inside_rect(point.x, point.y, x, y, w, h) {
+                return false;
+            }
+        }
+
+        let table_y = 214.0;
+        let row_h = 42.0;
+        for index in 0..self.rules.len() {
+            let y = table_y + index as f32 * row_h;
+            if y > self.window_height as f32 - row_h {
+                break;
+            }
+            if inside_rect(point.x, point.y, 28.0, y + 7.0, 58.0, 28.0)
+                || inside_rect(
+                    point.x,
+                    point.y,
+                    self.window_width as f32 - 86.0,
+                    y + 7.0,
+                    58.0,
+                    28.0,
+                )
+            {
+                return false;
+            }
+        }
+
+        inside_rect(
+            point.x,
+            point.y,
+            0.0,
+            0.0,
+            self.window_width as f32,
+            self.window_height as f32,
+        )
     }
 
     fn add_rule(&mut self) {
@@ -7971,10 +8040,23 @@ fn geomancer_wall_candidates_near(
     radius: isize,
     planned: &[IdleGeomancerWallPlacement],
 ) -> Vec<IdleGeomancerWallPlacement> {
+    if generated.cols == 0 || generated.rows == 0 {
+        return Vec::new();
+    }
+
     let radius_sq = radius.saturating_mul(radius);
     let mut candidates = Vec::new();
-    for row in 0..generated.rows {
-        for col in 0..generated.cols {
+    let min_col = center_col.saturating_sub(radius).max(0) as usize;
+    let max_col = center_col
+        .saturating_add(radius)
+        .clamp(0, generated.cols.saturating_sub(1) as isize) as usize;
+    let min_row = center_row.saturating_sub(radius).max(0) as usize;
+    let max_row = center_row
+        .saturating_add(radius)
+        .clamp(0, generated.rows.saturating_sub(1) as isize) as usize;
+
+    for row in min_row..=max_row {
+        for col in min_col..=max_col {
             let dx = col as isize - center_col;
             let dy = row as isize - center_row;
             if dx.saturating_mul(dx).saturating_add(dy.saturating_mul(dy)) > radius_sq {
@@ -8297,6 +8379,10 @@ fn lighten_rgba_toward_white(rgba: &mut [u8], percent: u8) {
 }
 
 impl FrameProducer for UnitWalkViewer {
+    fn cursor_visible(&self) -> bool {
+        false
+    }
+
     fn window_decorations(&self) -> bool {
         false
     }
@@ -8445,6 +8531,8 @@ impl FrameProducer for UnitWalkViewer {
 
         self.chrome
             .draw(adapter, self.window_width, self.window_height);
+        self.chrome
+            .draw_cursor(adapter, self.window_width, self.window_height, self.mouse);
         let _ = adapter.end_frame();
     }
 }
@@ -8608,15 +8696,19 @@ impl FrameProducer for IdleWorldViewer {
         if let Some(rect) = self.active_selection_rect() {
             self.draw_selection_corners(adapter, rect);
         }
-        self.draw_cursor(adapter, elapsed_ms);
         self.chrome
             .draw(adapter, self.window_width, self.window_height);
+        self.draw_cursor(adapter, elapsed_ms);
 
         let _ = adapter.end_frame();
     }
 }
 
 impl FrameProducer for IconViewer {
+    fn cursor_visible(&self) -> bool {
+        false
+    }
+
     fn window_decorations(&self) -> bool {
         false
     }
@@ -8694,13 +8786,23 @@ impl FrameProducer for IconViewer {
 
         self.chrome
             .draw(adapter, self.window_width, self.window_height);
+        self.chrome
+            .draw_cursor(adapter, self.window_width, self.window_height, self.mouse);
         let _ = adapter.end_frame();
     }
 }
 
 impl FrameProducer for EventEditor {
+    fn cursor_visible(&self) -> bool {
+        false
+    }
+
     fn window_decorations(&self) -> bool {
         false
+    }
+
+    fn window_drag_region(&self) -> bool {
+        self.window_drag_region_at(self.mouse)
     }
 
     fn resize(&mut self, width: u32, height: u32) {
@@ -8731,6 +8833,8 @@ impl FrameProducer for EventEditor {
     fn build_frame(&mut self, adapter: &mut Adapter) {
         self.chrome.upload_assets(adapter);
         let _ = adapter.begin_frame(0x243C40);
+        let _ = adapter.set_sampler_raw(0, 0, 0, 0);
+        let _ = adapter.set_blend_raw(1, 0x0302, 0x0303);
 
         let w = self.window_width as f32;
         let h = self.window_height as f32;
@@ -8853,6 +8957,8 @@ impl FrameProducer for EventEditor {
         let _ = adapter.draw_rgb_triangles_no_present(&text.solid_bytes);
         self.chrome
             .draw(adapter, self.window_width, self.window_height);
+        self.chrome
+            .draw_cursor(adapter, self.window_width, self.window_height, self.mouse);
         let _ = adapter.end_frame();
     }
 }
@@ -10910,12 +11016,13 @@ mod idle_world_tests {
             viewer
                 .pending_geomancer_walls
                 .iter()
-                .enumerate()
-                .all(|(index, placement)| placement.due_ms
-                    == 1_000 + index as u32 * IDLE_GEOMANCER_WALL_STAGGER_MS)
+                .all(|placement| placement.due_ms == 1_000 + IDLE_GEOMANCER_WALL_CAST_DELAY_MS)
         );
 
         let first_due_ms = viewer.pending_geomancer_walls[0].due_ms;
+        viewer.apply_due_geomancer_wall_placements(first_due_ms - 1);
+        assert!(viewer.geomancer_wall_growths.is_empty());
+
         viewer.apply_due_geomancer_wall_placements(first_due_ms);
         assert!(!viewer.geomancer_wall_growths.is_empty());
         assert_eq!(

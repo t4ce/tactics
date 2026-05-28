@@ -260,9 +260,9 @@ impl WorldViewer {
         }
     }
 
-    pub(super) fn with_exit_request(exit_request: Arc<AtomicBool>) -> Self {
+    pub(super) fn with_close_request(close_request: Arc<AtomicBool>) -> Self {
         let mut viewer = Self::new();
-        viewer.chrome.set_exit_request(exit_request);
+        viewer.chrome.set_close_request(close_request);
         viewer
     }
 
@@ -411,6 +411,8 @@ impl WorldViewer {
         let _ = adapter.set_scissor(None);
         self.chrome
             .draw(adapter, self.window_width, self.window_height);
+        self.chrome
+            .draw_cursor(adapter, self.window_width, self.window_height, self.mouse);
         let _ = adapter.end_frame();
     }
 
@@ -1126,6 +1128,10 @@ impl WorldViewer {
 }
 
 impl FrameProducer for WorldViewer {
+    fn cursor_visible(&self) -> bool {
+        false
+    }
+
     fn window_decorations(&self) -> bool {
         false
     }
