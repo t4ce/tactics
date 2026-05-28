@@ -734,6 +734,18 @@ pub mod window {
             true
         }
 
+        fn window_titlebar(&self) -> bool {
+            true
+        }
+
+        fn window_bottom_bar(&self) -> bool {
+            true
+        }
+
+        fn window_scrollbars(&self) -> bool {
+            true
+        }
+
         fn window_resizable(&self) -> bool {
             true
         }
@@ -1103,6 +1115,16 @@ pub mod window {
         .ok_or("failed to create ui2 surface window")?;
         if !producer.window_decorations() {
             let _ = window.id().set_decorations(ui2::WindowDecorationMode::None);
+        }
+        if !producer.window_titlebar() {
+            let _ = window.id().set_titlebar_visible(false);
+        }
+        if !producer.window_bottom_bar() {
+            let _ = window.id().set_bottom_bar_visible(false);
+        }
+        if !producer.window_scrollbars() {
+            let _ = window.id().set_vertical_scrollbar_visible(false);
+            let _ = window.id().set_horizontal_scrollbar_visible(false);
         }
         adapter.bind_surface(window.tex_id(), window.id().raw());
         Ok(window)

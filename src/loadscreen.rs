@@ -1792,6 +1792,18 @@ impl FrameProducer for LoadScreen {
         false
     }
 
+    fn window_titlebar(&self) -> bool {
+        false
+    }
+
+    fn window_bottom_bar(&self) -> bool {
+        false
+    }
+
+    fn window_scrollbars(&self) -> bool {
+        false
+    }
+
     fn window_resizable(&self) -> bool {
         false
     }
