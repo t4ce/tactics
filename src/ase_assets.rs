@@ -48,13 +48,28 @@ pub enum TintMode {
 
 #[derive(Debug)]
 pub enum AsepriteLoadError {
-    Parse(asefile::AsepriteParseError),
+    Parse {
+        path: String,
+        source: asefile::AsepriteParseError,
+    },
+    NotFound {
+        path: String,
+        attempts: Vec<String>,
+    },
 }
 
 impl Display for AsepriteLoadError {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Parse(error) => write!(f, "failed to load aseprite file: {error}"),
+            Self::Parse { path, source } => {
+                write!(f, "failed to load aseprite file {path:?}: {source}")
+            }
+            Self::NotFound { path, attempts } => {
+                write!(
+                    f,
+                    "failed to find aseprite file {path:?}; tried {attempts:?}"
+                )
+            }
         }
     }
 }
@@ -62,14 +77,9 @@ impl Display for AsepriteLoadError {
 impl Error for AsepriteLoadError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
-            Self::Parse(error) => Some(error),
+            Self::Parse { source, .. } => Some(source),
+            Self::NotFound { .. } => None,
         }
-    }
-}
-
-impl From<asefile::AsepriteParseError> for AsepriteLoadError {
-    fn from(value: asefile::AsepriteParseError) -> Self {
-        Self::Parse(value)
     }
 }
 
@@ -78,7 +88,7 @@ pub fn load_tinted_aseprite_set(
     tint: [u8; 4],
     mode: TintMode,
 ) -> Result<AsepriteSet, AsepriteLoadError> {
-    let ase = AsepriteFile::read_file(path.as_ref())?;
+    let ase = read_aseprite_file(path.as_ref())?;
     let mut frames = Vec::with_capacity(ase.num_frames() as usize);
     let tags = (0..ase.num_tags())
         .map(|tag_index| {
@@ -108,6 +118,69 @@ pub fn load_tinted_aseprite_set(
     }
 
     Ok(AsepriteSet { frames, tags })
+}
+
+#[cfg(not(feature = "trueos-blueprint"))]
+fn read_aseprite_file(path: &Path) -> Result<AsepriteFile, AsepriteLoadError> {
+    AsepriteFile::read_file(path).map_err(|source| AsepriteLoadError::Parse {
+        path: path.display().to_string(),
+        source,
+    })
+}
+
+#[cfg(feature = "trueos-blueprint")]
+fn read_aseprite_file(path: &Path) -> Result<AsepriteFile, AsepriteLoadError> {
+    use std::io::Cursor;
+
+    let path_text = path.to_string_lossy().replace('\\', "/");
+    let candidates = blueprint_asset_path_candidates(&path_text);
+    for candidate in &candidates {
+        if let Ok(bytes) = trueos::vfs::read_file(candidate.as_bytes()) {
+            return AsepriteFile::read(Cursor::new(bytes)).map_err(|source| {
+                AsepriteLoadError::Parse {
+                    path: candidate.clone(),
+                    source,
+                }
+            });
+        }
+    }
+
+    if let Some(bytes) = crate::embedded_assets::bytes_for(&path_text) {
+        return AsepriteFile::read(Cursor::new(bytes)).map_err(|source| AsepriteLoadError::Parse {
+            path: format!("embedded:{path_text}"),
+            source,
+        });
+    }
+
+    Err(AsepriteLoadError::NotFound {
+        path: path_text,
+        attempts: candidates,
+    })
+}
+
+#[cfg(feature = "trueos-blueprint")]
+fn blueprint_asset_path_candidates(path: &str) -> Vec<String> {
+    let mut candidates = Vec::new();
+    push_unique_path_candidate(&mut candidates, path.to_string());
+
+    if let Ok(root) = trueos::env::var("TRUEOS_APP_FS_ROOT") {
+        let root = root.trim_matches('/');
+        if !root.is_empty() {
+            push_unique_path_candidate(&mut candidates, format!("{root}/{path}"));
+            push_unique_path_candidate(&mut candidates, format!("/{root}/{path}"));
+        }
+    }
+
+    push_unique_path_candidate(&mut candidates, format!("apps/tactics/{path}"));
+    push_unique_path_candidate(&mut candidates, format!("/apps/tactics/{path}"));
+    candidates
+}
+
+#[cfg(feature = "trueos-blueprint")]
+fn push_unique_path_candidate(candidates: &mut Vec<String>, candidate: String) {
+    if !candidates.iter().any(|existing| existing == &candidate) {
+        candidates.push(candidate);
+    }
 }
 
 pub fn tint_rgba(rgba: &mut [u8], tint: [u8; 4], mode: TintMode) {

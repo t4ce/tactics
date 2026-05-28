@@ -2212,6 +2212,8 @@ fn initial_editor_world() -> TileWorld {
 
 impl Game {
     fn new() -> Self {
+        crate::embedded_assets::ensure_runtime_assets();
+
         let terrain = TextureAtlas::from_png_bytes(TERRAIN_TEXTURE, TERRAIN_BYTES, TERRAIN_TILE_PX);
         let water_visuals = load_water_visual_assets();
         let plant_props = load_plant_prop_assets();
@@ -9404,12 +9406,11 @@ impl TileWorld {
     fn save_to_path(&self, path: impl AsRef<Path>) -> Result<(), String> {
         let json = serde_json::to_string_pretty(self)
             .map_err(|error| format!("world json encode failed: {error}"))?;
-        fs::write(path.as_ref(), json).map_err(|error| format!("write failed: {error}"))
+        write_world_json(path.as_ref(), &json)
     }
 
     fn load_from_path(path: impl AsRef<Path>) -> Result<Self, String> {
-        let json =
-            fs::read_to_string(path.as_ref()).map_err(|error| format!("read failed: {error}"))?;
+        let json = read_world_json(path.as_ref())?;
         let mut world = serde_json::from_str::<Self>(&json)
             .map_err(|error| format!("world json decode failed: {error}"))?;
         world.normalize_loaded_state();
@@ -10039,6 +10040,86 @@ impl TileWorld {
         debug_assert!(col < self.cols);
         debug_assert!(row < self.rows);
         row * self.cols + col
+    }
+}
+
+#[cfg(not(feature = "trueos-blueprint"))]
+fn read_world_json(path: &Path) -> Result<String, String> {
+    fs::read_to_string(path).map_err(|error| format!("read failed: {error}"))
+}
+
+#[cfg(feature = "trueos-blueprint")]
+fn read_world_json(path: &Path) -> Result<String, String> {
+    let path_text = path.to_string_lossy().replace('\\', "/");
+    let candidates = blueprint_asset_path_candidates(&path_text);
+    for candidate in &candidates {
+        if let Ok(bytes) = trueos::vfs::read_file(candidate.as_bytes()) {
+            return String::from_utf8(bytes)
+                .map_err(|error| format!("read failed: {candidate:?} is not utf8: {error}"));
+        }
+    }
+    if let Some(bytes) = crate::embedded_assets::bytes_for(&path_text) {
+        return std::str::from_utf8(bytes)
+            .map(str::to_owned)
+            .map_err(|error| format!("read failed: embedded:{path_text:?} is not utf8: {error}"));
+    }
+    Err(format!(
+        "read failed: could not find {path_text:?}; tried {candidates:?}"
+    ))
+}
+
+#[cfg(not(feature = "trueos-blueprint"))]
+fn write_world_json(path: &Path, json: &str) -> Result<(), String> {
+    fs::write(path, json).map_err(|error| format!("write failed: {error}"))
+}
+
+#[cfg(feature = "trueos-blueprint")]
+fn write_world_json(path: &Path, json: &str) -> Result<(), String> {
+    let path_text = path.to_string_lossy().replace('\\', "/");
+    let target = blueprint_asset_write_path(&path_text);
+    if let Some((parent, _)) = target.rsplit_once('/') {
+        if !parent.is_empty() {
+            trueos::vfs::create_dir_all(parent.as_bytes())
+                .map_err(|code| format!("write failed: create_dir_all {parent:?} rc={code}"))?;
+        }
+    }
+    trueos::vfs::write_file(target.as_bytes(), json.as_bytes())
+        .map_err(|code| format!("write failed: {target:?} rc={code}"))
+}
+
+#[cfg(feature = "trueos-blueprint")]
+fn blueprint_asset_path_candidates(path: &str) -> Vec<String> {
+    let mut candidates = Vec::new();
+    push_unique_path_candidate(&mut candidates, path.to_string());
+
+    if let Ok(root) = trueos::env::var("TRUEOS_APP_FS_ROOT") {
+        let root = root.trim_matches('/');
+        if !root.is_empty() {
+            push_unique_path_candidate(&mut candidates, format!("{root}/{path}"));
+            push_unique_path_candidate(&mut candidates, format!("/{root}/{path}"));
+        }
+    }
+
+    push_unique_path_candidate(&mut candidates, format!("apps/tactics/{path}"));
+    push_unique_path_candidate(&mut candidates, format!("/apps/tactics/{path}"));
+    candidates
+}
+
+#[cfg(feature = "trueos-blueprint")]
+fn blueprint_asset_write_path(path: &str) -> String {
+    if let Ok(root) = trueos::env::var("TRUEOS_APP_FS_ROOT") {
+        let root = root.trim_matches('/');
+        if !root.is_empty() {
+            return format!("{root}/{path}");
+        }
+    }
+    format!("apps/tactics/{path}")
+}
+
+#[cfg(feature = "trueos-blueprint")]
+fn push_unique_path_candidate(candidates: &mut Vec<String>, candidate: String) {
+    if !candidates.iter().any(|existing| existing == &candidate) {
+        candidates.push(candidate);
     }
 }
 

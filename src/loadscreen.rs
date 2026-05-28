@@ -5,7 +5,7 @@ use std::collections::BTreeMap;
 use std::sync::{
     Arc,
     atomic::{AtomicBool, Ordering},
-    mpsc::{self, Receiver, RecvTimeoutError, Sender, TryRecvError},
+    mpsc::{self, Receiver, Sender, TryRecvError},
 };
 use std::thread;
 use std::time::{Duration, Instant};
@@ -113,10 +113,15 @@ const LOADSCREEN_BACKGROUND_RESEED_SECS: u64 = 10;
 const LOADSCREEN_BACKGROUND_PAN_X: f32 = 14.0;
 const LOADSCREEN_BACKGROUND_PAN_Y: f32 = 5.0;
 const LOADSCREEN_TABLE_DRAW_SCALE: f32 = 0.90;
+#[cfg(feature = "chat")]
 const CHAT_SERVER_BASE: &str = "https://trueos.eu:3";
+#[cfg(feature = "chat")]
 const CHAT_ROOM: &str = "lobby";
+#[cfg(feature = "chat")]
 const CHAT_USER: &str = "Loadscreen";
+#[cfg(feature = "chat")]
 const CHAT_POLL_MS: u64 = 1_000;
+#[cfg(feature = "chat")]
 const CHAT_CONNECT_TIMEOUT_MS: u64 = 2_000;
 const CHAT_MESSAGE_LIMIT: usize = 96;
 const CHAT_INPUT_LIMIT: usize = 160;
@@ -212,11 +217,13 @@ struct ChatMessage {
     text: String,
 }
 
+#[cfg(feature = "chat")]
 #[derive(Deserialize)]
 struct ChatMessagesResponse {
     messages: Vec<ChatMessage>,
 }
 
+#[cfg(feature = "chat")]
 #[derive(Serialize)]
 struct ChatPost<'a> {
     user: &'a str,
@@ -2130,6 +2137,14 @@ fn spawn_lobby_request(
 fn spawn_chat_client() -> (Sender<ChatCommand>, Receiver<ChatClientEvent>) {
     let (command_tx, command_rx) = mpsc::channel();
     let (event_tx, event_rx) = mpsc::channel();
+    #[cfg(not(feature = "chat"))]
+    {
+        let _ = command_rx;
+        let _ = event_tx;
+        return (command_tx, event_rx);
+    }
+
+    #[cfg(feature = "chat")]
     thread::spawn(move || {
         let runtime = match tokio::runtime::Builder::new_current_thread()
             .enable_all()
@@ -2189,6 +2204,7 @@ fn spawn_chat_client() -> (Sender<ChatCommand>, Receiver<ChatClientEvent>) {
     (command_tx, event_rx)
 }
 
+#[cfg(feature = "chat")]
 async fn fetch_chat_messages(
     client: &reqwest::Client,
     since: u64,
@@ -2207,6 +2223,7 @@ async fn fetch_chat_messages(
     Ok(response.messages)
 }
 
+#[cfg(feature = "chat")]
 async fn post_chat_message(client: &reqwest::Client, text: &str) -> Result<(), String> {
     let url = format!("{CHAT_SERVER_BASE}/api/rooms/{CHAT_ROOM}/messages");
     client
@@ -2223,6 +2240,7 @@ async fn post_chat_message(client: &reqwest::Client, text: &str) -> Result<(), S
     Ok(())
 }
 
+#[cfg(feature = "chat")]
 fn chat_http_client() -> Result<reqwest::Client, String> {
     reqwest::Client::builder()
         .timeout(Duration::from_millis(CHAT_CONNECT_TIMEOUT_MS))
