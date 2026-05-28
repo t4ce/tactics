@@ -140,7 +140,7 @@ pub mod api {
 
     use super::command::{Frame, FrameCommand, ScissorRect, TextureEffect};
     use super::vertex::{decode_rgb_vertices, encode_rgb_vertices, usable_rgb_len, usable_tex_len};
-    use trueos::ui2::gfx;
+    use trueos::ui2::{WindowId, gfx};
 
     const PRESERVE_RENDER_TARGET_CLEAR_RGB: u32 = u32::MAX;
     const SUPPRESS_REPAINT_WINDOW_ID: u32 = u32::MAX;
@@ -451,9 +451,24 @@ pub mod api {
             let mut target_tex_id = default_target_tex_id;
             let mut target_width = frame.logical_width.max(1);
             let mut target_height = frame.logical_height.max(1);
-            let mut clear_rgb = frame.clear_rgb;
             let mut texture_effect = TextureEffect::Plain;
             let mut failed = false;
+
+            let rc = if frame.preserve_contents {
+                gfx::begin_frame_preserve(frame.clear_rgb)
+            } else {
+                gfx::begin_frame_no_present(frame.clear_rgb)
+            };
+            if rc != 0 {
+                self.mark_surface_backpressure();
+                return;
+            }
+
+            if target_tex_id != 0 && gfx::set_render_target(target_tex_id) != 0 {
+                self.mark_surface_backpressure();
+                let _ = gfx::end_frame();
+                return;
+            }
 
             for command in frame.commands.iter() {
                 match command {
@@ -466,6 +481,11 @@ pub mod api {
                         if let Some((w, h)) = self.texture_dimensions(target_tex_id) {
                             target_width = w.max(1);
                             target_height = h.max(1);
+                        }
+                        if target_tex_id != 0 && gfx::set_render_target(target_tex_id) != 0 {
+                            self.mark_surface_backpressure();
+                            failed = true;
+                            break;
                         }
                     }
                     FrameCommand::DrawRgb { vertices } => {
@@ -480,17 +500,8 @@ pub mod api {
                             vertices
                         };
                         let vertices = encode_rgb_vertices(vertices);
-                        let rc = gfx::render_rgb_triangles_to_texture(
-                            target_tex_id,
-                            target_width,
-                            target_height,
-                            clear_rgb,
-                            SUPPRESS_REPAINT_WINDOW_ID,
-                            &vertices,
-                        );
-                        if rc {
-                            clear_rgb = PRESERVE_RENDER_TARGET_CLEAR_RGB;
-                        } else {
+                        let rc = gfx::draw_rgb_triangles_no_present(&vertices);
+                        if rc != 0 {
                             self.mark_surface_backpressure();
                             failed = true;
                             break;
@@ -507,16 +518,8 @@ pub mod api {
                         } else {
                             vertices
                         };
-                        let rc = gfx::render_tex_triangles_to_texture(
-                            target_tex_id,
-                            *tex_id,
-                            clear_rgb,
-                            SUPPRESS_REPAINT_WINDOW_ID,
-                            vertices,
-                        );
-                        if rc {
-                            clear_rgb = PRESERVE_RENDER_TARGET_CLEAR_RGB;
-                        } else {
+                        let rc = gfx::draw_tex_triangles_no_present(*tex_id, vertices);
+                        if rc != 0 {
                             self.mark_surface_backpressure();
                             failed = true;
                             break;
@@ -525,22 +528,43 @@ pub mod api {
                     FrameCommand::SetTextureEffect(effect) => {
                         texture_effect = *effect;
                     }
-                    FrameCommand::SetBlend
-                    | FrameCommand::SetSampler
-                    | FrameCommand::SetScissor(_) => {}
+                    FrameCommand::SetBlend => {
+                        let _ = gfx::set_blend_raw(1, 0x0302, 0x0303, 0x0302, 0x0303, 0, 0);
+                    }
+                    FrameCommand::SetSampler => {
+                        let _ = gfx::set_sampler_raw(0, 0, 0, 0);
+                    }
+                    FrameCommand::SetScissor(rect) => {
+                        let rc = if let Some(rect) = rect {
+                            gfx::set_scissor(rect.x, rect.y, rect.width, rect.height)
+                        } else {
+                            gfx::clear_scissor()
+                        };
+                        if rc != 0 {
+                            self.mark_surface_backpressure();
+                            failed = true;
+                            break;
+                        }
+                    }
                 }
             }
 
             if !failed && surface_tex_id != 0 && backbuffer_tex_id != 0 {
                 let vertices = fullscreen_tex_vertices();
-                if !gfx::render_tex_triangles_to_texture(
-                    surface_tex_id,
-                    backbuffer_tex_id,
-                    PRESERVE_RENDER_TARGET_CLEAR_RGB,
-                    self.repaint_window_id,
-                    &vertices,
-                ) {
+                if gfx::set_render_target(surface_tex_id) != 0
+                    || gfx::draw_tex_triangles_no_present(backbuffer_tex_id, &vertices) != 0
+                {
                     self.mark_surface_backpressure();
+                    failed = true;
+                }
+            }
+            if gfx::end_frame() != 0 {
+                self.mark_surface_backpressure();
+                return;
+            }
+            if !failed && self.repaint_window_id != SUPPRESS_REPAINT_WINDOW_ID {
+                if let Some(window_id) = WindowId::new(self.repaint_window_id) {
+                    let _ = window_id.request_repaint();
                 }
             }
         }
