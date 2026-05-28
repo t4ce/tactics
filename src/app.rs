@@ -10,7 +10,10 @@ use std::cmp::Ordering;
 use std::collections::{BTreeMap, BinaryHeap, HashSet};
 use std::fs;
 use std::path::Path;
-use std::sync::Arc;
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, Ordering as AtomicOrdering},
+};
 use std::time::Instant;
 
 #[path = "cli.rs"]
@@ -61,12 +64,49 @@ const ICON_VIEWER_TEXTURE_BASE: u32 = 7000;
 const IDLE_WORLD_HOUSE_ICON_TEXTURE_BASE: u32 = 8800;
 const IDLE_WORLD_TOOL_CURSOR_TEXTURE_BASE: u32 = 8850;
 const IDLE_WORLD_TEXTURE_BASE: u32 = 9000;
+const WINDOW_CHROME_FRAME_TEXTURE_BASE: u32 = 30_000;
+const WINDOW_CHROME_CLOSE_ICON_TEXTURE: u32 = 30_006;
+const WINDOW_CHROME_BLUE_BUTTON_TEXTURE: u32 = 30_007;
+const WINDOW_CHROME_RED_BUTTON_TEXTURE: u32 = 30_008;
+const WINDOW_CHROME_FRAME_TOP_LEFT_BYTES: &[u8] = include_bytes!(
+    "../ts_freepack/UI Elements/UI Elements/Wood Table/WoodTable_Slots_topleft_corner.png"
+);
+const WINDOW_CHROME_FRAME_TOP_RIGHT_BYTES: &[u8] = include_bytes!(
+    "../ts_freepack/UI Elements/UI Elements/Wood Table/WoodTable_Slots_topright_corner.png"
+);
+const WINDOW_CHROME_FRAME_BOTTOM_LEFT_BYTES: &[u8] = include_bytes!(
+    "../ts_freepack/UI Elements/UI Elements/Wood Table/WoodTable_Slots_bottomleft_corner.png"
+);
+const WINDOW_CHROME_FRAME_BOTTOM_RIGHT_BYTES: &[u8] = include_bytes!(
+    "../ts_freepack/UI Elements/UI Elements/Wood Table/WoodTable_Slots_bottomright_corner.png"
+);
+const WINDOW_CHROME_FRAME_HORIZONTAL_BYTES: &[u8] = include_bytes!(
+    "../ts_freepack/UI Elements/UI Elements/Wood Table/WoodTable_Slots_middle_up_down.png"
+);
+const WINDOW_CHROME_FRAME_VERTICAL_BYTES: &[u8] = include_bytes!(
+    "../ts_freepack/UI Elements/UI Elements/Wood Table/WoodTable_Slots_middle_left_right.png"
+);
+const WINDOW_CHROME_CLOSE_ICON_BYTES: &[u8] =
+    include_bytes!("../ts_freepack/UI Elements/UI Elements/Icons/Icon_09.png");
+const WINDOW_CHROME_BLUE_BUTTON_BYTES: &[u8] = include_bytes!(
+    "../ts_freepack/UI Elements/UI Elements/Buttons/SmallBlueSquareButton_Regular.png"
+);
+const WINDOW_CHROME_RED_BUTTON_BYTES: &[u8] = include_bytes!(
+    "../ts_freepack/UI Elements/UI Elements/Buttons/SmallRedSquareButton_Regular.png"
+);
+const WINDOW_CHROME_BORDER_PX: f32 = 2.0;
+const WINDOW_CHROME_BUTTON_SIZE: f32 = 46.0;
+const WINDOW_CHROME_CLOSE_ICON_SIZE: f32 = 34.0;
+const WINDOW_CHROME_FRAME_DRAW_TILE: f32 = 16.0;
+const WINDOW_CHROME_FRAME_CORNER_SIZE: f32 = WINDOW_CHROME_FRAME_DRAW_TILE * 2.0;
+const WINDOW_CHROME_CLOSE_CONFIRM_SECS: u64 = 3;
 const IDLE_RETILE_COVER_TEXTURE: u32 = 13_000;
 const IDLE_RETILE_COVER_BYTES: &[u8] =
     include_bytes!("../ts_freepack/UI Elements/UI Elements/Wood Table/WoodTable_Slots.png");
 const IDLE_RETILE_COVER_TILE_PX: u32 = 64;
 const IDLE_RETILE_COVER_LIGHTEN_PERCENT: u8 = 8;
 const IDLE_RETILE_PARTICLE_TEXTURE_BASE: u32 = 13_100;
+const IDLE_GEOMANCER_WALL_PARTICLE_TEXTURE_BASE: u32 = 13_200;
 const IDLE_RETILE_FLYOUT_MS: u32 = 500;
 const IDLE_RETILE_FLYOUT_DISTANCE_PX: f32 = 192.0;
 const IDLE_RETILE_COVER_HOLD_MS: u32 = 250;
@@ -81,6 +121,13 @@ const IDLE_MONK_RETILE_MIN_DISTANCE_TILES: usize = 2;
 const IDLE_MONK_RETILE_MAX_DISTANCE_TILES: usize = 3;
 const IDLE_MONK_RETILE_MIN_SIZE: usize = 2;
 const IDLE_MONK_RETILE_MAX_SIZE: usize = 15;
+const IDLE_GEOMANCER_WALL_RADIUS_TILES: isize = 7;
+const IDLE_GEOMANCER_WALL_MIN_CASTS: usize = 1;
+const IDLE_GEOMANCER_WALL_MAX_CASTS: usize = 3;
+const IDLE_GEOMANCER_WALL_STAGGER_MS: u32 = 100;
+const IDLE_GEOMANCER_WALL_GROW_MS: u32 = 500;
+const IDLE_GEOMANCER_WALL_ROTATION_DEGREES: f32 = 5.0;
+const IDLE_GEOMANCER_WALL_ROTATION_CYCLES: f32 = 3.0;
 const IDLE_RETILE_PATCH_PADDING_TILES: usize = 2;
 const IDLE_RIGHT_CLICK_INDICATOR_MS: u128 = 250;
 const IDLE_RIGHT_CLICK_INDICATOR_SIZE: f32 = 42.0;
@@ -190,6 +237,7 @@ const PANEL_H: f32 = 320.0;
 
 const TILE_SIZE: f32 = 64.0;
 const BUILDING_GRID_DIVISIONS: usize = 2;
+const BUILDING_OVERLAP_TOLERANCE_HALF_CELLS: usize = 1;
 const WORLD_COLS: usize = 48;
 const WORLD_ROWS: usize = 29;
 const BUILDING_SCALE: f32 = TILE_SIZE / TERRAIN_TILE_PX as f32;
@@ -222,7 +270,7 @@ const IDLE_PATH_CLIFF_PENALTY: u32 = 160;
 const IDLE_RESOURCE_WORK_MS: u32 = 5_000;
 const IDLE_TREE_MIN_HP: u8 = 5;
 const IDLE_TREE_MAX_HP: u8 = 7;
-const IDLE_WORLD_HOUSE_PREVIEW_TEXTURE_BASE: u32 = 8700;
+const IDLE_WORLD_BUILDING_PREVIEW_TEXTURE_BASE: u32 = 8700;
 const IDLE_HOTKEY_ENTRIES: [ts_ui::HotkeyEntry<'static>; 10] = [
     ts_ui::HotkeyEntry {
         prefix: None,
@@ -277,7 +325,7 @@ const IDLE_HOTKEY_ENTRIES: [ts_ui::HotkeyEntry<'static>; 10] = [
 ];
 const PAWN_ASEPRITE_PATH: &str = "ts_freepack/Pawn.aseprite";
 const PARTICLE_FX_ASEPRITE_PATH: &str = "ts_freepack/Particle FX.aseprite";
-const IDLE_WORLD_UNIT_SPECS: [UnitWalkSpec; 5] = [
+const IDLE_WORLD_UNIT_SPECS: [UnitWalkSpec; 6] = [
     UnitWalkSpec::animated("Archer Idle", "ts_freepack/Archer.aseprite", "Idle"),
     UnitWalkSpec::animated_offset(
         "Lancer Idle",
@@ -289,8 +337,9 @@ const IDLE_WORLD_UNIT_SPECS: [UnitWalkSpec; 5] = [
     UnitWalkSpec::animated("Monk Idle", "ts_freepack/Monk.aseprite", "Idle"),
     UnitWalkSpec::animated("Warrior Idle", "ts_freepack/Warrior.aseprite", "Idle"),
     UnitWalkSpec::animated_offset("Sheep Idle", "ts_freepack/Sheep.aseprite", "Idle", 0.0, 8.0),
+    UnitWalkSpec::animated("Goemancer Idle", "ts_freepack/Monk.aseprite", "Idle"),
 ];
-const IDLE_WORLD_MOVE_SPECS: [UnitWalkSpec; 5] = [
+const IDLE_WORLD_MOVE_SPECS: [UnitWalkSpec; 6] = [
     UnitWalkSpec::animated("Archer Run", "ts_freepack/Archer.aseprite", "Run"),
     UnitWalkSpec::animated_offset(
         "Lancer Run",
@@ -302,8 +351,9 @@ const IDLE_WORLD_MOVE_SPECS: [UnitWalkSpec; 5] = [
     UnitWalkSpec::animated("Monk Run", "ts_freepack/Monk.aseprite", "Run"),
     UnitWalkSpec::animated("Warrior Run", "ts_freepack/Warrior.aseprite", "Run"),
     UnitWalkSpec::animated_offset("Sheep Move", "ts_freepack/Sheep.aseprite", "Move", 0.0, 8.0),
+    UnitWalkSpec::animated("Goemancer Run", "ts_freepack/Monk.aseprite", "Run"),
 ];
-const IDLE_WORLD_ATTACK_SPECS: [&[UnitWalkSpec]; 5] = [
+const IDLE_WORLD_ATTACK_SPECS: [&[UnitWalkSpec]; 6] = [
     &[UnitWalkSpec::animated(
         "Archer Shoot",
         "ts_freepack/Archer.aseprite",
@@ -334,6 +384,11 @@ const IDLE_WORLD_ATTACK_SPECS: [&[UnitWalkSpec]; 5] = [
         ),
     ],
     &[],
+    &[UnitWalkSpec::animated(
+        "Goemancer Cast",
+        "ts_freepack/Monk.aseprite",
+        "Heal",
+    )],
 ];
 const PAWN_IDLE_TAGS: [&str; 8] = [
     "Idle",
@@ -1059,6 +1114,7 @@ struct IdleWorldViewer {
     rock_props: [ImageAsset; ROCK_PROP_COUNT],
     retile_cover: ImageAsset,
     particle_dust: SpriteAnimation,
+    geomancer_wall_dust: SpriteAnimation,
     world: TileWorld,
     terrain_cache: TerrainDrawCache,
     cursor_default: ImageAsset,
@@ -1068,9 +1124,10 @@ struct IdleWorldViewer {
     cursor_axe: ImageAsset,
     cursor_dagger: ImageAsset,
     right_click_indicator: ImageAsset,
+    banner_slots: ImageAsset,
     regular_paper: ImageAsset,
     special_paper: ImageAsset,
-    house_previews: [ImageAsset; 3],
+    building_previews: [ImageAsset; BUILDING_COUNT],
     house_icon_inlays: [ImageAsset; 3],
     clouds: Vec<ImageAsset>,
     cloud_instances: Vec<CloudInstance>,
@@ -1100,6 +1157,8 @@ struct IdleWorldViewer {
     last_frame: Instant,
     attack_rng: SeededRng,
     retile_transition: Option<IdleRetileTransition>,
+    pending_geomancer_walls: Vec<IdleGeomancerWallPlacement>,
+    geomancer_wall_growths: Vec<IdleGeomancerWallGrowth>,
 }
 
 struct IconViewer {
@@ -1282,6 +1341,49 @@ struct IdleRetileTransition {
     flyout_tiles: Vec<IdleRetileFlyoutTile>,
     started: Instant,
     finish_ms: u32,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct IdleGeomancerWallPlacement {
+    col: usize,
+    row: usize,
+    len: usize,
+    orientation: wldgenerator::GeneratedWallOrientation,
+    due_ms: u32,
+}
+
+struct IdleGeomancerWallGrowth {
+    placement: IdleGeomancerWallPlacement,
+    tiles: Vec<wldgenerator::GeneratedWallPreviewTile>,
+    started_ms: u32,
+    committed: bool,
+}
+
+impl IdleGeomancerWallPlacement {
+    fn apply_to(self, world: &mut wldgenerator::GeneratedWorld) -> bool {
+        match self.orientation {
+            wldgenerator::GeneratedWallOrientation::Horizontal => {
+                world.add_horizontal_wall_centered(self.col, self.row, self.len)
+            }
+            wldgenerator::GeneratedWallOrientation::Vertical => {
+                world.add_vertical_wall_centered(self.col, self.row, self.len)
+            }
+        }
+    }
+
+    fn preview_tiles(
+        self,
+        world: &wldgenerator::GeneratedWorld,
+    ) -> Option<Vec<wldgenerator::GeneratedWallPreviewTile>> {
+        match self.orientation {
+            wldgenerator::GeneratedWallOrientation::Horizontal => {
+                world.horizontal_wall_preview_tiles_centered(self.col, self.row, self.len)
+            }
+            wldgenerator::GeneratedWallOrientation::Vertical => {
+                world.vertical_wall_preview_tiles_centered(self.col, self.row, self.len)
+            }
+        }
+    }
 }
 
 impl IdlePathWorker {
@@ -1566,6 +1668,7 @@ struct IdleWorldUnit {
     facing_left: bool,
     is_pawn: bool,
     is_monk: bool,
+    is_geomancer: bool,
     state: IdleWorldUnitState,
 }
 
@@ -3804,6 +3907,7 @@ impl IdleWorldViewer {
             rock_props,
             retile_cover,
             particle_dust: load_idle_retile_particle_dust(),
+            geomancer_wall_dust: load_idle_geomancer_wall_dust(),
             world,
             terrain_cache: TerrainDrawCache::new(),
             cursor_default: ImageAsset::from_png_bytes_cropped(
@@ -3831,6 +3935,10 @@ impl IdleWorldViewer {
                 ts_ui::SMALL_BLUE_ROUND_BUTTON_TEXTURE,
                 ts_ui::SMALL_BLUE_ROUND_BUTTON_BYTES,
             ),
+            banner_slots: ImageAsset::from_png_bytes(
+                ts_ui::BANNER_SLOTS_TEXTURE,
+                ts_ui::BANNER_SLOTS_BYTES,
+            ),
             regular_paper: ImageAsset::from_png_bytes(
                 ts_ui::REGULAR_PAPER_TEXTURE,
                 ts_ui::REGULAR_PAPER_BYTES,
@@ -3839,20 +3947,13 @@ impl IdleWorldViewer {
                 ts_ui::SPECIAL_PAPER_TEXTURE,
                 ts_ui::SPECIAL_PAPER_BYTES,
             ),
-            house_previews: [
+            building_previews: std::array::from_fn(|index| {
+                let spec = BUILDING_SPECS[index];
                 ImageAsset::from_png_bytes_cropped(
-                    IDLE_WORLD_HOUSE_PREVIEW_TEXTURE_BASE,
-                    RED_HOUSE1_BYTES,
-                ),
-                ImageAsset::from_png_bytes_cropped(
-                    IDLE_WORLD_HOUSE_PREVIEW_TEXTURE_BASE + 1,
-                    RED_HOUSE2_BYTES,
-                ),
-                ImageAsset::from_png_bytes_cropped(
-                    IDLE_WORLD_HOUSE_PREVIEW_TEXTURE_BASE + 2,
-                    RED_HOUSE3_BYTES,
-                ),
-            ],
+                    IDLE_WORLD_BUILDING_PREVIEW_TEXTURE_BASE + index as u32,
+                    spec.bytes,
+                )
+            }),
             house_icon_inlays: [
                 ImageAsset::from_png_bytes_cropped(
                     IDLE_WORLD_HOUSE_ICON_TEXTURE_BASE,
@@ -3895,6 +3996,8 @@ impl IdleWorldViewer {
             last_frame: Instant::now(),
             attack_rng: SeededRng::new(DEFAULT_SEED ^ 0xA77A_CAFE_2026),
             retile_transition: None,
+            pending_geomancer_walls: Vec::new(),
+            geomancer_wall_growths: Vec::new(),
         }
     }
 
@@ -3934,6 +4037,7 @@ impl IdleWorldViewer {
             &self.cursor_axe,
             &self.cursor_dagger,
             &self.right_click_indicator,
+            &self.banner_slots,
             &self.fog,
             &self.retile_cover,
             &self.regular_paper,
@@ -3957,7 +4061,7 @@ impl IdleWorldViewer {
         }
 
         for image in self
-            .house_previews
+            .building_previews
             .iter()
             .chain(self.house_icon_inlays.iter())
         {
@@ -3969,7 +4073,7 @@ impl IdleWorldViewer {
             );
             assert_eq!(
                 rc, 0,
-                "failed to upload idle world house preview texture {}",
+                "failed to upload idle world building preview texture {}",
                 image.texture_id
             );
         }
@@ -4020,6 +4124,7 @@ impl IdleWorldViewer {
             )
             .chain(self.rock_props.iter())
             .chain(self.particle_dust.frames.iter())
+            .chain(self.geomancer_wall_dust.frames.iter())
         {
             let rc = adapter.upload_texture_rgba_image(
                 image.texture_id,
@@ -4233,11 +4338,13 @@ impl IdleWorldViewer {
         self.update_idle_camera(dt);
         self.update_right_click_indicators();
         self.update_idle_retile_transition();
+        self.apply_due_geomancer_wall_placements(elapsed_ms);
         self.apply_idle_path_results();
         let attack_rng = &mut self.attack_rng;
 
         let mut pawn_clip_changes = Vec::new();
         let mut monk_retile_requests = Vec::new();
+        let mut geomancer_wall_requests = Vec::new();
         let mut path_requests = Vec::new();
         let mut idle_world_events = Vec::new();
 
@@ -4274,6 +4381,9 @@ impl IdleWorldViewer {
                         } else {
                             if unit.is_monk {
                                 monk_retile_requests.push((index, unit.position));
+                            }
+                            if unit.is_geomancer {
+                                geomancer_wall_requests.push((index, unit.position));
                             }
                             IdleWorldUnitState::Attacking {
                                 started_ms: elapsed_ms,
@@ -4455,6 +4565,10 @@ impl IdleWorldViewer {
 
         self.queue_idle_path_requests(path_requests);
 
+        for (index, position) in geomancer_wall_requests {
+            self.proc_geomancer_wall_cast(index, position, elapsed_ms);
+        }
+
         if let Some((index, position)) = monk_retile_requests.into_iter().next() {
             self.proc_monk_retile_from_attack(index, position, elapsed_ms);
         }
@@ -4511,6 +4625,171 @@ impl IdleWorldViewer {
             let rect_center_x = (rect.col as f32 + rect.cols as f32 * 0.5) * TILE_SIZE;
             unit.facing_left = rect_center_x < unit.position.x;
         }
+    }
+
+    fn proc_geomancer_wall_cast(&mut self, index: usize, position: Point, elapsed_ms: u32) {
+        if self.units.get(index).is_none_or(|unit| !unit.is_geomancer) {
+            return;
+        }
+
+        let placements = self.random_geomancer_wall_placements(position, elapsed_ms);
+        if placements.is_empty() {
+            return;
+        }
+
+        if let Some(unit) = self.units.get_mut(index) {
+            let avg_x = placements
+                .iter()
+                .map(|placement| placement.col as f32 + placement.len as f32 * 0.5)
+                .sum::<f32>()
+                / placements.len() as f32
+                * TILE_SIZE;
+            unit.facing_left = avg_x < unit.position.x;
+        }
+        self.pending_geomancer_walls.extend(placements);
+    }
+
+    fn random_geomancer_wall_placements(
+        &mut self,
+        position: Point,
+        elapsed_ms: u32,
+    ) -> Vec<IdleGeomancerWallPlacement> {
+        let Some(mut generated) = self.world.generated_source.clone() else {
+            return Vec::new();
+        };
+        if generated.cols != self.world.cols
+            || generated.rows != self.world.rows
+            || generated.validate().is_err()
+        {
+            return Vec::new();
+        }
+
+        let requested = self.environment_rng.range_usize(
+            IDLE_GEOMANCER_WALL_MIN_CASTS,
+            IDLE_GEOMANCER_WALL_MAX_CASTS + 1,
+        );
+        let center_col = (position.x / TILE_SIZE).floor() as isize;
+        let center_row = (position.y / TILE_SIZE).floor() as isize;
+        let mut placements = Vec::with_capacity(requested);
+
+        for order in 0..requested {
+            let candidates = geomancer_wall_candidates_near(
+                &generated,
+                center_col,
+                center_row,
+                IDLE_GEOMANCER_WALL_RADIUS_TILES,
+                &placements,
+            );
+            if candidates.is_empty() {
+                break;
+            }
+
+            let mut placement = candidates[self.environment_rng.range_usize(0, candidates.len())];
+            let added = match placement.orientation {
+                wldgenerator::GeneratedWallOrientation::Horizontal => generated
+                    .add_horizontal_wall_centered(placement.col, placement.row, placement.len),
+                wldgenerator::GeneratedWallOrientation::Vertical => generated
+                    .add_vertical_wall_centered(placement.col, placement.row, placement.len),
+            };
+            if !added {
+                continue;
+            }
+            placement.due_ms = elapsed_ms
+                .saturating_add((order as u32 + 1).saturating_mul(IDLE_GEOMANCER_WALL_STAGGER_MS));
+            placements.push(placement);
+        }
+
+        placements
+    }
+
+    fn apply_due_geomancer_wall_placements(&mut self, elapsed_ms: u32) {
+        let mut committed_growths = Vec::new();
+        for (index, growth) in self.geomancer_wall_growths.iter().enumerate() {
+            let growth_elapsed_ms = elapsed_ms.saturating_sub(growth.started_ms);
+            if !growth.committed && growth_elapsed_ms >= IDLE_GEOMANCER_WALL_GROW_MS {
+                committed_growths.push((index, growth.placement));
+            }
+        }
+
+        let mut terrain_dirty = false;
+        for (index, placement) in committed_growths {
+            if self.try_add_generated_wall_placement(placement) {
+                terrain_dirty = true;
+            }
+            if let Some(growth) = self.geomancer_wall_growths.get_mut(index) {
+                growth.committed = true;
+            }
+        }
+
+        let dust_duration_ms = self.geomancer_wall_dust.total_duration_ms;
+        self.geomancer_wall_growths.retain(|growth| {
+            let growth_elapsed_ms = elapsed_ms.saturating_sub(growth.started_ms);
+            !growth.committed
+                || growth_elapsed_ms < IDLE_GEOMANCER_WALL_GROW_MS.max(dust_duration_ms)
+        });
+
+        let mut pending = Vec::new();
+        for placement in std::mem::take(&mut self.pending_geomancer_walls) {
+            if elapsed_ms < placement.due_ms {
+                pending.push(placement);
+                continue;
+            }
+            self.start_geomancer_wall_growth(placement, elapsed_ms);
+        }
+        self.pending_geomancer_walls = pending;
+        if terrain_dirty {
+            self.terrain_cache.mark_dirty();
+        }
+    }
+
+    fn start_geomancer_wall_growth(
+        &mut self,
+        placement: IdleGeomancerWallPlacement,
+        elapsed_ms: u32,
+    ) {
+        let Some(generated) = self.world.generated_source.as_ref() else {
+            return;
+        };
+        if generated.cols != self.world.cols
+            || generated.rows != self.world.rows
+            || generated.validate().is_err()
+        {
+            return;
+        }
+        let Some(tiles) = placement.preview_tiles(generated) else {
+            return;
+        };
+
+        self.geomancer_wall_growths.push(IdleGeomancerWallGrowth {
+            placement,
+            tiles,
+            started_ms: elapsed_ms,
+            committed: false,
+        });
+    }
+
+    fn try_add_generated_wall_placement(&mut self, placement: IdleGeomancerWallPlacement) -> bool {
+        let Some(mut generated) = self.world.generated_source.clone() else {
+            return false;
+        };
+        if generated.cols != self.world.cols
+            || generated.rows != self.world.rows
+            || generated.validate().is_err()
+        {
+            return false;
+        }
+
+        if !placement.apply_to(&mut generated) {
+            return false;
+        }
+
+        let visual = generated.to_visual_tile_world().tiles;
+        self.world.backgrounds = visual.backgrounds;
+        self.world.water_states = visual.water_states;
+        self.world.under_foregrounds = visual.under_foregrounds;
+        self.world.foregrounds = visual.foregrounds;
+        self.world.generated_source = Some(generated);
+        true
     }
 
     fn random_monk_retile_rect(&mut self, position: Point) -> IdleRetileRect {
@@ -5467,6 +5746,98 @@ impl IdleWorldViewer {
         self.draw_idle_image_batches(adapter, batches);
     }
 
+    fn draw_geomancer_wall_growths(&self, adapter: &mut Adapter, elapsed_ms: u32) {
+        let mut any_drawn = false;
+        let _ = adapter.set_texture_effect(TextureEffect::World);
+
+        for growth in &self.geomancer_wall_growths {
+            if growth.committed {
+                continue;
+            }
+            let growth_elapsed_ms = elapsed_ms.saturating_sub(growth.started_ms);
+            if growth_elapsed_ms >= IDLE_GEOMANCER_WALL_GROW_MS {
+                continue;
+            }
+
+            let t = (growth_elapsed_ms as f32 / IDLE_GEOMANCER_WALL_GROW_MS as f32).clamp(0.0, 1.0);
+            let slide_y = (1.0 - ease_out_cubic(t)) * TILE_SIZE;
+            let angle_rad = (t * std::f32::consts::TAU * IDLE_GEOMANCER_WALL_ROTATION_CYCLES).sin()
+                * IDLE_GEOMANCER_WALL_ROTATION_DEGREES.to_radians();
+
+            for tile in &growth.tiles {
+                if !self.set_idle_tile_scissor(adapter, tile.col, tile.row) {
+                    continue;
+                }
+
+                let x = tile.col as f32 * TILE_SIZE - self.camera.x;
+                let y = tile.row as f32 * TILE_SIZE - self.camera.y + slide_y;
+                let mut batch = SpriteBatch::new(self.window_width, self.window_height);
+                batch.image_uv_rotated_around(
+                    x,
+                    y,
+                    TILE_SIZE,
+                    TILE_SIZE,
+                    self.terrain.uv(tile.tile),
+                    x + TILE_SIZE * 0.5,
+                    y + TILE_SIZE,
+                    angle_rad,
+                    Rgba8::WHITE,
+                );
+                let _ =
+                    adapter.draw_tex_triangles_no_present(self.terrain.texture_id, &batch.bytes);
+                any_drawn = true;
+            }
+        }
+
+        if any_drawn {
+            let _ = adapter.set_scissor(None);
+        }
+        let _ = adapter.set_texture_effect(TextureEffect::Plain);
+    }
+
+    fn draw_geomancer_wall_particles(&self, adapter: &mut Adapter, elapsed_ms: u32) {
+        let mut batches = BTreeMap::new();
+
+        for growth in &self.geomancer_wall_growths {
+            let growth_elapsed_ms = elapsed_ms.saturating_sub(growth.started_ms);
+            if growth_elapsed_ms >= self.geomancer_wall_dust.total_duration_ms {
+                continue;
+            }
+            let Some(image) = self.geomancer_wall_dust.frame_once(growth_elapsed_ms) else {
+                continue;
+            };
+
+            for tile in &growth.tiles {
+                self.push_idle_centered_tile_image(&mut batches, image, tile.col, tile.row);
+            }
+        }
+
+        self.draw_idle_image_batches(adapter, batches);
+    }
+
+    fn set_idle_tile_scissor(&self, adapter: &mut Adapter, col: usize, row: usize) -> bool {
+        let left = (col as f32 * TILE_SIZE - self.camera.x).floor().max(0.0);
+        let top = (row as f32 * TILE_SIZE - self.camera.y).floor().max(0.0);
+        let right = (col as f32 * TILE_SIZE - self.camera.x + TILE_SIZE)
+            .ceil()
+            .min(self.window_width as f32);
+        let bottom = (row as f32 * TILE_SIZE - self.camera.y + TILE_SIZE)
+            .ceil()
+            .min(self.window_height as f32);
+
+        if right <= left || bottom <= top {
+            return false;
+        }
+
+        let _ = adapter.set_scissor(Some(ScissorRect {
+            x: left as u32,
+            y: top as u32,
+            width: (right - left) as u32,
+            height: (bottom - top) as u32,
+        }));
+        true
+    }
+
     fn draw_idle_water_states(&self, adapter: &mut Adapter, elapsed_ms: u32) {
         let mut batches = BTreeMap::new();
         let start_col = (self.camera.x / TILE_SIZE).floor().max(0.0) as usize;
@@ -5743,9 +6114,14 @@ impl IdleWorldViewer {
 
     fn idle_build_hotkey_kind(digit: u8) -> Option<BuildingKind> {
         match digit {
-            1 => Some(BuildingKind::House1),
-            2 => Some(BuildingKind::House2),
-            3 => Some(BuildingKind::House3),
+            1 => Some(BuildingKind::Archery),
+            2 => Some(BuildingKind::Barracks),
+            3 => Some(BuildingKind::Castle),
+            4 => Some(BuildingKind::House1),
+            5 => Some(BuildingKind::House2),
+            6 => Some(BuildingKind::House3),
+            7 => Some(BuildingKind::Monastery),
+            8 => Some(BuildingKind::Tower),
             _ => None,
         }
     }
@@ -6107,66 +6483,77 @@ impl IdleWorldViewer {
                 .all(|&index| self.units.get(index).is_some_and(|unit| unit.is_pawn))
     }
 
-    fn draw_pawn_build_ui(&self, adapter: &mut Adapter, elapsed_ms: u32) {
+    fn draw_pawn_build_ui(&self, adapter: &mut Adapter) {
         if !self.selected_units_include_pawn() {
             return;
         }
 
-        let tile = 64.0;
-        let panel_w = tile * 7.0;
-        let panel_h = tile;
+        let slot_spans = [1_usize, 1, 2, 1, 1, 1, 1, 1];
+        let slot_units: usize = slot_spans.iter().sum();
+        let ideal_slot = 108.0;
+        let side_pad = 48.0;
+        let panel_w = (ideal_slot * slot_units as f32 + side_pad * 2.0)
+            .min((self.window_width as f32 - 40.0).max(320.0));
+        let slot = ((panel_w - side_pad * 2.0) / slot_units as f32)
+            .min(ideal_slot)
+            .max(42.0);
+        let panel_h = (slot + 32.0).clamp(92.0, 148.0);
         let panel_x = ((self.window_width as f32 - panel_w) * 0.5).round();
-        let panel_y = (self.window_height as f32 - panel_h - 24.0)
+        let panel_y = (self.window_height as f32 - panel_h - 20.0)
             .max(0.0)
             .round();
-        let mut paper = ts_ui::UiBatch::new(self.window_width, self.window_height);
-        paper.paper_panel_tiles(panel_x, panel_y, 7, 1, tile, Rgba8::new(255, 255, 255, 128));
-        let _ = adapter
-            .draw_tex_triangles_no_present(self.regular_paper.texture_id, &paper.texture_bytes);
+        let slot_y = (panel_y + (panel_h - slot) * 0.5 - 3.0).floor();
+        let first_slot_x = panel_x + (panel_w - slot * slot_units as f32) * 0.5;
 
-        let slot_w = panel_w / 3.0;
-        let mut labels = ts_ui::UiBatch::new(self.window_width, self.window_height);
-        for (index, image) in self.house_previews.iter().enumerate() {
-            let max_w = 88.0;
-            let max_h = 102.0;
+        let mut banner = ts_ui::UiBatch::new(self.window_width, self.window_height);
+        banner.banner_panel(
+            panel_x,
+            panel_y,
+            panel_w,
+            panel_h,
+            64.0,
+            Rgba8::new(255, 255, 255, 245),
+        );
+        let _ = adapter.draw_tex_triangles_no_present(ts_ui::BANNER_TEXTURE, &banner.texture_bytes);
+
+        let platform = slot * 0.7;
+        let platform_inset = (slot - platform) * 0.5;
+        let mut slots = SpriteBatch::new(self.window_width, self.window_height);
+        let mut cursor_units = 0_usize;
+        for span in slot_spans {
+            for offset in 0..span {
+                slots.image(
+                    (first_slot_x + (cursor_units + offset) as f32 * slot + platform_inset).floor(),
+                    (slot_y + platform_inset).floor(),
+                    platform,
+                    platform,
+                    Rgba8::new(255, 255, 255, 238),
+                );
+            }
+            cursor_units += span;
+        }
+        let _ = adapter.draw_tex_triangles_no_present(self.banner_slots.texture_id, &slots.bytes);
+
+        let mut cursor_units = 0_usize;
+        for (index, image) in self.building_previews.iter().enumerate() {
+            let span = slot_spans[index];
+            let cell_w = slot * span as f32;
+            let max_w = cell_w * 0.86;
+            let max_h = slot * 1.04;
             let scale = (max_w / image.width as f32)
                 .min(max_h / image.height as f32)
                 .min(1.0);
             let w = (image.width as f32 * scale).floor().max(1.0);
             let h = (image.height as f32 * scale).floor().max(1.0);
-            let slot_x = panel_x + index as f32 * slot_w;
-            let x = (slot_x + (slot_w - w) * 0.5).floor();
-            let y = (panel_y + panel_h - h - 16.0).floor();
-            let key = (index + 1).to_string();
-            labels.text(
-                &key,
-                (x - 28.0).max(slot_x + 10.0),
-                panel_y + 24.0,
-                2.0,
-                Rgba8::new(36, 44, 44, 255),
-            );
+            let slot_x = first_slot_x + cursor_units as f32 * slot;
+            let x = (slot_x + (cell_w - w) * 0.5).floor();
+            let y = (slot_y + slot * 0.92 - h).floor();
 
             let mut preview = SpriteBatch::new(self.window_width, self.window_height);
             preview.image(x, y, w, h, Rgba8::WHITE);
             let _ = adapter.draw_tex_triangles_no_present(image.texture_id, &preview.bytes);
-
-            let icon = &self.house_icon_inlays[index];
-            let base_icon_size = 56.0;
-            let pulse = 0.85 + 0.05 * ((elapsed_ms as f32 * 0.004) + index as f32 * 0.55).sin();
-            let icon_size = (base_icon_size * pulse).floor().max(1.0);
-            let icon_x = (x + w - icon_size * 0.5).floor();
-            let icon_y = (y + (h - icon_size) * 0.5).floor();
-            let mut inlay = SpriteBatch::new(self.window_width, self.window_height);
-            inlay.image(
-                icon_x,
-                icon_y,
-                icon_size,
-                icon_size,
-                Rgba8::new(255, 255, 255, 191),
-            );
-            let _ = adapter.draw_tex_triangles_no_present(icon.texture_id, &inlay.bytes);
+            cursor_units += span;
         }
-        let _ = adapter.draw_rgb_triangles_no_present(&labels.solid_bytes);
     }
 
     fn draw_hotkey_menu(&self, adapter: &mut Adapter) {
@@ -6405,6 +6792,7 @@ fn load_unit_walk_clip(spec: UnitWalkSpec, next_texture_id: &mut u32) -> Option<
 }
 
 fn load_idle_world_units(next_texture_id: &mut u32) -> Vec<IdleWorldUnit> {
+    let unit_count = IDLE_WORLD_UNIT_SPECS.len() + PAWN_IDLE_TAGS.len();
     let mut units = IDLE_WORLD_UNIT_SPECS
         .iter()
         .zip(IDLE_WORLD_MOVE_SPECS.iter())
@@ -6440,25 +6828,45 @@ fn load_idle_world_units(next_texture_id: &mut u32) -> Vec<IdleWorldUnit> {
                 .filter_map(|spec| load_unit_walk_clip(*spec, next_texture_id))
                 .collect();
             let is_monk = idle_spec.label.starts_with("Monk");
+            let is_geomancer = idle_spec.label.starts_with("Goemancer");
             Some(IdleWorldUnit {
                 idle,
                 movement,
                 attacks,
-                position: idle_world_unit_foot_position(index, 13),
+                position: idle_world_unit_foot_position(index, unit_count),
                 movement_path: Vec::new(),
                 path_generation: 0,
                 facing_left: false,
                 is_pawn: false,
                 is_monk,
+                is_geomancer,
                 state: IdleWorldUnitState::Idle,
             })
         })
         .collect::<Vec<_>>();
-    units.extend(load_pawn_idle_world_units(next_texture_id, units.len(), 13));
+    units.extend(load_pawn_idle_world_units(
+        next_texture_id,
+        units.len(),
+        unit_count,
+    ));
     units
 }
 
 fn load_idle_retile_particle_dust() -> SpriteAnimation {
+    load_idle_particle_dust_animation(
+        IDLE_RETILE_PARTICLE_TEXTURE_BASE,
+        &["particle_dust_1", "Dust 1", "dust_1"],
+    )
+}
+
+fn load_idle_geomancer_wall_dust() -> SpriteAnimation {
+    load_idle_particle_dust_animation(
+        IDLE_GEOMANCER_WALL_PARTICLE_TEXTURE_BASE,
+        &["particle_dust_2", "Dust 2", "dust_2"],
+    )
+}
+
+fn load_idle_particle_dust_animation(texture_base: u32, tags: &[&str]) -> SpriteAnimation {
     let set = ase_assets::load_tinted_aseprite_set(
         PARTICLE_FX_ASEPRITE_PATH,
         [255, 255, 255, 255],
@@ -6466,7 +6874,7 @@ fn load_idle_retile_particle_dust() -> SpriteAnimation {
     )
     .expect("particle fx aseprite should decode");
 
-    let frames = ["particle_dust_1", "Dust 1", "dust_1"]
+    let frames = tags
         .iter()
         .find_map(|tag| set.frames_for_tag(tag))
         .unwrap_or(set.frames.as_slice())
@@ -6475,7 +6883,7 @@ fn load_idle_retile_particle_dust() -> SpriteAnimation {
         .map(|(index, frame)| {
             (
                 ImageAsset::from_rgba_cropped(
-                    IDLE_RETILE_PARTICLE_TEXTURE_BASE + index as u32,
+                    texture_base + index as u32,
                     frame.width,
                     frame.height,
                     frame.rgba.clone(),
@@ -6607,6 +7015,7 @@ fn load_pawn_idle_world_units(
                 facing_left: false,
                 is_pawn: true,
                 is_monk: false,
+                is_geomancer: false,
                 state: IdleWorldUnitState::Idle,
             })
         })
@@ -7240,6 +7649,72 @@ fn clamp_idle_retile_rect(
     })
 }
 
+fn geomancer_wall_candidates_near(
+    generated: &wldgenerator::GeneratedWorld,
+    center_col: isize,
+    center_row: isize,
+    radius: isize,
+    planned: &[IdleGeomancerWallPlacement],
+) -> Vec<IdleGeomancerWallPlacement> {
+    let radius_sq = radius.saturating_mul(radius);
+    let mut candidates = Vec::new();
+    for row in 0..generated.rows {
+        for col in 0..generated.cols {
+            let dx = col as isize - center_col;
+            let dy = row as isize - center_row;
+            if dx.saturating_mul(dx).saturating_add(dy.saturating_mul(dy)) > radius_sq {
+                continue;
+            }
+
+            for len in 1..=3 {
+                if generated.can_add_horizontal_wall_centered(col, row, len) {
+                    push_geomancer_wall_candidate(
+                        &mut candidates,
+                        planned,
+                        IdleGeomancerWallPlacement {
+                            col,
+                            row,
+                            len,
+                            orientation: wldgenerator::GeneratedWallOrientation::Horizontal,
+                            due_ms: 0,
+                        },
+                    );
+                }
+                if generated.can_add_vertical_wall_centered(col, row, len) {
+                    push_geomancer_wall_candidate(
+                        &mut candidates,
+                        planned,
+                        IdleGeomancerWallPlacement {
+                            col,
+                            row,
+                            len,
+                            orientation: wldgenerator::GeneratedWallOrientation::Vertical,
+                            due_ms: 0,
+                        },
+                    );
+                }
+            }
+        }
+    }
+    candidates
+}
+
+fn push_geomancer_wall_candidate(
+    candidates: &mut Vec<IdleGeomancerWallPlacement>,
+    planned: &[IdleGeomancerWallPlacement],
+    candidate: IdleGeomancerWallPlacement,
+) {
+    if planned.iter().any(|placement| {
+        placement.col == candidate.col
+            && placement.row == candidate.row
+            && placement.len == candidate.len
+            && placement.orientation == candidate.orientation
+    }) {
+        return;
+    }
+    candidates.push(candidate);
+}
+
 fn generated_idle_retile_patch(
     rect: IdleRetileRect,
     world_cols: usize,
@@ -7755,6 +8230,8 @@ impl FrameProducer for IdleWorldViewer {
         self.draw_idle_retile_flyout(adapter);
         self.draw_idle_retile_cover(adapter);
         self.draw_idle_retile_particles(adapter);
+        self.draw_geomancer_wall_growths(adapter, elapsed_ms);
+        self.draw_geomancer_wall_particles(adapter, elapsed_ms);
         self.draw_idle_building_preview(adapter);
 
         for draw in self.unit_draws(elapsed_ms) {
@@ -7778,7 +8255,7 @@ impl FrameProducer for IdleWorldViewer {
         self.draw_clouds(adapter);
         self.draw_right_click_indicators(adapter);
         self.draw_selected_unit_ui(adapter, elapsed_ms);
-        self.draw_pawn_build_ui(adapter, elapsed_ms);
+        self.draw_pawn_build_ui(adapter);
         self.draw_hotkey_menu(adapter);
         if let Some(rect) = self.active_selection_rect() {
             self.draw_selection_corners(adapter, rect);
@@ -8966,11 +9443,9 @@ impl TileWorld {
             return false;
         }
 
-        if self
-            .buildings
-            .iter()
-            .any(|building| rects_overlap(footprint, building_footprint_rect2(*building)))
-        {
+        if self.buildings.iter().any(|building| {
+            building_footprints_collide(footprint, building_footprint_rect2(*building))
+        }) {
             return false;
         }
 
@@ -9751,6 +10226,18 @@ fn rects_overlap(a: (isize, isize, usize, usize), b: (isize, isize, usize, usize
     ax < bx + bw as isize && ax + aw as isize > bx && ay < by + bh as isize && ay + ah as isize > by
 }
 
+fn building_footprints_collide(
+    a: (isize, isize, usize, usize),
+    b: (isize, isize, usize, usize),
+) -> bool {
+    let (ax, ay, aw, ah) = a;
+    let (bx, by, bw, bh) = b;
+    let overlap_w = (ax + aw as isize).min(bx + bw as isize) - ax.max(bx);
+    let overlap_h = (ay + ah as isize).min(by + bh as isize) - ay.max(by);
+    overlap_w > BUILDING_OVERLAP_TOLERANCE_HALF_CELLS as isize
+        && overlap_h > BUILDING_OVERLAP_TOLERANCE_HALF_CELLS as isize
+}
+
 fn insert_layer_column<T: Copy>(
     layer: &[T],
     old_cols: usize,
@@ -9958,6 +10445,118 @@ mod idle_world_tests {
         }
 
         assert_eq!(seen, HashSet::from([0, 1]));
+    }
+
+    #[test]
+    fn goemancer_loads_as_monk_wall_variant() {
+        let viewer = IdleWorldViewer::new();
+        let geomancer = viewer
+            .units
+            .iter()
+            .find(|unit| unit.is_geomancer)
+            .expect("idle world should include goemancer");
+
+        assert_eq!(geomancer.idle.name, "Goemancer Idle");
+        assert_eq!(geomancer.movement.name, "Goemancer Run");
+        assert_eq!(
+            geomancer
+                .attacks
+                .iter()
+                .map(|clip| clip.name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["Goemancer Cast"]
+        );
+        assert!(!geomancer.is_monk);
+    }
+
+    #[test]
+    fn buildings_can_overlap_by_one_half_tile() {
+        let mut world = TileWorld::new(8, 8);
+        world.paint_building(BuildingKind::House1, 0, 0);
+
+        assert!(world.can_place_building_kind(BuildingKind::House1, 3, 0));
+        world.paint_building(BuildingKind::House1, 3, 0);
+
+        assert_eq!(world.buildings.len(), 2);
+    }
+
+    #[test]
+    fn buildings_cannot_overlap_deeper_than_one_half_tile() {
+        let mut world = TileWorld::new(8, 8);
+        world.paint_building(BuildingKind::House1, 0, 0);
+
+        assert!(!world.can_place_building_kind(BuildingKind::House1, 2, 0));
+        world.paint_building(BuildingKind::House1, 2, 0);
+
+        assert_eq!(world.buildings.len(), 1);
+    }
+
+    #[test]
+    fn goemancer_cast_schedules_and_applies_generated_walls() {
+        let mut viewer = IdleWorldViewer::new();
+        let geomancer_index = viewer
+            .units
+            .iter()
+            .position(|unit| unit.is_geomancer)
+            .expect("idle world should include goemancer");
+        let mut generator = wldgenerator::RunningGenerator::new(18, 18, DEFAULT_SEED);
+        generator.complete_initial_seeds();
+        generator.fill_visual_voids_once(18 * 18);
+        let generated = generator.world().clone();
+        let (col, row) = first_generated_wall_candidate(&generated);
+        let initial_wall_count = generated.wall_tiles.len();
+        let mut world = generated.to_visual_tile_world().tiles;
+        world.generated_source = Some(generated);
+        viewer.world = world;
+        viewer.units[geomancer_index].position = path_cell_center(col, row);
+
+        viewer.proc_geomancer_wall_cast(
+            geomancer_index,
+            viewer.units[geomancer_index].position,
+            1_000,
+        );
+
+        assert!(!viewer.pending_geomancer_walls.is_empty());
+        assert!(viewer.pending_geomancer_walls.len() <= IDLE_GEOMANCER_WALL_MAX_CASTS);
+        assert!(
+            viewer
+                .pending_geomancer_walls
+                .iter()
+                .enumerate()
+                .all(|(index, placement)| placement.due_ms
+                    == 1_000 + (index as u32 + 1) * IDLE_GEOMANCER_WALL_STAGGER_MS)
+        );
+
+        let first_due_ms = viewer.pending_geomancer_walls[0].due_ms;
+        viewer.apply_due_geomancer_wall_placements(first_due_ms - 1);
+        assert_eq!(
+            viewer
+                .world
+                .generated_source
+                .as_ref()
+                .map(|generated| generated.wall_tiles.len()),
+            Some(initial_wall_count)
+        );
+
+        viewer.apply_due_geomancer_wall_placements(first_due_ms);
+        assert!(!viewer.geomancer_wall_growths.is_empty());
+        assert_eq!(
+            viewer
+                .world
+                .generated_source
+                .as_ref()
+                .map(|generated| generated.wall_tiles.len()),
+            Some(initial_wall_count)
+        );
+
+        viewer.apply_due_geomancer_wall_placements(first_due_ms + IDLE_GEOMANCER_WALL_GROW_MS);
+        assert!(
+            viewer
+                .world
+                .generated_source
+                .as_ref()
+                .is_some_and(|generated| generated.wall_tiles.len() > initial_wall_count)
+        );
     }
 
     #[test]
@@ -10293,5 +10892,20 @@ mod idle_world_tests {
             x: col as f32 * TILE_SIZE + TILE_SIZE * 0.5,
             y: row as f32 * TILE_SIZE + TILE_SIZE * 0.5,
         }
+    }
+
+    fn first_generated_wall_candidate(generated: &wldgenerator::GeneratedWorld) -> (usize, usize) {
+        for row in 0..generated.rows {
+            for col in 0..generated.cols {
+                for len in 1..=3 {
+                    if generated.can_add_horizontal_wall_centered(col, row, len)
+                        || generated.can_add_vertical_wall_centered(col, row, len)
+                    {
+                        return (col, row);
+                    }
+                }
+            }
+        }
+        panic!("generated test world should have a valid wall candidate");
     }
 }

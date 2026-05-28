@@ -8,8 +8,11 @@ pub const REGULAR_PAPER_TEXTURE: u32 = 25;
 pub const SPECIAL_PAPER_TEXTURE: u32 = 26;
 pub const SMALL_BLUE_SQUARE_BUTTON_TEXTURE: u32 = 27;
 pub const SMALL_BLUE_ROUND_BUTTON_TEXTURE: u32 = 28;
+pub const BANNER_SLOTS_TEXTURE: u32 = 29;
 pub const BANNER_BYTES: &[u8] =
     include_bytes!("../ts_freepack/UI Elements/UI Elements/Banners/Banner.png");
+pub const BANNER_SLOTS_BYTES: &[u8] =
+    include_bytes!("../ts_freepack/UI Elements/UI Elements/Banners/Banner_Slots.png");
 pub const SMALL_BLUE_SQUARE_BUTTON_BYTES: &[u8] = include_bytes!(
     "../ts_freepack/UI Elements/UI Elements/Buttons/SmallBlueSquareButton_Regular.png"
 );
@@ -458,6 +461,7 @@ impl UiBatch {
         );
     }
 
+    #[allow(dead_code)]
     pub fn paper_panel_tiles(
         &mut self,
         x: f32,

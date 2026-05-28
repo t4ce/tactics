@@ -47,6 +47,10 @@ const RETILE_BOB_AMPLITUDE_PX: f32 = 2.25;
 const RETILE_BOB_PERIOD_MS: f32 = 720.0;
 const RETILE_ROTATION_AMPLITUDE_RAD: f32 = 0.0125;
 const RETILE_ROTATION_PERIOD_MS: f32 = 960.0;
+const WALL_GROW_MS: u32 = 500;
+const WALL_GROW_ROTATION_DEGREES: f32 = 5.0;
+const WALL_GROW_ROTATION_CYCLES: f32 = 3.0;
+const WALL_PARTICLE_TEXTURE_BASE: u32 = 11_200;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct TileRect {
@@ -80,6 +84,21 @@ struct RetileFlyoutTile {
     foreground: Option<AtlasTile>,
     dir_x: f32,
     dir_y: f32,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct PendingWallPlacement {
+    col: usize,
+    row: usize,
+    len: usize,
+    orientation: wldgenerator::GeneratedWallOrientation,
+}
+
+struct WallGrowth {
+    placement: PendingWallPlacement,
+    tiles: Vec<wldgenerator::GeneratedWallPreviewTile>,
+    started: Instant,
+    committed: bool,
 }
 
 impl RetileTransition {
@@ -147,6 +166,33 @@ impl RetileTransition {
     }
 }
 
+impl PendingWallPlacement {
+    fn apply_to(self, world: &mut wldgenerator::GeneratedWorld) -> bool {
+        match self.orientation {
+            wldgenerator::GeneratedWallOrientation::Horizontal => {
+                world.add_horizontal_wall_centered(self.col, self.row, self.len)
+            }
+            wldgenerator::GeneratedWallOrientation::Vertical => {
+                world.add_vertical_wall_centered(self.col, self.row, self.len)
+            }
+        }
+    }
+
+    fn preview_tiles(
+        self,
+        world: &wldgenerator::GeneratedWorld,
+    ) -> Option<Vec<wldgenerator::GeneratedWallPreviewTile>> {
+        match self.orientation {
+            wldgenerator::GeneratedWallOrientation::Horizontal => {
+                world.horizontal_wall_preview_tiles_centered(self.col, self.row, self.len)
+            }
+            wldgenerator::GeneratedWallOrientation::Vertical => {
+                world.vertical_wall_preview_tiles_centered(self.col, self.row, self.len)
+            }
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum WorldViewerTool {
     Select,
@@ -160,8 +206,10 @@ pub(super) struct WorldViewer {
     water_visuals: WaterVisualAssets,
     plant_props: [SpriteAnimation; PLANT_PROP_COUNT],
     particle_dust: SpriteAnimation,
+    wall_particle_dust: SpriteAnimation,
     generator: wldgenerator::RunningGenerator,
     retile_transition: Option<RetileTransition>,
+    wall_growths: Vec<WallGrowth>,
     seed: u64,
     camera: Point,
     mouse: Point,
@@ -189,8 +237,10 @@ impl WorldViewer {
             water_visuals: load_water_visual_assets(),
             plant_props: load_plant_prop_assets(),
             particle_dust: load_retile_particle_dust(),
+            wall_particle_dust: load_wall_particle_dust(),
             generator: wldgenerator::RunningGenerator::new(WORLD_COLS, WORLD_ROWS, DEFAULT_SEED),
             retile_transition: None,
+            wall_growths: Vec::new(),
             seed: DEFAULT_SEED,
             camera: Point::default(),
             mouse: Point::default(),
@@ -261,6 +311,7 @@ impl WorldViewer {
             .iter()
             .flat_map(|animation| animation.frames.iter())
             .chain(self.particle_dust.frames.iter())
+            .chain(self.wall_particle_dust.frames.iter())
         {
             let rc = adapter.upload_texture_rgba_image(
                 image.texture_id,
@@ -311,6 +362,7 @@ impl WorldViewer {
         self.selection_start = None;
         self.selection_end = None;
         self.retile_transition = None;
+        self.wall_growths.clear();
         self.tool = WorldViewerTool::Select;
         self.horizontal_wall_len = 1;
         self.vertical_wall_len = 2;
@@ -326,6 +378,7 @@ impl WorldViewer {
 
     fn draw(&mut self, adapter: &mut Adapter) {
         self.update_retile_transition();
+        self.update_wall_growths();
         let _ = adapter.begin_frame(GENERATED_EMPTY_BG);
         let _ = adapter.set_sampler_raw(0, 0, 0, 0);
         let _ = adapter.set_blend_raw(1, 0x0302, 0x0303);
@@ -341,6 +394,8 @@ impl WorldViewer {
         self.draw_retile_flyout(adapter);
         self.draw_retile_cover(adapter);
         self.draw_retile_particles(adapter);
+        self.draw_wall_growths(adapter);
+        self.draw_wall_growth_particles(adapter);
         self.draw_selection(adapter);
         self.draw_wall_preview(adapter);
 
@@ -431,6 +486,29 @@ impl WorldViewer {
         if elapsed_ms >= transition.finish_ms {
             self.retile_transition = None;
         }
+    }
+
+    fn update_wall_growths(&mut self) {
+        let mut due = Vec::new();
+        for (index, growth) in self.wall_growths.iter().enumerate() {
+            let elapsed_ms = growth.started.elapsed().as_millis() as u32;
+            if !growth.committed && elapsed_ms >= WALL_GROW_MS {
+                due.push((index, growth.placement));
+            }
+        }
+
+        for (index, placement) in due {
+            let _ = self.apply_wall_placement(placement);
+            if let Some(growth) = self.wall_growths.get_mut(index) {
+                growth.committed = true;
+            }
+        }
+
+        let dust_duration_ms = self.wall_particle_dust.total_duration_ms;
+        self.wall_growths.retain(|growth| {
+            let elapsed_ms = growth.started.elapsed().as_millis() as u32;
+            !growth.committed || elapsed_ms < WALL_GROW_MS.max(dust_duration_ms)
+        });
     }
 
     fn draw_retile_flyout(&self, adapter: &mut Adapter) {
@@ -554,6 +632,102 @@ impl WorldViewer {
         }
 
         self.draw_image_batches(adapter, batches);
+    }
+
+    fn draw_wall_growths(&self, adapter: &mut Adapter) {
+        let mut any_drawn = false;
+        let _ = adapter.set_texture_effect(TextureEffect::World);
+
+        for growth in &self.wall_growths {
+            if growth.committed {
+                continue;
+            }
+            let elapsed_ms = growth.started.elapsed().as_millis() as u32;
+            if elapsed_ms >= WALL_GROW_MS {
+                continue;
+            }
+
+            let t = (elapsed_ms as f32 / WALL_GROW_MS as f32).clamp(0.0, 1.0);
+            let slide_y = (1.0 - ease_out_cubic(t)) * TILE_SIZE;
+            let angle_rad = (t * std::f32::consts::TAU * WALL_GROW_ROTATION_CYCLES).sin()
+                * WALL_GROW_ROTATION_DEGREES.to_radians();
+            for tile in &growth.tiles {
+                if !self.set_tile_scissor(adapter, tile.col, tile.row) {
+                    continue;
+                }
+
+                let x = tile.col as f32 * TILE_SIZE - self.camera.x;
+                let y = tile.row as f32 * TILE_SIZE - self.camera.y + slide_y;
+                let mut batch = SpriteBatch::new(self.window_width, self.window_height);
+                batch.image_uv_rotated_around(
+                    x,
+                    y,
+                    TILE_SIZE,
+                    TILE_SIZE,
+                    self.terrain.uv(tile.tile),
+                    x + TILE_SIZE * 0.5,
+                    y + TILE_SIZE,
+                    angle_rad,
+                    Rgba8::WHITE,
+                );
+                let _ =
+                    adapter.draw_tex_triangles_no_present(self.terrain.texture_id, &batch.bytes);
+                any_drawn = true;
+            }
+        }
+
+        if any_drawn {
+            let _ = adapter.set_scissor(Some(ScissorRect {
+                x: 0,
+                y: 0,
+                width: self.window_width,
+                height: self.window_height,
+            }));
+        }
+        let _ = adapter.set_texture_effect(TextureEffect::Plain);
+    }
+
+    fn draw_wall_growth_particles(&self, adapter: &mut Adapter) {
+        let mut batches = BTreeMap::new();
+
+        for growth in &self.wall_growths {
+            let elapsed_ms = growth.started.elapsed().as_millis() as u32;
+            if elapsed_ms >= self.wall_particle_dust.total_duration_ms {
+                continue;
+            }
+            let Some(image) = self.wall_particle_dust.frame_once(elapsed_ms) else {
+                continue;
+            };
+
+            for tile in &growth.tiles {
+                self.push_centered_tile_image(&mut batches, image, tile.col, tile.row);
+            }
+        }
+
+        self.draw_image_batches(adapter, batches);
+    }
+
+    fn set_tile_scissor(&self, adapter: &mut Adapter, col: usize, row: usize) -> bool {
+        let left = (col as f32 * TILE_SIZE - self.camera.x).floor().max(0.0);
+        let top = (row as f32 * TILE_SIZE - self.camera.y).floor().max(0.0);
+        let right = (col as f32 * TILE_SIZE - self.camera.x + TILE_SIZE)
+            .ceil()
+            .min(self.window_width as f32);
+        let bottom = (row as f32 * TILE_SIZE - self.camera.y + TILE_SIZE)
+            .ceil()
+            .min(self.window_height as f32);
+
+        if right <= left || bottom <= top {
+            return false;
+        }
+
+        let _ = adapter.set_scissor(Some(ScissorRect {
+            x: left as u32,
+            y: top as u32,
+            width: (right - left) as u32,
+            height: (bottom - top) as u32,
+        }));
+        true
     }
 
     fn draw_generated_water_states(
@@ -854,16 +1028,52 @@ impl WorldViewer {
         let Some((col, row)) = self.world_cell_at(self.mouse.x, self.mouse.y) else {
             return;
         };
-        match self.tool {
-            WorldViewerTool::Select => {}
-            WorldViewerTool::HorizontalWall => {
-                self.generator
-                    .add_horizontal_wall_centered(col, row, self.horizontal_wall_len);
+        let placement = match self.tool {
+            WorldViewerTool::Select => return,
+            WorldViewerTool::HorizontalWall => PendingWallPlacement {
+                col,
+                row,
+                len: self.horizontal_wall_len,
+                orientation: wldgenerator::GeneratedWallOrientation::Horizontal,
+            },
+            WorldViewerTool::VerticalWall => PendingWallPlacement {
+                col,
+                row,
+                len: self.vertical_wall_len,
+                orientation: wldgenerator::GeneratedWallOrientation::Vertical,
+            },
+        };
+        let generated = self.generated_world_with_pending_walls();
+        let Some(tiles) = placement.preview_tiles(&generated) else {
+            return;
+        };
+
+        self.wall_growths.push(WallGrowth {
+            placement,
+            tiles,
+            started: Instant::now(),
+            committed: false,
+        });
+    }
+
+    fn generated_world_with_pending_walls(&self) -> wldgenerator::GeneratedWorld {
+        let mut generated = self.generator.world().clone();
+        for growth in &self.wall_growths {
+            if !growth.committed {
+                let _ = growth.placement.apply_to(&mut generated);
             }
-            WorldViewerTool::VerticalWall => {
-                self.generator
-                    .add_vertical_wall_centered(col, row, self.vertical_wall_len);
-            }
+        }
+        generated
+    }
+
+    fn apply_wall_placement(&mut self, placement: PendingWallPlacement) -> bool {
+        match placement.orientation {
+            wldgenerator::GeneratedWallOrientation::Horizontal => self
+                .generator
+                .add_horizontal_wall_centered(placement.col, placement.row, placement.len),
+            wldgenerator::GeneratedWallOrientation::Vertical => self
+                .generator
+                .add_vertical_wall_centered(placement.col, placement.row, placement.len),
         }
     }
 
@@ -894,9 +1104,10 @@ impl WorldViewer {
     }
 
     fn write_generated_world_to_root(&self) -> Result<PathBuf, String> {
-        let visual_world = self.generator.world().to_visual_tile_world();
+        let generated = self.generated_world_with_pending_walls();
+        let visual_world = generated.to_visual_tile_world();
         let mut tiles = visual_world.tiles;
-        tiles.generated_source = Some(self.generator.world().clone());
+        tiles.generated_source = Some(generated);
         let path = generated_world_save_path()?;
         save_tile_world_without_overwrite(&tiles, &path)?;
         Ok(path)
@@ -1282,6 +1493,20 @@ fn lighten_rgba_toward_white(rgba: &mut [u8], percent: u8) {
 }
 
 fn load_retile_particle_dust() -> SpriteAnimation {
+    load_particle_dust_animation(
+        RETILE_PARTICLE_TEXTURE_BASE,
+        &["particle_dust_1", "Dust 1", "dust_1"],
+    )
+}
+
+fn load_wall_particle_dust() -> SpriteAnimation {
+    load_particle_dust_animation(
+        WALL_PARTICLE_TEXTURE_BASE,
+        &["particle_dust_2", "Dust 2", "dust_2"],
+    )
+}
+
+fn load_particle_dust_animation(texture_base: u32, tags: &[&str]) -> SpriteAnimation {
     let set = ase_assets::load_tinted_aseprite_set(
         PARTICLE_FX_ASEPRITE_PATH,
         [255, 255, 255, 255],
@@ -1289,7 +1514,7 @@ fn load_retile_particle_dust() -> SpriteAnimation {
     )
     .expect("particle fx aseprite should decode");
 
-    let frames = ["particle_dust_1", "Dust 1", "dust_1"]
+    let frames = tags
         .iter()
         .find_map(|tag| set.frames_for_tag(tag))
         .unwrap_or(set.frames.as_slice())
@@ -1298,7 +1523,7 @@ fn load_retile_particle_dust() -> SpriteAnimation {
         .map(|(index, frame)| {
             (
                 ImageAsset::from_rgba_cropped(
-                    RETILE_PARTICLE_TEXTURE_BASE + index as u32,
+                    texture_base + index as u32,
                     frame.width,
                     frame.height,
                     frame.rgba.clone(),

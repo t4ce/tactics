@@ -32,7 +32,13 @@ const LOADSCREEN_ICON_TEXTURE_BASE: u32 = 15_010;
 const LOADSCREEN_CLOSE_TEXTURE: u32 = 15_020;
 const LOADSCREEN_BUTTON_HOVER_TEXTURE: u32 = 15_021;
 const LOADSCREEN_CREATE_GAME_TEXTURE: u32 = 15_022;
-const LOADSCREEN_FRAME_TEXTURE_BASE: u32 = 15_030;
+const LOADSCREEN_BLUE_STATUS_TEXTURE: u32 = 15_023;
+const LOADSCREEN_RED_STATUS_TEXTURE: u32 = 15_024;
+const LOADSCREEN_EDGE_CORNERS_TEXTURE: u32 = 15_030;
+const LOADSCREEN_EDGE_CORNER_LEFT: ImageRegion = ImageRegion::new(0, 0, 189, 213);
+const LOADSCREEN_EDGE_CORNER_RIGHT: ImageRegion = ImageRegion::new(204, 0, 196, 213);
+const LOADSCREEN_EDGE_CORNER_SCALE: f32 = 0.40;
+const LOADSCREEN_EDGE_CORNER_ALPHA: u8 = 217;
 const LOADSCREEN_ARROW_BYTES: &[u8] =
     include_bytes!("../ts_freepack/UI Elements/UI Elements/Icons/Icon_08.png");
 const LOADSCREEN_CLOSE_BYTES: &[u8] =
@@ -42,24 +48,14 @@ const LOADSCREEN_CREATE_GAME_BYTES: &[u8] =
 const LOADSCREEN_BUTTON_HOVER_BYTES: &[u8] = include_bytes!(
     "../ts_freepack/UI Elements/UI Elements/Buttons/SmallBlueSquareButton_Hover.png"
 );
-const LOADSCREEN_FRAME_TOP_LEFT_BYTES: &[u8] = include_bytes!(
-    "../ts_freepack/UI Elements/UI Elements/Wood Table/WoodTable_Slots_topleft_corner.png"
+const LOADSCREEN_BLUE_STATUS_BYTES: &[u8] = include_bytes!(
+    "../ts_freepack/UI Elements/UI Elements/Buttons/SmallBlueRoundButton_Regular.png"
 );
-const LOADSCREEN_FRAME_TOP_RIGHT_BYTES: &[u8] = include_bytes!(
-    "../ts_freepack/UI Elements/UI Elements/Wood Table/WoodTable_Slots_topright_corner.png"
+const LOADSCREEN_RED_STATUS_BYTES: &[u8] = include_bytes!(
+    "../ts_freepack/UI Elements/UI Elements/Buttons/SmallRedRoundButton_Regular.png"
 );
-const LOADSCREEN_FRAME_BOTTOM_LEFT_BYTES: &[u8] = include_bytes!(
-    "../ts_freepack/UI Elements/UI Elements/Wood Table/WoodTable_Slots_bottomleft_corner.png"
-);
-const LOADSCREEN_FRAME_BOTTOM_RIGHT_BYTES: &[u8] = include_bytes!(
-    "../ts_freepack/UI Elements/UI Elements/Wood Table/WoodTable_Slots_bottomright_corner.png"
-);
-const LOADSCREEN_FRAME_HORIZONTAL_BYTES: &[u8] = include_bytes!(
-    "../ts_freepack/UI Elements/UI Elements/Wood Table/WoodTable_Slots_middle_up_down.png"
-);
-const LOADSCREEN_FRAME_VERTICAL_BYTES: &[u8] = include_bytes!(
-    "../ts_freepack/UI Elements/UI Elements/Wood Table/WoodTable_Slots_middle_left_right.png"
-);
+const LOADSCREEN_EDGE_CORNERS_BYTES: &[u8] =
+    include_bytes!("../ts_freepack/UI Elements/corners.png");
 const LOADSCREEN_TOP_ICON_BYTES: [&[u8]; 3] = [
     include_bytes!("../ts_freepack/UI Elements/UI Elements/Icons/Icon_10.png"),
     include_bytes!("../ts_freepack/UI Elements/UI Elements/Icons/Icon_11.png"),
@@ -69,12 +65,24 @@ const LOBBY_CARD_W: f32 = 256.0;
 const LOBBY_CARD_H: f32 = 128.0;
 const LOBBY_CARD_GAP: f32 = 20.0;
 const LOBBY_CARD_TILE: f32 = 64.0;
+const LOBBY_CARD_START_X: f32 = 72.0;
+const LOBBY_CARD_START_Y: f32 = 70.0;
+const LOBBY_ACTION_ROW_H: f32 = 104.0;
+const LOBBY_ACTION_ROW_GAP: f32 = 18.0;
+const LOBBY_ACTION_BUTTON_SIZE: f32 = 46.0;
+const LOBBY_ACTION_ICON_SIZE: f32 = 34.0;
+const LOBBY_ACTION_BUTTON_GAP: f32 = 12.0;
 const LOBBY_CARD_PAD_X: f32 = 26.0;
 const LOBBY_ARROW_SIZE: f32 = 34.0;
+const CREATE_GAME_BUTTON_CARD_Y: f32 = (LOBBY_ACTION_ROW_H - LOBBY_ACTION_BUTTON_SIZE) * 0.5;
 const PAPER_TITLE_Y: f32 = 32.0;
 const TOP_BUTTON_COUNT: usize = 6;
+const TOP_BUTTON_COLS: usize = 3;
 const TOP_BUTTON_SIZE: f32 = 42.0;
+const TOP_BUTTON_BACKGROUND_SCALE: f32 = 1.15;
 const TOP_BUTTON_GAP: f32 = 8.0;
+const TOP_BUTTON_ROW_GAP: f32 = 12.0;
+const TOP_BUTTON_GRID_TOP: f32 = 74.0;
 const TOP_ICON_SIZE: f32 = 27.0;
 const TOP_WORLD_BUTTON_INDEX: usize = 0;
 const TOP_WORLD_VIEWER_BUTTON_INDEX: usize = 1;
@@ -82,11 +90,17 @@ const TOP_EVENT_BUTTON_INDEX: usize = 2;
 const TOP_ICON_BUTTON_INDEX: usize = 3;
 const TOP_INFO_BUTTON_INDEX: usize = 4;
 const TOP_MUSIC_BUTTON_INDEX: usize = 5;
+const TOP_PAPER_PAD_X: f32 = 44.0;
+const TOP_PAPER_PAD_TOP: f32 = 44.0;
+const TOP_PAPER_PAD_BOTTOM: f32 = 42.0;
 const CLOSE_BUTTON_SIZE: f32 = 46.0;
 const CLOSE_ICON_SIZE: f32 = 34.0;
-const CREATE_GAME_ICON_SIZE: f32 = 34.0;
-const FRAME_DRAW_TILE: f32 = 16.0;
-const FRAME_CORNER_SIZE: f32 = FRAME_DRAW_TILE * 2.0;
+const CLOSE_BUTTON_INSET: f32 = 14.0;
+const CLOSE_BUTTON_Y_OFFSET: f32 = -5.0;
+const SERVER_STATUS_ICON_SIZE: f32 = 30.0;
+const SERVER_STATUS_PAD_X: f32 = 72.0;
+const SERVER_STATUS_PAD_BOTTOM: f32 = 78.0;
+const FRAME_CORNER_SIZE: f32 = 32.0;
 const LOADSCREEN_BACKGROUND_ALPHA: u8 = 191;
 const LOADSCREEN_BACKGROUND_SCALE: f32 = 2.0 / 3.0;
 const LOADSCREEN_BACKGROUND_RESEED_SECS: u64 = 10;
@@ -100,6 +114,9 @@ const CHAT_POLL_MS: u64 = 1_000;
 const CHAT_CONNECT_TIMEOUT_MS: u64 = 2_000;
 const CHAT_MESSAGE_LIMIT: usize = 96;
 const CHAT_INPUT_LIMIT: usize = 160;
+const CHAT_PANEL_PAD_X: f32 = 44.0;
+const CHAT_PANEL_PAD_TOP: f32 = 28.0;
+const CHAT_PANEL_PAD_BOTTOM: f32 = 48.0;
 const LOBBY_TEXT: Rgba8 = Rgba8 {
     r: 235,
     g: 226,
@@ -112,24 +129,28 @@ const LOBBY_MUTED_TEXT: Rgba8 = Rgba8 {
     b: 196,
     a: 255,
 };
+const PAPER_TEXT: Rgba8 = Rgba8 {
+    r: 46,
+    g: 50,
+    b: 56,
+    a: 255,
+};
 
 pub(super) struct LoadScreen {
     terrain: TextureAtlas,
     wood_table: ImageAsset,
     water_visuals: WaterVisualAssets,
     plant_props: [SpriteAnimation; PLANT_PROP_COUNT],
+    regular_paper: ImageAsset,
     special_paper: ImageAsset,
     small_blue_square_button: ImageAsset,
     small_blue_square_button_hover: ImageAsset,
+    small_blue_round_button: ImageAsset,
+    small_red_round_button: ImageAsset,
     arrow_icon: ImageAsset,
     close_icon: ImageAsset,
     create_game_icon: ImageAsset,
-    frame_top_left: ImageAsset,
-    frame_top_right: ImageAsset,
-    frame_bottom_left: ImageAsset,
-    frame_bottom_right: ImageAsset,
-    frame_horizontal: ImageAsset,
-    frame_vertical: ImageAsset,
+    edge_corners: ImageAsset,
     clouds: Vec<ImageAsset>,
     top_icons: [ImageAsset; TOP_BUTTON_COUNT],
     cursor_default: ImageAsset,
@@ -139,8 +160,9 @@ pub(super) struct LoadScreen {
     background_scene_index: u64,
     started_at: Instant,
     lobbies: Vec<Lobby>,
+    active_lobby: Option<Lobby>,
     lobby_error: Option<String>,
-    lobby_rx: Option<Receiver<Result<Vec<Lobby>, String>>>,
+    lobby_rx: Option<Receiver<Result<LobbyResponse, String>>>,
     lobby_request_kind: LobbyRequestKind,
     chat_tx: Sender<ChatCommand>,
     chat_rx: Receiver<ChatClientEvent>,
@@ -166,6 +188,13 @@ pub(super) struct LoadScreen {
 enum LobbyRequestKind {
     Refresh,
     CreateGame,
+    FreeGame,
+}
+
+struct LobbyResponse {
+    lobbies: Vec<Lobby>,
+    created_lobby: Option<Lobby>,
+    clear_active_lobby: bool,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -220,6 +249,10 @@ impl LoadScreen {
             wood_table: ImageAsset::from_png_bytes(WOOD_TABLE_TEXTURE, WOOD_TABLE_BYTES),
             water_visuals,
             plant_props,
+            regular_paper: ImageAsset::from_png_bytes(
+                ts_ui::REGULAR_PAPER_TEXTURE,
+                ts_ui::REGULAR_PAPER_BYTES,
+            ),
             special_paper: ImageAsset::from_png_bytes(
                 ts_ui::SPECIAL_PAPER_TEXTURE,
                 ts_ui::SPECIAL_PAPER_BYTES,
@@ -231,6 +264,14 @@ impl LoadScreen {
             small_blue_square_button_hover: ImageAsset::from_png_bytes(
                 LOADSCREEN_BUTTON_HOVER_TEXTURE,
                 LOADSCREEN_BUTTON_HOVER_BYTES,
+            ),
+            small_blue_round_button: ImageAsset::from_png_bytes_cropped(
+                LOADSCREEN_BLUE_STATUS_TEXTURE,
+                LOADSCREEN_BLUE_STATUS_BYTES,
+            ),
+            small_red_round_button: ImageAsset::from_png_bytes_cropped(
+                LOADSCREEN_RED_STATUS_TEXTURE,
+                LOADSCREEN_RED_STATUS_BYTES,
             ),
             arrow_icon: ImageAsset::from_png_bytes_cropped(
                 LOADSCREEN_ARROW_TEXTURE,
@@ -244,29 +285,9 @@ impl LoadScreen {
                 LOADSCREEN_CREATE_GAME_TEXTURE,
                 LOADSCREEN_CREATE_GAME_BYTES,
             ),
-            frame_top_left: ImageAsset::from_png_bytes(
-                LOADSCREEN_FRAME_TEXTURE_BASE,
-                LOADSCREEN_FRAME_TOP_LEFT_BYTES,
-            ),
-            frame_top_right: ImageAsset::from_png_bytes(
-                LOADSCREEN_FRAME_TEXTURE_BASE + 1,
-                LOADSCREEN_FRAME_TOP_RIGHT_BYTES,
-            ),
-            frame_bottom_left: ImageAsset::from_png_bytes(
-                LOADSCREEN_FRAME_TEXTURE_BASE + 2,
-                LOADSCREEN_FRAME_BOTTOM_LEFT_BYTES,
-            ),
-            frame_bottom_right: ImageAsset::from_png_bytes(
-                LOADSCREEN_FRAME_TEXTURE_BASE + 3,
-                LOADSCREEN_FRAME_BOTTOM_RIGHT_BYTES,
-            ),
-            frame_horizontal: ImageAsset::from_png_bytes(
-                LOADSCREEN_FRAME_TEXTURE_BASE + 4,
-                LOADSCREEN_FRAME_HORIZONTAL_BYTES,
-            ),
-            frame_vertical: ImageAsset::from_png_bytes(
-                LOADSCREEN_FRAME_TEXTURE_BASE + 5,
-                LOADSCREEN_FRAME_VERTICAL_BYTES,
+            edge_corners: ImageAsset::from_png_bytes(
+                LOADSCREEN_EDGE_CORNERS_TEXTURE,
+                LOADSCREEN_EDGE_CORNERS_BYTES,
             ),
             clouds,
             top_icons: [
@@ -305,6 +326,7 @@ impl LoadScreen {
             background_scene_index,
             started_at: Instant::now(),
             lobbies: Vec::new(),
+            active_lobby: None,
             lobby_error: None,
             lobby_rx: Some(lobby_rx),
             lobby_request_kind: LobbyRequestKind::Refresh,
@@ -354,6 +376,13 @@ impl LoadScreen {
         );
         assert_eq!(rc, 0, "failed to upload loadscreen table texture");
         let rc = adapter.upload_texture_rgba_image(
+            self.regular_paper.texture_id,
+            self.regular_paper.width,
+            self.regular_paper.height,
+            &self.regular_paper.rgba,
+        );
+        assert_eq!(rc, 0, "failed to upload regular paper texture");
+        let rc = adapter.upload_texture_rgba_image(
             self.special_paper.texture_id,
             self.special_paper.width,
             self.special_paper.height,
@@ -374,6 +403,20 @@ impl LoadScreen {
             &self.small_blue_square_button_hover.rgba,
         );
         assert_eq!(rc, 0, "failed to upload loadscreen hover button texture");
+        let rc = adapter.upload_texture_rgba_image(
+            self.small_blue_round_button.texture_id,
+            self.small_blue_round_button.width,
+            self.small_blue_round_button.height,
+            &self.small_blue_round_button.rgba,
+        );
+        assert_eq!(rc, 0, "failed to upload loadscreen blue status texture");
+        let rc = adapter.upload_texture_rgba_image(
+            self.small_red_round_button.texture_id,
+            self.small_red_round_button.width,
+            self.small_red_round_button.height,
+            &self.small_red_round_button.rgba,
+        );
+        assert_eq!(rc, 0, "failed to upload loadscreen red status texture");
         let rc = adapter.upload_texture_rgba_image(
             self.arrow_icon.texture_id,
             self.arrow_icon.width,
@@ -420,22 +463,13 @@ impl LoadScreen {
                 image.texture_id
             );
         }
-        for frame in [
-            &self.frame_top_left,
-            &self.frame_top_right,
-            &self.frame_bottom_left,
-            &self.frame_bottom_right,
-            &self.frame_horizontal,
-            &self.frame_vertical,
-        ] {
-            let rc = adapter.upload_texture_rgba_image(
-                frame.texture_id,
-                frame.width,
-                frame.height,
-                &frame.rgba,
-            );
-            assert_eq!(rc, 0, "failed to upload loadscreen frame texture");
-        }
+        let rc = adapter.upload_texture_rgba_image(
+            self.edge_corners.texture_id,
+            self.edge_corners.width,
+            self.edge_corners.height,
+            &self.edge_corners.rgba,
+        );
+        assert_eq!(rc, 0, "failed to upload loadscreen edge corner texture");
         for image in &self.clouds {
             let rc = adapter.upload_texture_rgba_image(
                 image.texture_id,
@@ -487,18 +521,43 @@ impl LoadScreen {
         };
 
         match rx.try_recv() {
-            Ok(Ok(lobbies)) => {
-                self.lobbies = lobbies;
+            Ok(Ok(response)) => {
+                eprintln!(
+                    "[loadscreen] lobby request {:?} succeeded with {} lobbies",
+                    self.lobby_request_kind,
+                    response.lobbies.len()
+                );
+                self.lobbies = response.lobbies;
+                if response.clear_active_lobby {
+                    self.active_lobby = None;
+                }
+                if let Some(created_lobby) = response.created_lobby {
+                    self.active_lobby = Some(created_lobby);
+                } else if let Some(active_lobby) = &self.active_lobby {
+                    self.active_lobby = self
+                        .lobbies
+                        .iter()
+                        .find(|lobby| lobby.id == active_lobby.id)
+                        .cloned();
+                }
                 self.lobby_error = None;
                 self.lobby_rx = None;
             }
             Ok(Err(error)) => {
+                eprintln!(
+                    "[loadscreen] lobby request {:?} failed: {error}",
+                    self.lobby_request_kind
+                );
                 self.lobbies.clear();
                 self.lobby_error = Some(error);
                 self.lobby_rx = None;
             }
             Err(TryRecvError::Empty) => {}
             Err(TryRecvError::Disconnected) => {
+                eprintln!(
+                    "[loadscreen] lobby request {:?} channel disconnected",
+                    self.lobby_request_kind
+                );
                 self.lobby_error = Some("lobby request stopped".to_owned());
                 self.lobby_rx = None;
             }
@@ -509,7 +568,7 @@ impl LoadScreen {
         loop {
             match self.chat_rx.try_recv() {
                 Ok(ChatClientEvent::Messages(messages)) => {
-                    self.chat_error = None;
+                    self.set_chat_error(None);
                     for message in messages {
                         if self
                             .chat_messages
@@ -527,25 +586,56 @@ impl LoadScreen {
                     }
                 }
                 Ok(ChatClientEvent::Error(error)) => {
-                    self.chat_error = Some(error);
+                    self.set_chat_error(Some(error));
                 }
                 Err(TryRecvError::Empty) => break,
                 Err(TryRecvError::Disconnected) => {
-                    self.chat_error = Some("chat stopped".to_owned());
+                    self.set_chat_error(Some("chat stopped".to_owned()));
                     break;
                 }
             }
         }
     }
 
+    fn set_chat_error(&mut self, error: Option<String>) {
+        if self.chat_error != error {
+            match &error {
+                Some(error) => eprintln!("[loadscreen] chat status: {error}"),
+                None if self.chat_error.is_some() => {
+                    eprintln!("[loadscreen] chat status: connected")
+                }
+                None => {}
+            }
+        }
+        self.chat_error = error;
+    }
+
     fn start_create_game(&mut self) {
         if self.lobby_rx.is_some() {
+            eprintln!("[loadscreen] create game click ignored; lobby request already running");
             return;
         }
 
+        eprintln!("[loadscreen] create game clicked");
         self.lobby_error = None;
         self.lobby_rx = Some(spawn_lobby_create_game());
         self.lobby_request_kind = LobbyRequestKind::CreateGame;
+    }
+
+    fn start_leave_lobby(&mut self) {
+        if self.lobby_rx.is_some() {
+            eprintln!("[loadscreen] leave lobby click ignored; lobby request already running");
+            return;
+        }
+
+        let Some(lobby) = &self.active_lobby else {
+            return;
+        };
+
+        eprintln!("[loadscreen] leave lobby clicked game_id={}", lobby.id);
+        self.lobby_error = None;
+        self.lobby_rx = Some(spawn_lobby_free_game(lobby.id));
+        self.lobby_request_kind = LobbyRequestKind::FreeGame;
     }
 
     fn send_chat_input(&mut self) {
@@ -557,9 +647,9 @@ impl LoadScreen {
         let text = text.chars().take(CHAT_INPUT_LIMIT).collect::<String>();
         if self.chat_tx.send(ChatCommand::Send(text)).is_ok() {
             self.chat_input.clear();
-            self.chat_error = None;
+            self.set_chat_error(None);
         } else {
-            self.chat_error = Some("chat stopped".to_owned());
+            self.set_chat_error(Some("chat stopped".to_owned()));
         }
     }
 
@@ -887,10 +977,12 @@ impl LoadScreen {
     }
 
     fn draw_lobby_cards(&self, adapter: &mut Adapter, table: TableRect) {
-        let start_x = table.x.round() + 72.0;
-        let start_y = table.y.round() + 70.0;
+        let start_x = table.x.round() + LOBBY_CARD_START_X;
+        let start_y =
+            table.y.round() + LOBBY_CARD_START_Y + LOBBY_ACTION_ROW_H + LOBBY_ACTION_ROW_GAP;
         let available_w = (table.w - 144.0).max(LOBBY_CARD_W);
-        let available_h = (table.h - 128.0).max(LOBBY_CARD_H);
+        let available_h =
+            (table.h - 128.0 - LOBBY_ACTION_ROW_H - LOBBY_ACTION_ROW_GAP).max(LOBBY_CARD_H);
         let cols = ((available_w + LOBBY_CARD_GAP) / (LOBBY_CARD_W + LOBBY_CARD_GAP))
             .floor()
             .max(1.0) as usize;
@@ -942,9 +1034,28 @@ impl LoadScreen {
         let _ = adapter.draw_tex_triangles_no_present(self.arrow_icon.texture_id, &arrows.bytes);
     }
 
-    fn draw_create_game_button(&self, adapter: &mut Adapter, table: TableRect) {
-        let rect = create_game_button_rect(table);
-        let hovered = inside_rect(self.mouse.x, self.mouse.y, rect.x, rect.y, rect.w, rect.h);
+    fn draw_lobby_action_row(&self, adapter: &mut Adapter, table: TableRect) {
+        let row = lobby_action_row_rect(table);
+        let play_rect = lobby_play_button_rect(table);
+        let leave_rect = lobby_leave_button_rect(table);
+        let play_hovered = self.active_lobby.is_none()
+            && inside_rect(
+                self.mouse.x,
+                self.mouse.y,
+                play_rect.x,
+                play_rect.y,
+                play_rect.w,
+                play_rect.h,
+            );
+        let leave_hovered = self.active_lobby.is_some()
+            && inside_rect(
+                self.mouse.x,
+                self.mouse.y,
+                leave_rect.x,
+                leave_rect.y,
+                leave_rect.w,
+                leave_rect.h,
+            );
         let tint = if self.lobby_rx.is_some() {
             Rgba8 {
                 r: 165,
@@ -955,38 +1066,100 @@ impl LoadScreen {
         } else {
             Rgba8::WHITE
         };
-        let button_asset = if hovered && self.lobby_rx.is_none() {
-            &self.small_blue_square_button_hover
-        } else {
-            &self.small_blue_square_button
-        };
-        let mut button = SpriteBatch::new(self.window_width, self.window_height);
-        button.image(rect.x, rect.y, rect.w, rect.h, tint);
-        let _ = adapter.draw_tex_triangles_no_present(button_asset.texture_id, &button.bytes);
 
-        let icon_size = CREATE_GAME_ICON_SIZE;
-        let mut icon = SpriteBatch::new(self.window_width, self.window_height);
-        icon.image(
-            rect.x + (rect.w - icon_size) * 0.5,
-            rect.y + (rect.h - icon_size) * 0.5,
-            icon_size,
-            icon_size,
-            tint,
+        let mut row_paper = ts_ui::UiBatch::new(self.window_width, self.window_height);
+        draw_lobby_card_panel(&mut row_paper, row.x, row.y, row.w, row.h);
+        let _ = adapter
+            .draw_tex_triangles_no_present(self.special_paper.texture_id, &row_paper.texture_bytes);
+
+        let mut text = ts_ui::UiBatch::new(self.window_width, self.window_height);
+        let title = self
+            .active_lobby
+            .as_ref()
+            .map(|lobby| lobby.name.as_str())
+            .unwrap_or("TACTICS LOBBY");
+        let players = self
+            .active_lobby
+            .as_ref()
+            .map(|lobby| {
+                if lobby.max_players == 0 {
+                    format!("{} PLAYERS", lobby.players)
+                } else {
+                    format!("{} OF {} PLAYERS", lobby.players, lobby.max_players)
+                }
+            })
+            .unwrap_or_else(|| "0 PLAYERS".to_owned());
+        text.text(
+            &fit_lobby_text(title, row.w - LOBBY_CARD_PAD_X * 2.0, 2.0),
+            row.x + LOBBY_CARD_PAD_X,
+            row.y + 24.0,
+            2.0,
+            LOBBY_TEXT,
         );
-        let _ =
-            adapter.draw_tex_triangles_no_present(self.create_game_icon.texture_id, &icon.bytes);
+        text.text(
+            &players,
+            row.x + LOBBY_CARD_PAD_X,
+            row.y + 58.0,
+            1.0,
+            LOBBY_MUTED_TEXT,
+        );
+        let _ = adapter.draw_rgb_triangles_no_present(&text.solid_bytes);
 
-        if hovered {
+        if self.active_lobby.is_none() {
+            let button_asset = if play_hovered && self.lobby_rx.is_none() {
+                &self.small_blue_square_button_hover
+            } else {
+                &self.small_blue_square_button
+            };
+            let mut button = SpriteBatch::new(self.window_width, self.window_height);
+            button.image(play_rect.x, play_rect.y, play_rect.w, play_rect.h, tint);
+            let _ = adapter.draw_tex_triangles_no_present(button_asset.texture_id, &button.bytes);
+
+            let mut icon = SpriteBatch::new(self.window_width, self.window_height);
+            icon.image(
+                play_rect.x + (play_rect.w - LOBBY_ACTION_ICON_SIZE) * 0.5,
+                play_rect.y + (play_rect.h - LOBBY_ACTION_ICON_SIZE) * 0.5,
+                LOBBY_ACTION_ICON_SIZE,
+                LOBBY_ACTION_ICON_SIZE,
+                tint,
+            );
+            let _ = adapter
+                .draw_tex_triangles_no_present(self.create_game_icon.texture_id, &icon.bytes);
+        } else {
+            let button_asset = if leave_hovered && self.lobby_rx.is_none() {
+                &self.small_blue_square_button_hover
+            } else {
+                &self.small_blue_square_button
+            };
+            let mut button = SpriteBatch::new(self.window_width, self.window_height);
+            button.image(leave_rect.x, leave_rect.y, leave_rect.w, leave_rect.h, tint);
+            let _ = adapter.draw_tex_triangles_no_present(button_asset.texture_id, &button.bytes);
+
+            let mut icon = SpriteBatch::new(self.window_width, self.window_height);
+            icon.image(
+                leave_rect.x + (leave_rect.w - LOBBY_ACTION_ICON_SIZE) * 0.5,
+                leave_rect.y + (leave_rect.h - LOBBY_ACTION_ICON_SIZE) * 0.5,
+                LOBBY_ACTION_ICON_SIZE,
+                LOBBY_ACTION_ICON_SIZE,
+                tint,
+            );
+            let _ = adapter
+                .draw_tex_triangles_no_present(self.small_red_round_button.texture_id, &icon.bytes);
+        }
+
+        if play_hovered || leave_hovered {
             let mut label = ts_ui::UiBatch::new(self.window_width, self.window_height);
             draw_centered_text(
                 &mut label,
                 if self.lobby_rx.is_some() {
                     "PLEASE WAIT"
+                } else if self.active_lobby.is_some() {
+                    "LEAVE LOBBY"
                 } else {
                     "CREATE GAME"
                 },
                 table.x,
-                rect.y + rect.h + 12.0,
+                row.y + row.h + 8.0,
                 table.w,
                 1.0,
                 LOBBY_TEXT,
@@ -996,22 +1169,46 @@ impl LoadScreen {
     }
 
     fn draw_top_table_buttons(&self, adapter: &mut Adapter, table: TableRect) {
-        let (start_x, button_y) = top_table_button_origin(table);
+        let paper_rect = top_table_paper_rect(table);
         let hovered = top_table_button_at(self.mouse, table);
+        let mut paper = ts_ui::UiBatch::new(self.window_width, self.window_height);
+        paper.paper_panel(
+            paper_rect.x,
+            paper_rect.y,
+            paper_rect.w,
+            paper_rect.h,
+            LOBBY_CARD_TILE,
+            Rgba8::WHITE,
+        );
+        let _ = adapter
+            .draw_tex_triangles_no_present(self.regular_paper.texture_id, &paper.texture_bytes);
+
         let mut buttons = SpriteBatch::new(self.window_width, self.window_height);
         let mut hover_buttons = SpriteBatch::new(self.window_width, self.window_height);
 
+        for rect in top_table_placeholder_button_rects(table) {
+            let background = scaled_centered_rect(rect, TOP_BUTTON_BACKGROUND_SCALE);
+            buttons.image(
+                background.x,
+                background.y,
+                background.w,
+                background.h,
+                Rgba8::WHITE,
+            );
+        }
         for index in 0..TOP_BUTTON_COUNT {
             let batch = if Some(index) == hovered {
                 &mut hover_buttons
             } else {
                 &mut buttons
             };
+            let rect = top_table_button_rect(index, table);
+            let background = scaled_centered_rect(rect, TOP_BUTTON_BACKGROUND_SCALE);
             batch.image(
-                start_x + index as f32 * (TOP_BUTTON_SIZE + TOP_BUTTON_GAP),
-                button_y,
-                TOP_BUTTON_SIZE,
-                TOP_BUTTON_SIZE,
+                background.x,
+                background.y,
+                background.w,
+                background.h,
                 Rgba8::WHITE,
             );
         }
@@ -1025,38 +1222,77 @@ impl LoadScreen {
             &hover_buttons.bytes,
         );
 
+        for rect in top_table_placeholder_button_rects(table) {
+            let icon_x = rect.x + (rect.w - TOP_ICON_SIZE) * 0.5;
+            let icon_y = rect.y + (rect.h - TOP_ICON_SIZE) * 0.5;
+            let mut icon_batch = SpriteBatch::new(self.window_width, self.window_height);
+            icon_batch.image(icon_x, icon_y, TOP_ICON_SIZE, TOP_ICON_SIZE, Rgba8::WHITE);
+            let _ = adapter
+                .draw_tex_triangles_no_present(self.top_icons[0].texture_id, &icon_batch.bytes);
+        }
+
         for (index, icon) in self.top_icons.iter().enumerate() {
-            let icon_x = start_x
-                + index as f32 * (TOP_BUTTON_SIZE + TOP_BUTTON_GAP)
-                + (TOP_BUTTON_SIZE - TOP_ICON_SIZE) * 0.5;
-            let icon_y = button_y + (TOP_BUTTON_SIZE - TOP_ICON_SIZE) * 0.5;
+            let rect = top_table_button_rect(index, table);
+            let icon_x = rect.x + (rect.w - TOP_ICON_SIZE) * 0.5;
+            let icon_y = rect.y + (rect.h - TOP_ICON_SIZE) * 0.5;
             let mut icon_batch = SpriteBatch::new(self.window_width, self.window_height);
             icon_batch.image(icon_x, icon_y, TOP_ICON_SIZE, TOP_ICON_SIZE, Rgba8::WHITE);
             let _ = adapter.draw_tex_triangles_no_present(icon.texture_id, &icon_batch.bytes);
         }
 
         let mut status = ts_ui::UiBatch::new(self.window_width, self.window_height);
-        if let Some(index) = hovered {
-            draw_centered_text(
-                &mut status,
-                top_table_button_label(index),
-                table.x,
-                button_y + TOP_BUTTON_SIZE + 16.0,
-                table.w,
-                1.0,
-                LOBBY_TEXT,
-            );
-        }
         draw_centered_text(
             &mut status,
-            self.server_status_text(),
-            table.x,
-            button_y + TOP_BUTTON_SIZE + 38.0,
-            table.w,
-            1.0,
-            LOBBY_MUTED_TEXT,
+            hovered.map(top_table_button_label).unwrap_or("Menu"),
+            paper_rect.x,
+            paper_rect.y + PAPER_TITLE_Y,
+            paper_rect.w,
+            2.0,
+            PAPER_TEXT,
         );
         let _ = adapter.draw_rgb_triangles_no_present(&status.solid_bytes);
+    }
+
+    fn draw_server_status(&self, adapter: &mut Adapter, table: TableRect) {
+        let text = self.server_status_text();
+        let icon = if self.lobby_error.is_some() {
+            &self.small_red_round_button
+        } else {
+            &self.small_blue_round_button
+        };
+        let text_scale = 1.0;
+        let text_w = ts_ui::text_width(&text, text_scale);
+        let gap = 8.0;
+        let total_w = SERVER_STATUS_ICON_SIZE + gap + text_w;
+        let x = table.x + SERVER_STATUS_PAD_X;
+        let y = table.y + table.h - SERVER_STATUS_PAD_BOTTOM - SERVER_STATUS_ICON_SIZE;
+        let max_x = table.x + table.w - SERVER_STATUS_PAD_X;
+        let icon_x = x.min((max_x - total_w).max(table.x + 24.0));
+        let icon_y = y.max(table.y + 24.0);
+
+        let mut icon_batch = SpriteBatch::new(self.window_width, self.window_height);
+        icon_batch.image(
+            icon_x,
+            icon_y,
+            SERVER_STATUS_ICON_SIZE,
+            SERVER_STATUS_ICON_SIZE,
+            Rgba8::WHITE,
+        );
+        let _ = adapter.draw_tex_triangles_no_present(icon.texture_id, &icon_batch.bytes);
+
+        let mut label = ts_ui::UiBatch::new(self.window_width, self.window_height);
+        label.text(
+            &fit_lobby_text(
+                &text,
+                (max_x - icon_x - SERVER_STATUS_ICON_SIZE - gap).max(1.0),
+                text_scale,
+            ),
+            icon_x + SERVER_STATUS_ICON_SIZE + gap,
+            icon_y + (SERVER_STATUS_ICON_SIZE - 7.0 * text_scale) * 0.5,
+            text_scale,
+            LOBBY_MUTED_TEXT,
+        );
+        let _ = adapter.draw_rgb_triangles_no_present(&label.solid_bytes);
     }
 
     fn draw_chat(&self, adapter: &mut Adapter, table: TableRect, input: TableRect) {
@@ -1143,16 +1379,6 @@ impl LoadScreen {
             }
         }
 
-        if let Some(error) = &self.chat_error {
-            labels.text(
-                &fit_chat_text(error, panel.w - 30.0, 1.0),
-                panel.x + 15.0,
-                panel.y + panel.h - 22.0,
-                1.0,
-                Rgba8::new(222, 145, 128, 255),
-            );
-        }
-
         let input_text = if self.chat_input.is_empty() && !self.chat_focused {
             "MESSAGE".to_owned()
         } else {
@@ -1190,94 +1416,70 @@ impl LoadScreen {
     fn draw_frame(&self, adapter: &mut Adapter) {
         let window_w = self.window_width as f32;
         let window_h = self.window_height as f32;
-        draw_tiled_asset(
-            adapter,
-            &self.frame_horizontal,
-            self.window_width,
-            self.window_height,
-            FRAME_CORNER_SIZE,
-            0.0,
-            (window_w - FRAME_CORNER_SIZE * 2.0).max(0.0),
-            FRAME_CORNER_SIZE,
-            FRAME_DRAW_TILE,
-            FRAME_CORNER_SIZE,
-        );
-        draw_tiled_asset(
-            adapter,
-            &self.frame_horizontal,
-            self.window_width,
-            self.window_height,
-            FRAME_CORNER_SIZE,
-            (window_h - FRAME_CORNER_SIZE).max(0.0),
-            (window_w - FRAME_CORNER_SIZE * 2.0).max(0.0),
-            FRAME_CORNER_SIZE,
-            FRAME_DRAW_TILE,
-            FRAME_CORNER_SIZE,
-        );
-        draw_tiled_asset(
-            adapter,
-            &self.frame_vertical,
-            self.window_width,
-            self.window_height,
-            0.0,
-            FRAME_CORNER_SIZE,
-            FRAME_CORNER_SIZE,
-            (window_h - FRAME_CORNER_SIZE * 2.0).max(0.0),
-            FRAME_CORNER_SIZE,
-            FRAME_DRAW_TILE,
-        );
-        draw_tiled_asset(
-            adapter,
-            &self.frame_vertical,
-            self.window_width,
-            self.window_height,
-            (window_w - FRAME_CORNER_SIZE).max(0.0),
-            FRAME_CORNER_SIZE,
-            FRAME_CORNER_SIZE,
-            (window_h - FRAME_CORNER_SIZE * 2.0).max(0.0),
-            FRAME_CORNER_SIZE,
-            FRAME_DRAW_TILE,
-        );
-        draw_asset_rect(
-            adapter,
-            &self.frame_top_left,
-            self.window_width,
-            self.window_height,
+        let left_w = LOADSCREEN_EDGE_CORNER_LEFT.width as f32 * LOADSCREEN_EDGE_CORNER_SCALE;
+        let right_w = LOADSCREEN_EDGE_CORNER_RIGHT.width as f32 * LOADSCREEN_EDGE_CORNER_SCALE;
+        let corner_h = LOADSCREEN_EDGE_CORNER_LEFT.height as f32 * LOADSCREEN_EDGE_CORNER_SCALE;
+        let top_right_x = (window_w - left_w).max(0.0);
+        let bottom_y = (window_h - corner_h).max(0.0);
+        let bottom_right_x = (window_w - right_w).max(0.0);
+        let corner_tint = Rgba8::new(255, 255, 255, LOADSCREEN_EDGE_CORNER_ALPHA);
+
+        let mut corners = SpriteBatch::new(self.window_width, self.window_height);
+        corners.image_region_rotated_around(
+            &self.edge_corners,
+            LOADSCREEN_EDGE_CORNER_RIGHT,
             0.0,
             0.0,
-            FRAME_CORNER_SIZE,
-            FRAME_CORNER_SIZE,
+            right_w,
+            corner_h,
+            right_w * 0.5,
+            corner_h * 0.5,
+            std::f32::consts::PI,
+            corner_tint,
         );
-        draw_asset_rect(
-            adapter,
-            &self.frame_top_right,
-            self.window_width,
-            self.window_height,
-            (window_w - FRAME_CORNER_SIZE).max(0.0),
+        corners.image_region_rotated_around(
+            &self.edge_corners,
+            LOADSCREEN_EDGE_CORNER_LEFT,
+            top_right_x,
             0.0,
-            FRAME_CORNER_SIZE,
-            FRAME_CORNER_SIZE,
+            left_w,
+            corner_h,
+            top_right_x + left_w * 0.5,
+            corner_h * 0.5,
+            std::f32::consts::PI,
+            corner_tint,
         );
-        draw_asset_rect(
-            adapter,
-            &self.frame_bottom_left,
-            self.window_width,
-            self.window_height,
+        corners.image_region(
+            &self.edge_corners,
+            LOADSCREEN_EDGE_CORNER_LEFT,
             0.0,
-            (window_h - FRAME_CORNER_SIZE).max(0.0),
-            FRAME_CORNER_SIZE,
-            FRAME_CORNER_SIZE,
+            bottom_y,
+            left_w,
+            corner_h,
+            corner_tint,
         );
-        draw_asset_rect(
-            adapter,
-            &self.frame_bottom_right,
-            self.window_width,
-            self.window_height,
-            (window_w - FRAME_CORNER_SIZE).max(0.0),
-            (window_h - FRAME_CORNER_SIZE).max(0.0),
-            FRAME_CORNER_SIZE,
-            FRAME_CORNER_SIZE,
+        corners.image_region(
+            &self.edge_corners,
+            LOADSCREEN_EDGE_CORNER_RIGHT,
+            bottom_right_x,
+            bottom_y,
+            right_w,
+            corner_h,
+            corner_tint,
         );
+        let _ = adapter.draw_tex_triangles_no_present(self.edge_corners.texture_id, &corners.bytes);
+
+        let mut border = SolidBatch::new(self.window_width, self.window_height);
+        outline_rect(
+            &mut border,
+            0.0,
+            0.0,
+            window_w,
+            window_h,
+            2.0,
+            Rgba8::new(0, 0, 0, 255),
+        );
+        let _ = adapter.draw_rgb_triangles_no_present(&border.bytes);
     }
 
     fn window_drag_region_at(&self, point: Point) -> bool {
@@ -1286,16 +1488,25 @@ impl LoadScreen {
             self.layout_offset,
         );
         let close = close_button_rect(self.window_width as f32);
-        let create_game = create_game_button_rect(table_layout[0]);
+        let play_button = lobby_play_button_rect(table_layout[0]);
+        let leave_button = lobby_leave_button_rect(table_layout[0]);
         let chat_input = chat_input_rect(table_layout[1], table_layout[2]);
         if inside_rect(point.x, point.y, close.x, close.y, close.w, close.h)
             || inside_rect(
                 point.x,
                 point.y,
-                create_game.x,
-                create_game.y,
-                create_game.w,
-                create_game.h,
+                play_button.x,
+                play_button.y,
+                play_button.w,
+                play_button.h,
+            )
+            || inside_rect(
+                point.x,
+                point.y,
+                leave_button.x,
+                leave_button.y,
+                leave_button.w,
+                leave_button.h,
             )
             || inside_rect(
                 point.x,
@@ -1306,6 +1517,7 @@ impl LoadScreen {
                 chat_input.h,
             )
             || top_table_button_at(point, table_layout[1]).is_some()
+            || top_table_placeholder_button_at(point, table_layout[1])
         {
             return false;
         }
@@ -1348,6 +1560,7 @@ impl LoadScreen {
             match self.lobby_request_kind {
                 LobbyRequestKind::Refresh => ("GAME LIST", "SERVER CONNECTING", "LOADING"),
                 LobbyRequestKind::CreateGame => ("GAME LIST", "SERVER CONNECTED", "CREATING GAME"),
+                LobbyRequestKind::FreeGame => ("GAME LIST", "SERVER CONNECTED", "LEAVING LOBBY"),
             }
         } else if self.lobby_error.is_some() {
             ("GAME LIST", "SERVER OFFLINE", "TRY AGAIN")
@@ -1356,16 +1569,17 @@ impl LoadScreen {
         }
     }
 
-    fn server_status_text(&self) -> &str {
+    fn server_status_text(&self) -> String {
         if self.lobby_rx.is_some() {
             match self.lobby_request_kind {
-                LobbyRequestKind::Refresh => "SERVER CONNECTING",
-                LobbyRequestKind::CreateGame => "CREATING GAME",
+                LobbyRequestKind::Refresh => "SERVER CONNECTING".to_owned(),
+                LobbyRequestKind::CreateGame => "CREATING GAME".to_owned(),
+                LobbyRequestKind::FreeGame => "LEAVING LOBBY".to_owned(),
             }
-        } else if self.lobby_error.is_some() {
-            "SERVER OFFLINE"
+        } else if let Some(error) = &self.lobby_error {
+            error.clone()
         } else {
-            "SERVER CONNECTED"
+            "SERVER CONNECTED".to_owned()
         }
     }
 
@@ -1388,17 +1602,35 @@ impl LoadScreen {
             return;
         }
 
-        let create_game = create_game_button_rect(table_layout[0]);
-        if inside_rect(
-            self.mouse.x,
-            self.mouse.y,
-            create_game.x,
-            create_game.y,
-            create_game.w,
-            create_game.h,
-        ) {
+        let play_button = lobby_play_button_rect(table_layout[0]);
+        if self.active_lobby.is_none()
+            && inside_rect(
+                self.mouse.x,
+                self.mouse.y,
+                play_button.x,
+                play_button.y,
+                play_button.w,
+                play_button.h,
+            )
+        {
             self.chat_focused = false;
             self.start_create_game();
+            return;
+        }
+
+        let leave_button = lobby_leave_button_rect(table_layout[0]);
+        if self.active_lobby.is_some()
+            && inside_rect(
+                self.mouse.x,
+                self.mouse.y,
+                leave_button.x,
+                leave_button.y,
+                leave_button.w,
+                leave_button.h,
+            )
+        {
+            self.chat_focused = false;
+            self.start_leave_lobby();
             return;
         }
 
@@ -1528,8 +1760,9 @@ impl FrameProducer for LoadScreen {
         let _ = adapter.draw_tex_triangles_no_present(self.wood_table.texture_id, &tables.bytes);
 
         let large_table = table_layout[0];
+        self.draw_lobby_action_row(adapter, large_table);
         self.draw_lobby_cards(adapter, large_table);
-        self.draw_create_game_button(adapter, large_table);
+        self.draw_server_status(adapter, large_table);
         self.draw_top_table_buttons(adapter, table_layout[1]);
         self.draw_chat(
             adapter,
@@ -1599,21 +1832,86 @@ fn draw_centered_text(
     );
 }
 
-fn top_table_button_origin(table: TableRect) -> (f32, f32) {
+fn top_table_paper_rect(table: TableRect) -> TableRect {
+    let y = table.y + TOP_PAPER_PAD_TOP;
+    TableRect {
+        x: table.x + TOP_PAPER_PAD_X,
+        y,
+        w: (table.w - TOP_PAPER_PAD_X * 2.0).max(120.0),
+        h: (table.y + table.h - y - TOP_PAPER_PAD_BOTTOM).max(72.0),
+    }
+}
+
+fn top_table_button_rect(index: usize, table: TableRect) -> TableRect {
+    let paper = top_table_paper_rect(table);
+    let col = index % TOP_BUTTON_COLS;
+    let row = index / TOP_BUTTON_COLS;
     let total_w =
-        TOP_BUTTON_SIZE * TOP_BUTTON_COUNT as f32 + TOP_BUTTON_GAP * (TOP_BUTTON_COUNT - 1) as f32;
-    (table.x + (table.w - total_w) * 0.5, table.y + 72.0)
+        TOP_BUTTON_SIZE * TOP_BUTTON_COLS as f32 + TOP_BUTTON_GAP * (TOP_BUTTON_COLS - 1) as f32;
+    TableRect {
+        x: paper.x + (paper.w - total_w) * 0.5 + col as f32 * (TOP_BUTTON_SIZE + TOP_BUTTON_GAP),
+        y: paper.y + TOP_BUTTON_GRID_TOP + row as f32 * (TOP_BUTTON_SIZE + TOP_BUTTON_ROW_GAP),
+        w: TOP_BUTTON_SIZE,
+        h: TOP_BUTTON_SIZE,
+    }
+}
+
+fn top_table_placeholder_button_rects(table: TableRect) -> [TableRect; 4] {
+    let top_left = top_table_button_rect(0, table);
+    let bottom_left = top_table_button_rect(TOP_BUTTON_COLS, table);
+    let top_right = top_table_button_rect(TOP_BUTTON_COLS - 1, table);
+    let bottom_right = top_table_button_rect(TOP_BUTTON_COUNT - 1, table);
+    let offset = TOP_BUTTON_SIZE + TOP_BUTTON_GAP;
+    [
+        TableRect {
+            x: top_left.x - offset,
+            ..top_left
+        },
+        TableRect {
+            x: bottom_left.x - offset,
+            ..bottom_left
+        },
+        TableRect {
+            x: top_right.x + offset,
+            ..top_right
+        },
+        TableRect {
+            x: bottom_right.x + offset,
+            ..bottom_right
+        },
+    ]
 }
 
 fn top_table_button_at(point: Point, table: TableRect) -> Option<usize> {
-    let (start_x, button_y) = top_table_button_origin(table);
     (0..TOP_BUTTON_COUNT).find(|index| {
-        let x = start_x + *index as f32 * (TOP_BUTTON_SIZE + TOP_BUTTON_GAP);
-        point.x >= x
-            && point.x <= x + TOP_BUTTON_SIZE
-            && point.y >= button_y
-            && point.y <= button_y + TOP_BUTTON_SIZE
+        let rect = top_table_button_rect(*index, table);
+        point.x >= rect.x
+            && point.x <= rect.x + rect.w
+            && point.y >= rect.y
+            && point.y <= rect.y + rect.h
     })
+}
+
+fn top_table_placeholder_button_at(point: Point, table: TableRect) -> bool {
+    top_table_placeholder_button_rects(table)
+        .into_iter()
+        .any(|rect| {
+            point.x >= rect.x
+                && point.x <= rect.x + rect.w
+                && point.y >= rect.y
+                && point.y <= rect.y + rect.h
+        })
+}
+
+fn scaled_centered_rect(rect: TableRect, scale: f32) -> TableRect {
+    let w = rect.w * scale;
+    let h = rect.h * scale;
+    TableRect {
+        x: rect.x + (rect.w - w) * 0.5,
+        y: rect.y + (rect.h - h) * 0.5,
+        w,
+        h,
+    }
 }
 
 fn top_table_button_label(index: usize) -> &'static str {
@@ -1628,32 +1926,52 @@ fn top_table_button_label(index: usize) -> &'static str {
     }
 }
 
-fn create_game_button_rect(table: TableRect) -> TableRect {
+fn lobby_action_row_rect(table: TableRect) -> TableRect {
+    let x = table.x.round() + LOBBY_CARD_START_X;
+    let y = table.y.round() + LOBBY_CARD_START_Y;
     TableRect {
-        x: table.x + table.w - 72.0 - CLOSE_BUTTON_SIZE,
-        y: table.y + 24.0,
-        w: CLOSE_BUTTON_SIZE,
-        h: CLOSE_BUTTON_SIZE,
+        x,
+        y,
+        w: (table.w - LOBBY_CARD_START_X * 2.0).max(LOBBY_CARD_W),
+        h: LOBBY_ACTION_ROW_H,
+    }
+}
+
+fn lobby_play_button_rect(table: TableRect) -> TableRect {
+    let row = lobby_action_row_rect(table);
+    TableRect {
+        x: row.x + row.w - LOBBY_CARD_PAD_X - LOBBY_ACTION_BUTTON_SIZE,
+        y: row.y + CREATE_GAME_BUTTON_CARD_Y,
+        w: LOBBY_ACTION_BUTTON_SIZE,
+        h: LOBBY_ACTION_BUTTON_SIZE,
+    }
+}
+
+fn lobby_leave_button_rect(table: TableRect) -> TableRect {
+    let play = lobby_play_button_rect(table);
+    TableRect {
+        x: play.x - LOBBY_ACTION_BUTTON_SIZE - LOBBY_ACTION_BUTTON_GAP,
+        y: play.y,
+        w: LOBBY_ACTION_BUTTON_SIZE,
+        h: LOBBY_ACTION_BUTTON_SIZE,
     }
 }
 
 fn chat_panel_rect(table: TableRect) -> TableRect {
     TableRect {
-        x: table.x + 44.0,
-        y: table.y + 48.0,
-        w: (table.w - 88.0).max(120.0),
-        h: (table.h - 96.0).max(120.0),
+        x: table.x + CHAT_PANEL_PAD_X,
+        y: table.y + CHAT_PANEL_PAD_TOP,
+        w: (table.w - CHAT_PANEL_PAD_X * 2.0).max(120.0),
+        h: (table.h - CHAT_PANEL_PAD_TOP - CHAT_PANEL_PAD_BOTTOM).max(120.0),
     }
 }
 
-fn chat_input_rect(top_table: TableRect, bottom_table: TableRect) -> TableRect {
-    let w = (bottom_table.w - 124.0).clamp(180.0, 360.0);
+fn chat_input_rect(_top_table: TableRect, bottom_table: TableRect) -> TableRect {
+    let w = ((bottom_table.w - 124.0) * 1.10).clamp(198.0, 396.0);
     let h = 34.0;
-    let gap_top = top_table.y + top_table.h;
-    let gap_h = (bottom_table.y - gap_top).max(h);
     TableRect {
         x: bottom_table.x + (bottom_table.w - w) * 0.5,
-        y: gap_top + (gap_h - h) * 0.5,
+        y: bottom_table.y + bottom_table.h - h - 22.0,
         w,
         h,
     }
@@ -1662,27 +1980,65 @@ fn chat_input_rect(top_table: TableRect, bottom_table: TableRect) -> TableRect {
 fn close_button_rect(window_w: f32) -> TableRect {
     let half_button = CLOSE_BUTTON_SIZE * 0.5;
     TableRect {
-        x: (window_w - FRAME_CORNER_SIZE - half_button).max(0.0),
-        y: (FRAME_CORNER_SIZE - half_button).max(0.0),
+        x: (window_w - FRAME_CORNER_SIZE - half_button - CLOSE_BUTTON_INSET).max(0.0),
+        y: (FRAME_CORNER_SIZE - half_button + CLOSE_BUTTON_INSET + CLOSE_BUTTON_Y_OFFSET).max(0.0),
         w: CLOSE_BUTTON_SIZE,
         h: CLOSE_BUTTON_SIZE,
     }
 }
 
-fn spawn_lobby_refresh() -> Receiver<Result<Vec<Lobby>, String>> {
-    spawn_lobby_request(|| cli::get_lobbies().map_err(|error| error.to_string()))
+fn spawn_lobby_refresh() -> Receiver<Result<LobbyResponse, String>> {
+    spawn_lobby_request("refresh", || {
+        let lobbies = cli::get_lobbies().map_err(|error| error.to_string())?;
+        Ok(LobbyResponse {
+            lobbies,
+            created_lobby: None,
+            clear_active_lobby: false,
+        })
+    })
 }
 
-fn spawn_lobby_create_game() -> Receiver<Result<Vec<Lobby>, String>> {
-    spawn_lobby_request(|| cli::create_game_and_get_lobbies().map_err(|error| error.to_string()))
+fn spawn_lobby_create_game() -> Receiver<Result<LobbyResponse, String>> {
+    spawn_lobby_request("create_game", || {
+        let (lobbies, created_lobby) =
+            cli::create_game_and_get_lobbies_with_created().map_err(|error| error.to_string())?;
+        Ok(LobbyResponse {
+            lobbies,
+            created_lobby: Some(created_lobby),
+            clear_active_lobby: false,
+        })
+    })
+}
+
+fn spawn_lobby_free_game(game_id: u64) -> Receiver<Result<LobbyResponse, String>> {
+    spawn_lobby_request("free_game", move || {
+        let lobbies = cli::free_game_and_get_lobbies(game_id).map_err(|error| error.to_string())?;
+        Ok(LobbyResponse {
+            lobbies,
+            created_lobby: None,
+            clear_active_lobby: true,
+        })
+    })
 }
 
 fn spawn_lobby_request(
-    request: impl FnOnce() -> Result<Vec<Lobby>, String> + Send + 'static,
-) -> Receiver<Result<Vec<Lobby>, String>> {
+    label: &'static str,
+    request: impl FnOnce() -> Result<LobbyResponse, String> + Send + 'static,
+) -> Receiver<Result<LobbyResponse, String>> {
     let (lobby_tx, lobby_rx) = mpsc::channel();
     thread::spawn(move || {
-        let _ = lobby_tx.send(request());
+        eprintln!("[loadscreen] lobby request thread started: {label}");
+        let result = request();
+        match &result {
+            Ok(response) => eprintln!(
+                "[loadscreen] lobby request thread finished: {label}, {} lobbies",
+                response.lobbies.len()
+            ),
+            Err(error) => {
+                eprintln!("[loadscreen] lobby request thread failed: {label}: {error}")
+            }
+        }
+        let _ = lobby_tx.send(result);
     });
     lobby_rx
 }
@@ -2002,56 +2358,6 @@ fn draw_wood_table(batch: &mut SpriteBatch, image: &ImageAsset, x: f32, y: f32, 
         WOOD_TABLE_BOTTOM_RIGHT.height as f32,
         Rgba8::WHITE,
     );
-}
-
-fn draw_asset_rect(
-    adapter: &mut Adapter,
-    image: &ImageAsset,
-    window_w: u32,
-    window_h: u32,
-    x: f32,
-    y: f32,
-    w: f32,
-    h: f32,
-) {
-    if w <= 0.0 || h <= 0.0 {
-        return;
-    }
-
-    let mut batch = SpriteBatch::new(window_w, window_h);
-    batch.image(x, y, w, h, Rgba8::WHITE);
-    let _ = adapter.draw_tex_triangles_no_present(image.texture_id, &batch.bytes);
-}
-
-fn draw_tiled_asset(
-    adapter: &mut Adapter,
-    image: &ImageAsset,
-    window_w: u32,
-    window_h: u32,
-    x: f32,
-    y: f32,
-    w: f32,
-    h: f32,
-    tile_w: f32,
-    tile_h: f32,
-) {
-    if w <= 0.0 || h <= 0.0 || tile_w <= 0.0 || tile_h <= 0.0 {
-        return;
-    }
-
-    let mut batch = SpriteBatch::new(window_w, window_h);
-    let mut dy = 0.0;
-    while dy < h {
-        let draw_h = (h - dy).min(tile_h);
-        let mut dx = 0.0;
-        while dx < w {
-            let draw_w = (w - dx).min(tile_w);
-            batch.image(x + dx, y + dy, draw_w, draw_h, Rgba8::WHITE);
-            dx += draw_w;
-        }
-        dy += draw_h;
-    }
-    let _ = adapter.draw_tex_triangles_no_present(image.texture_id, &batch.bytes);
 }
 
 fn draw_tiled_region(

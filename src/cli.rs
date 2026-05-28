@@ -21,24 +21,60 @@ pub(super) struct TacticsClient {
     stream: TcpStream,
 }
 
+fn connection_closed_error(context: &str) -> std::io::Error {
+    std::io::Error::new(
+        std::io::ErrorKind::ConnectionAborted,
+        format!("{context}: server closed connection without a response"),
+    )
+}
+
+fn timeout_error(context: &str) -> std::io::Error {
+    std::io::Error::new(
+        std::io::ErrorKind::TimedOut,
+        format!("{context}: server did not respond before timeout"),
+    )
+}
+
+fn log_lobby_client(message: impl std::fmt::Display) {
+    eprintln!("[lobby-client] {message}");
+}
+
 fn send(stream: &mut TcpStream, value: serde_json::Value) -> std::io::Result<()> {
-    writeln!(stream, "{}", value)
+    log_lobby_client(format_args!("send {value}"));
+    write_json_line(stream, &value)
+}
+
+fn write_json_line(writer: &mut impl Write, value: &Value) -> std::io::Result<()> {
+    let mut bytes = serde_json::to_vec(value).map_err(std::io::Error::other)?;
+    bytes.push(b'\n');
+    writer.write_all(&bytes)?;
+    writer.flush()
 }
 
 pub(super) fn get_lobbies() -> std::io::Result<Vec<Lobby>> {
     get_lobbies_from(DEFAULT_SERVER_ADDR, DEFAULT_GAME)
 }
 
+#[allow(dead_code)]
 pub(super) fn create_game_and_get_lobbies() -> std::io::Result<Vec<Lobby>> {
     create_game_and_get_lobbies_from(DEFAULT_SERVER_ADDR, DEFAULT_GAME, "Tactics lobby", 4)
+}
+
+pub(super) fn create_game_and_get_lobbies_with_created() -> std::io::Result<(Vec<Lobby>, Lobby)> {
+    create_game_and_get_lobbies_with_created_from(
+        DEFAULT_SERVER_ADDR,
+        DEFAULT_GAME,
+        "Tactics lobby",
+        4,
+    )
 }
 
 pub(super) fn get_lobbies_from(
     addr: impl ToSocketAddrs,
     game: &str,
 ) -> std::io::Result<Vec<Lobby>> {
+    log_lobby_client(format_args!("refresh lobbies game={game}"));
     let mut client = TacticsClient::connect(addr)?;
-    client.hello("Loadscreen", game)?;
     client.get_lobbies()
 }
 
@@ -49,8 +85,10 @@ pub(super) fn create_game_from(
     name: &str,
     max_players: u32,
 ) -> std::io::Result<Lobby> {
+    log_lobby_client(format_args!(
+        "create game game={game} name={name:?} max_players={max_players}"
+    ));
     let mut client = TacticsClient::connect(addr)?;
-    client.hello("Loadscreen", game)?;
     client.create_game(name, game, max_players)?;
     client.wait_for_create_game_ack()?.ok_or_else(|| {
         std::io::Error::new(
@@ -60,28 +98,74 @@ pub(super) fn create_game_from(
     })
 }
 
+#[allow(dead_code)]
 pub(super) fn create_game_and_get_lobbies_from(
     addr: impl ToSocketAddrs,
     game: &str,
     name: &str,
     max_players: u32,
 ) -> std::io::Result<Vec<Lobby>> {
+    log_lobby_client(format_args!(
+        "create game then refresh game={game} name={name:?} max_players={max_players}"
+    ));
     let mut client = TacticsClient::connect(addr)?;
-    client.hello("Loadscreen", game)?;
     client.create_game(name, game, max_players)?;
-    let _ = client.wait_for_create_game_ack()?;
+    match client.wait_for_create_game_ack()? {
+        Some(lobby) => log_lobby_client(format_args!("create game ack parsed lobby={lobby:?}")),
+        None => log_lobby_client("create game ack missing or timed out; refreshing lobbies"),
+    }
     client.get_lobbies()
+}
+
+pub(super) fn create_game_and_get_lobbies_with_created_from(
+    addr: impl ToSocketAddrs,
+    game: &str,
+    name: &str,
+    max_players: u32,
+) -> std::io::Result<(Vec<Lobby>, Lobby)> {
+    log_lobby_client(format_args!(
+        "create game with ack then refresh game={game} name={name:?} max_players={max_players}"
+    ));
+    let mut client = TacticsClient::connect(addr)?;
+    client.create_game(name, game, max_players)?;
+    let lobby = client.wait_for_create_game_ack()?.ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::TimedOut,
+            "server did not confirm created game",
+        )
+    })?;
+    let lobbies = client.get_lobbies()?;
+    Ok((lobbies, lobby))
+}
+
+pub(super) fn free_game_and_get_lobbies(game_id: u64) -> std::io::Result<Vec<Lobby>> {
+    free_game_and_get_lobbies_from(DEFAULT_SERVER_ADDR, DEFAULT_GAME, game_id)
+}
+
+pub(super) fn free_game_and_get_lobbies_from(
+    addr: impl ToSocketAddrs + Clone,
+    game: &str,
+    game_id: u64,
+) -> std::io::Result<Vec<Lobby>> {
+    log_lobby_client(format_args!("free game game={game} game_id={game_id}"));
+    let mut client = TacticsClient::connect(addr.clone())?;
+    client.free_game(game_id)?;
+    drop(client);
+    get_lobbies_from(addr, game)
 }
 
 impl TacticsClient {
     pub fn connect(addr: impl ToSocketAddrs) -> std::io::Result<Self> {
+        log_lobby_client("connecting to lobby server");
         let stream = TcpStream::connect(addr)?;
         stream.set_nodelay(true)?;
         stream.set_read_timeout(Some(Duration::from_secs(2)))?;
         stream.set_write_timeout(Some(Duration::from_secs(2)))?;
+        log_lobby_client("connected to lobby server");
         Ok(Self { stream })
     }
 
+    #[allow(dead_code)]
     pub fn hello(&mut self, name: &str, game: &str) -> std::io::Result<()> {
         send(
             &mut self.stream,
@@ -103,14 +187,21 @@ impl TacticsClient {
         let mut line = String::new();
         loop {
             if started.elapsed() > Duration::from_secs(3) {
-                return Ok(Vec::new());
+                log_lobby_client("game_list wait exceeded 3s");
+                return Err(timeout_error("game_list"));
             }
 
             line.clear();
             match read.read_line(&mut line) {
-                Ok(0) => return Ok(Vec::new()),
+                Ok(0) => {
+                    log_lobby_client("game_list server closed connection");
+                    return Err(connection_closed_error("game_list"));
+                }
                 Ok(_) => {
-                    let Ok(value) = serde_json::from_str::<Value>(line.trim()) else {
+                    let raw = line.trim();
+                    log_lobby_client(format_args!("recv game_list {raw}"));
+                    let Ok(value) = serde_json::from_str::<Value>(raw) else {
+                        log_lobby_client(format_args!("ignored non-json game_list frame {raw:?}"));
                         continue;
                     };
                     if value.get("type").and_then(Value::as_str) == Some("error") {
@@ -118,11 +209,16 @@ impl TacticsClient {
                             .get("message")
                             .and_then(Value::as_str)
                             .unwrap_or("server returned an error");
+                        log_lobby_client(format_args!("game_list server error {message:?}"));
                         return Err(std::io::Error::other(message.to_owned()));
                     }
                     if let Some(lobbies) = lobbies_from_value(&value) {
+                        log_lobby_client(format_args!("parsed {} lobbies", lobbies.len()));
                         return Ok(lobbies);
                     }
+                    log_lobby_client(format_args!(
+                        "ignored game_list frame without lobbies {value}"
+                    ));
                 }
                 Err(error)
                     if matches!(
@@ -130,9 +226,16 @@ impl TacticsClient {
                         std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
                     ) =>
                 {
-                    return Ok(Vec::new());
+                    log_lobby_client(format_args!(
+                        "game_list read timed out ({:?})",
+                        error.kind()
+                    ));
+                    return Err(timeout_error("game_list"));
                 }
-                Err(error) => return Err(error),
+                Err(error) => {
+                    log_lobby_client(format_args!("game_list read failed: {error}"));
+                    return Err(error);
+                }
             }
         }
     }
@@ -149,6 +252,16 @@ impl TacticsClient {
         )
     }
 
+    pub fn free_game(&mut self, game_id: u64) -> std::io::Result<()> {
+        send(
+            &mut self.stream,
+            json!({
+                "type": "free_game",
+                "game_id": game_id
+            }),
+        )
+    }
+
     fn wait_for_create_game_ack(&mut self) -> std::io::Result<Option<Lobby>> {
         let mut read = BufReader::new(self.stream.try_clone()?);
         let started = Instant::now();
@@ -156,14 +269,23 @@ impl TacticsClient {
 
         loop {
             if started.elapsed() > Duration::from_secs(2) {
-                return Ok(None);
+                log_lobby_client("create game ack wait exceeded 2s");
+                return Err(timeout_error("create_game"));
             }
 
             line.clear();
             match read.read_line(&mut line) {
-                Ok(0) => return Ok(None),
+                Ok(0) => {
+                    log_lobby_client("create game ack connection closed");
+                    return Err(connection_closed_error("create_game"));
+                }
                 Ok(_) => {
-                    let Ok(value) = serde_json::from_str::<Value>(line.trim()) else {
+                    let raw = line.trim();
+                    log_lobby_client(format_args!("recv create_game_ack {raw}"));
+                    let Ok(value) = serde_json::from_str::<Value>(raw) else {
+                        log_lobby_client(format_args!(
+                            "ignored non-json create_game_ack frame {raw:?}"
+                        ));
                         continue;
                     };
                     if value.get("type").and_then(Value::as_str) == Some("error") {
@@ -171,13 +293,18 @@ impl TacticsClient {
                             .get("message")
                             .and_then(Value::as_str)
                             .unwrap_or("server returned an error");
+                        log_lobby_client(format_args!("create_game server error {message:?}"));
                         return Err(std::io::Error::other(message.to_owned()));
                     }
                     if let Some(mut lobbies) = lobbies_from_value(&value) {
                         if let Some(lobby) = lobbies.pop() {
+                            log_lobby_client(format_args!("parsed create_game ack {lobby:?}"));
                             return Ok(Some(lobby));
                         }
                     }
+                    log_lobby_client(format_args!(
+                        "ignored create_game_ack frame without lobby {value}"
+                    ));
                 }
                 Err(error)
                     if matches!(
@@ -185,9 +312,16 @@ impl TacticsClient {
                         std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
                     ) =>
                 {
-                    return Ok(None);
+                    log_lobby_client(format_args!(
+                        "create_game ack read timed out ({:?})",
+                        error.kind()
+                    ));
+                    return Err(timeout_error("create_game"));
                 }
-                Err(error) => return Err(error),
+                Err(error) => {
+                    log_lobby_client(format_args!("create_game ack read failed: {error}"));
+                    return Err(error);
+                }
             }
         }
     }
@@ -307,6 +441,24 @@ fn number_field(value: &Value, keys: &[&str]) -> u32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn writes_json_command_as_one_line() {
+        let payload = json!({
+            "type": "create_game",
+            "name": "Tactics lobby",
+            "game": "tactics",
+            "max_players": 4
+        });
+        let mut output = Vec::new();
+
+        write_json_line(&mut output, &payload).expect("json command should write");
+
+        assert_eq!(
+            String::from_utf8(output).expect("command should be utf8"),
+            "{\"game\":\"tactics\",\"max_players\":4,\"name\":\"Tactics lobby\",\"type\":\"create_game\"}\n"
+        );
+    }
 
     #[test]
     fn parses_game_created_nested_game_as_lobby() {
