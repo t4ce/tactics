@@ -472,6 +472,8 @@ struct WindowChrome {
 }
 
 impl WindowChrome {
+    const TEXTURE_PENDING_STATUS: i32 = 1;
+
     fn new(close_request: Option<Arc<AtomicBool>>) -> Self {
         Self {
             frame_top_left: ImageAsset::from_png_bytes(
@@ -556,6 +558,27 @@ impl WindowChrome {
         }
 
         self.uploaded = true;
+    }
+
+    fn textures_ready(&self, adapter: &Adapter) -> bool {
+        for image in [
+            &self.frame_top_left,
+            &self.frame_top_right,
+            &self.frame_bottom_left,
+            &self.frame_bottom_right,
+            &self.frame_horizontal,
+            &self.frame_vertical,
+            &self.close_icon,
+            &self.blue_button,
+            &self.red_button,
+            &self.edge_corners,
+            &self.cursor_default,
+        ] {
+            if adapter.texture_status(image.texture_id) == Self::TEXTURE_PENDING_STATUS {
+                return false;
+            }
+        }
+        true
     }
 
     fn handle_close_press(&mut self, mouse: Point, window_w: f32) -> bool {
@@ -1446,6 +1469,7 @@ struct IconViewer {
     icons: Vec<IconTile>,
     mouse: Point,
     uploaded: bool,
+    render_frames_remaining: u8,
     window_width: u32,
     window_height: u32,
     chrome: WindowChrome,
@@ -4159,6 +4183,8 @@ impl FrameProducer for Game {
 }
 
 impl UnitWalkViewer {
+    const TEXTURE_PENDING_STATUS: i32 = 1;
+
     fn new() -> Self {
         let mut next_texture_id = UNIT_VIEWER_TEXTURE_BASE;
         let mut units = UNIT_WALK_SPECS
@@ -4231,6 +4257,32 @@ impl UnitWalkViewer {
         }
 
         self.uploaded = true;
+    }
+
+    fn textures_ready(&self, adapter: &Adapter) -> bool {
+        if !self.chrome.textures_ready(adapter) {
+            return false;
+        }
+
+        for texture_id in [
+            ts_ui::BANNER_TEXTURE,
+            ts_ui::BIG_RIBBONS_TEXTURE,
+            ts_ui::SMALL_BAR_BASE_TEXTURE,
+        ] {
+            if adapter.texture_status(texture_id) == Self::TEXTURE_PENDING_STATUS {
+                return false;
+            }
+        }
+
+        for unit in &self.units {
+            for frame in &unit.frames {
+                if adapter.texture_status(frame.texture_id) == Self::TEXTURE_PENDING_STATUS {
+                    return false;
+                }
+            }
+        }
+
+        true
     }
 }
 
@@ -7019,11 +7071,14 @@ impl IdleWorldViewer {
 }
 
 impl IconViewer {
+    const STATIC_PRESENT_FRAMES: u8 = 16;
+
     fn new() -> Self {
         Self {
             icons: load_icon_viewer_icons(),
             mouse: Point::default(),
             uploaded: false,
+            render_frames_remaining: Self::STATIC_PRESENT_FRAMES,
             window_width: ICON_VIEWER_WIDTH,
             window_height: ICON_VIEWER_HEIGHT,
             chrome: WindowChrome::new(None),
@@ -7037,8 +7092,13 @@ impl IconViewer {
     }
 
     fn resize_view(&mut self, width: u32, height: u32) {
-        self.window_width = width.max(1);
-        self.window_height = height.max(1);
+        let width = width.max(1);
+        let height = height.max(1);
+        if self.window_width != width || self.window_height != height {
+            self.window_width = width;
+            self.window_height = height;
+            self.render_frames_remaining = Self::STATIC_PRESENT_FRAMES;
+        }
     }
 
     fn upload_assets(&mut self, adapter: &mut Adapter) {
@@ -8463,10 +8523,23 @@ impl FrameProducer for UnitWalkViewer {
         }
     }
 
+    fn prepare_window_assets(&mut self, adapter: &mut Adapter) {
+        self.upload_assets(adapter);
+    }
+
+    fn window_assets_ready(&self, adapter: &Adapter) -> bool {
+        self.uploaded && self.textures_ready(adapter)
+    }
+
     fn build_frame(&mut self, adapter: &mut Adapter) {
         self.upload_assets(adapter);
+        if !self.textures_ready(adapter) {
+            return;
+        }
 
-        let _ = adapter.begin_frame(0x243C40);
+        if adapter.begin_frame(0x243C40) != 0 {
+            return;
+        }
         let _ = adapter.set_sampler_raw(0, 0, 0, 0);
         let _ = adapter.set_blend_raw(1, 0x0302, 0x0303);
 
@@ -8789,10 +8862,33 @@ impl FrameProducer for IconViewer {
         }
     }
 
+    fn prepare_window_assets(&mut self, adapter: &mut Adapter) {
+        self.upload_assets(adapter);
+    }
+
+    fn window_assets_ready(&self, adapter: &Adapter) -> bool {
+        if !self.uploaded || !self.chrome.textures_ready(adapter) {
+            return false;
+        }
+        for texture_id in [ts_ui::BANNER_TEXTURE, ts_ui::BIG_RIBBONS_TEXTURE] {
+            if adapter.texture_status(texture_id) == UnitWalkViewer::TEXTURE_PENDING_STATUS {
+                return false;
+            }
+        }
+        self.icons.iter().all(|icon| {
+            adapter.texture_status(icon.image.texture_id) != UnitWalkViewer::TEXTURE_PENDING_STATUS
+        })
+    }
+
     fn build_frame(&mut self, adapter: &mut Adapter) {
         self.upload_assets(adapter);
+        if self.render_frames_remaining == 0 {
+            return;
+        }
 
-        let _ = adapter.begin_frame(0x243C40);
+        if adapter.begin_frame(0x243C40) != 0 {
+            return;
+        }
         let _ = adapter.set_sampler_raw(0, 0, 0, 0);
         let _ = adapter.set_blend_raw(1, 0x0302, 0x0303);
 
@@ -8841,9 +8937,9 @@ impl FrameProducer for IconViewer {
 
         self.chrome
             .draw(adapter, self.window_width, self.window_height);
-        self.chrome
-            .draw_cursor(adapter, self.window_width, self.window_height, self.mouse);
-        let _ = adapter.end_frame();
+        if adapter.end_frame().is_ok() {
+            self.render_frames_remaining = self.render_frames_remaining.saturating_sub(1);
+        }
     }
 }
 

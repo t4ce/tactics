@@ -21,6 +21,18 @@ pub trait FrameProducer {
         true
     }
 
+    fn window_titlebar(&self) -> bool {
+        true
+    }
+
+    fn window_bottom_bar(&self) -> bool {
+        true
+    }
+
+    fn window_scrollbars(&self) -> bool {
+        true
+    }
+
     fn window_resizable(&self) -> bool {
         true
     }
@@ -32,6 +44,12 @@ pub trait FrameProducer {
     fn resize(&mut self, _width: u32, _height: u32) {}
 
     fn handle_input(&mut self, _event: InputEvent) {}
+
+    fn prepare_window_assets(&mut self, _adapter: &mut Adapter) {}
+
+    fn window_assets_ready(&self, _adapter: &Adapter) -> bool {
+        true
+    }
 
     fn build_frame(&mut self, adapter: &mut Adapter);
 }
