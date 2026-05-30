@@ -8,6 +8,6 @@ pub mod window;
 
 pub use api::Adapter;
 pub use command::*;
-pub use renderer::{RenderError, WgpuRenderer};
+pub use renderer::{RenderError, WgpuHeadlessRenderer, WgpuRenderer};
 pub use texture::*;
 pub use vertex::*;

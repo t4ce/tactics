@@ -1,5 +1,6 @@
-use crate::adapterlibgfx::api::Adapter;
+use crate::adapterlibgfx::api::{Adapter, AdapterConfig};
 use crate::adapterlibgfx::command::{ScissorRect, TextureEffect};
+use crate::adapterlibgfx::renderer::WgpuHeadlessRenderer;
 use crate::adapterlibgfx::vertex::{Rgba8, TexVertex};
 use crate::adapterlibgfx::window::{
     FrameProducer, InputButtonState, InputEvent, InputKey, InputMouseButton,
@@ -437,7 +438,38 @@ const UNIT_WALK_SPECS: [UnitWalkSpec; 14] = [
 ];
 
 pub(crate) fn run() {
+    if std::env::args().any(|arg| arg == "--headless-intel-frame") {
+        run_headless_intel_frame();
+        return;
+    }
     ui_cli::tactics_window();
+}
+
+fn run_headless_intel_frame() {
+    let mut adapter = Adapter::new(AdapterConfig {
+        width: WINDOW_WIDTH,
+        height: WINDOW_HEIGHT,
+    });
+    let mut game = Game::new();
+    game.resize(WINDOW_WIDTH, WINDOW_HEIGHT);
+    game.build_frame(&mut adapter);
+    let frame = adapter
+        .take_last_frame()
+        .expect("headless tactics frame producer did not end a frame");
+    eprintln!(
+        "tactics headless frame: seq={} commands={} textures={} size={}x{}",
+        frame.seq,
+        frame.commands.len(),
+        adapter.textures().iter().count(),
+        frame.logical_width,
+        frame.logical_height
+    );
+    let mut renderer = WgpuHeadlessRenderer::new_intel(WINDOW_WIDTH, WINDOW_HEIGHT)
+        .expect("failed to create Intel headless renderer");
+    renderer
+        .render_frame(adapter.textures(), &frame)
+        .expect("failed to render tactics frame on Intel");
+    eprintln!("tactics headless Intel frame submitted");
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
