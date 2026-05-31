@@ -1,4 +1,6 @@
-use crate::command::{BlendState, Frame, FrameCommand, SamplerState, TextureEffect};
+use crate::command::{
+    BlendState, Frame, FrameCommand, SamplerState, TextureEffect, TextureSampleKind,
+};
 use crate::texture::TextureRegistry;
 use crate::vertex::{decode_rgb_vertices, decode_tex_vertices, usable_rgb_len, usable_tex_len};
 
@@ -221,6 +223,15 @@ impl Adapter {
     }
 
     pub fn draw_tex_triangles_no_present(&mut self, tex_id: u32, bytes: &[u8]) -> i32 {
+        self.draw_tex_triangles_sample_kind_no_present(tex_id, TextureSampleKind::Rgba, bytes)
+    }
+
+    pub fn draw_tex_triangles_sample_kind_no_present(
+        &mut self,
+        tex_id: u32,
+        sample_kind: TextureSampleKind,
+        bytes: &[u8],
+    ) -> i32 {
         if tex_id == 0 {
             return -1;
         }
@@ -244,6 +255,7 @@ impl Adapter {
             .saturating_add(usable.min(u32::MAX as usize) as u32);
         self.commands.push(FrameCommand::DrawTex {
             tex_id,
+            sample_kind,
             vertices: decode_tex_vertices(&bytes[..usable]),
         });
         0

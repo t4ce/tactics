@@ -9,7 +9,7 @@ use winit::window::Window;
 
 use crate::command::{
     BlendFactor, BlendState, Frame, FrameCommand, SamplerFilter, SamplerState, SamplerWrap,
-    ScissorRect, TextureEffect,
+    ScissorRect, TextureEffect, TextureSampleKind,
 };
 use crate::texture::{TextureImage, TextureRegistry};
 use crate::vertex::{GpuRgbVertex, GpuTexVertex, RgbVertex, TexVertex};
@@ -66,6 +66,13 @@ fn tex_vs(in: TexIn) -> TexOut {
     out.uv = in.uv;
     out.color = in.color;
     return out;
+}
+
+@fragment
+fn tex_mask_fs(in: TexOut) -> @location(0) vec4<f32> {
+    let tex = textureSample(tex_image, tex_sampler, in.uv);
+    let mask = select(tex.r, tex.a, tex.a < 1.0);
+    return vec4<f32>(in.color.rgb * mask, in.color.a * mask);
 }
 "#;
 
@@ -228,6 +235,7 @@ enum PipelineKind {
 struct PipelineKey {
     kind: PipelineKind,
     texture_effect: TextureEffect,
+    sample_kind: TextureSampleKind,
     blend: BlendState,
     format: wgpu::TextureFormat,
 }
@@ -504,7 +512,11 @@ impl WgpuRenderer {
                         );
                     }
                 }
-                FrameCommand::DrawTex { tex_id, vertices } => {
+                FrameCommand::DrawTex {
+                    tex_id,
+                    sample_kind,
+                    vertices,
+                } => {
                     let Some(view) = self.target_view(current_target, surface_view.as_ref())?
                     else {
                         continue;
@@ -524,6 +536,7 @@ impl WgpuRenderer {
                             load,
                             &frame_bind_group,
                             &source_view,
+                            *sample_kind,
                             &vertices,
                         );
                     } else {
@@ -534,6 +547,7 @@ impl WgpuRenderer {
                             load,
                             &frame_bind_group,
                             &source_view,
+                            *sample_kind,
                             vertices,
                         );
                     }
@@ -740,7 +754,9 @@ impl WgpuRenderer {
                 contents: bytemuck::cast_slice(&gpu_vertices),
                 usage: wgpu::BufferUsages::VERTEX,
             });
-        let pipeline = self.pipeline(PipelineKind::Rgb, format).clone();
+        let pipeline = self
+            .pipeline(PipelineKind::Rgb, TextureSampleKind::Rgba, format)
+            .clone();
         let mut pass = self.begin_draw_pass(encoder, view, load);
         pass.set_pipeline(&pipeline);
         pass.set_bind_group(0, frame_bind_group, &[]);
@@ -759,6 +775,7 @@ impl WgpuRenderer {
         load: wgpu::LoadOp<wgpu::Color>,
         frame_bind_group: &wgpu::BindGroup,
         source_view: &wgpu::TextureView,
+        sample_kind: TextureSampleKind,
         vertices: &[crate::vertex::TexVertex],
     ) {
         if vertices.is_empty() {
@@ -793,7 +810,9 @@ impl WgpuRenderer {
                 },
             ],
         });
-        let pipeline = self.pipeline(PipelineKind::Tex, format).clone();
+        let pipeline = self
+            .pipeline(PipelineKind::Tex, sample_kind, format)
+            .clone();
         let mut pass = self.begin_draw_pass(encoder, view, load);
         pass.set_pipeline(&pipeline);
         pass.set_bind_group(0, frame_bind_group, &[]);
@@ -830,11 +849,13 @@ impl WgpuRenderer {
     fn pipeline(
         &mut self,
         kind: PipelineKind,
+        sample_kind: TextureSampleKind,
         format: wgpu::TextureFormat,
     ) -> &wgpu::RenderPipeline {
         let key = PipelineKey {
             kind,
             texture_effect: self.texture_effect,
+            sample_kind,
             blend: self.blend,
             format,
         };
@@ -864,10 +885,13 @@ impl WgpuRenderer {
             ),
             PipelineKind::Tex => (
                 "tex_vs",
-                match key.texture_effect {
-                    TextureEffect::Plain => "tex_fs",
-                    TextureEffect::World => "world_tex_fs",
-                    TextureEffect::Blur => "blur_tex_fs",
+                match key.sample_kind {
+                    TextureSampleKind::Mask => "tex_mask_fs",
+                    TextureSampleKind::Rgba => match key.texture_effect {
+                        TextureEffect::Plain => "tex_fs",
+                        TextureEffect::World => "world_tex_fs",
+                        TextureEffect::Blur => "blur_tex_fs",
+                    },
                 },
                 vec![GpuTexVertex::layout()],
                 self.device
@@ -1079,7 +1103,11 @@ impl WgpuHeadlessRenderer {
                         self.draw_rgb(&mut encoder, &view, format, load, &frame_bind_group, vertices);
                     }
                 }
-                FrameCommand::DrawTex { tex_id, vertices } => {
+                FrameCommand::DrawTex {
+                    tex_id,
+                    sample_kind,
+                    vertices,
+                } => {
                     let view = self.target_view(current_target)?;
                     let Some(source) = self.textures.get(tex_id) else {
                         return Err(RenderError::MissingTexture(*tex_id));
@@ -1096,6 +1124,7 @@ impl WgpuHeadlessRenderer {
                             load,
                             &frame_bind_group,
                             &source_view,
+                            *sample_kind,
                             &vertices,
                         );
                     } else {
@@ -1106,6 +1135,7 @@ impl WgpuHeadlessRenderer {
                             load,
                             &frame_bind_group,
                             &source_view,
+                            *sample_kind,
                             vertices,
                         );
                     }
@@ -1306,7 +1336,9 @@ impl WgpuHeadlessRenderer {
                 contents: bytemuck::cast_slice(&gpu_vertices),
                 usage: wgpu::BufferUsages::VERTEX,
             });
-        let pipeline = self.pipeline(PipelineKind::Rgb, format).clone();
+        let pipeline = self
+            .pipeline(PipelineKind::Rgb, TextureSampleKind::Rgba, format)
+            .clone();
         let mut pass = self.begin_draw_pass(encoder, view, load);
         pass.set_pipeline(&pipeline);
         pass.set_bind_group(0, frame_bind_group, &[]);
@@ -1325,6 +1357,7 @@ impl WgpuHeadlessRenderer {
         load: wgpu::LoadOp<wgpu::Color>,
         frame_bind_group: &wgpu::BindGroup,
         source_view: &wgpu::TextureView,
+        sample_kind: TextureSampleKind,
         vertices: &[crate::vertex::TexVertex],
     ) {
         if vertices.is_empty() {
@@ -1359,7 +1392,9 @@ impl WgpuHeadlessRenderer {
                 },
             ],
         });
-        let pipeline = self.pipeline(PipelineKind::Tex, format).clone();
+        let pipeline = self
+            .pipeline(PipelineKind::Tex, sample_kind, format)
+            .clone();
         let mut pass = self.begin_draw_pass(encoder, view, load);
         pass.set_pipeline(&pipeline);
         pass.set_bind_group(0, frame_bind_group, &[]);
@@ -1396,11 +1431,13 @@ impl WgpuHeadlessRenderer {
     fn pipeline(
         &mut self,
         kind: PipelineKind,
+        sample_kind: TextureSampleKind,
         format: wgpu::TextureFormat,
     ) -> &wgpu::RenderPipeline {
         let key = PipelineKey {
             kind,
             texture_effect: self.texture_effect,
+            sample_kind,
             blend: self.blend,
             format,
         };
@@ -1430,10 +1467,13 @@ impl WgpuHeadlessRenderer {
             ),
             PipelineKind::Tex => (
                 "tex_vs",
-                match key.texture_effect {
-                    TextureEffect::Plain => "tex_fs",
-                    TextureEffect::World => "world_tex_fs",
-                    TextureEffect::Blur => "blur_tex_fs",
+                match key.sample_kind {
+                    TextureSampleKind::Mask => "tex_mask_fs",
+                    TextureSampleKind::Rgba => match key.texture_effect {
+                        TextureEffect::Plain => "tex_fs",
+                        TextureEffect::World => "world_tex_fs",
+                        TextureEffect::Blur => "blur_tex_fs",
+                    },
                 },
                 vec![GpuTexVertex::layout()],
                 self.device

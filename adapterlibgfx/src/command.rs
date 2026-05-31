@@ -124,6 +124,22 @@ impl TextureEffect {
     }
 }
 
+#[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq)]
+pub enum TextureSampleKind {
+    Mask,
+    #[default]
+    Rgba,
+}
+
+impl TextureSampleKind {
+    pub fn from_raw(value: u32) -> Self {
+        match value {
+            0 => Self::Mask,
+            _ => Self::Rgba,
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ScissorRect {
     pub x: u32,
@@ -144,6 +160,7 @@ pub enum FrameCommand {
     },
     DrawTex {
         tex_id: u32,
+        sample_kind: TextureSampleKind,
         vertices: Vec<TexVertex>,
     },
 }
