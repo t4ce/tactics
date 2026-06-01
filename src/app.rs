@@ -1,6 +1,7 @@
 use crate::adapterlibgfx::api::{Adapter, AdapterConfig};
 use crate::adapterlibgfx::command::{ScissorRect, TextureEffect};
-use crate::adapterlibgfx::renderer::WgpuHeadlessRenderer;
+#[cfg(not(feature = "trueos-blueprint"))]
+use crate::adapterlibgfx::WgpuHeadlessRenderer;
 use crate::adapterlibgfx::vertex::{Rgba8, TexVertex};
 use crate::adapterlibgfx::window::{
     FrameProducer, InputButtonState, InputEvent, InputKey, InputMouseButton,
@@ -438,6 +439,7 @@ const UNIT_WALK_SPECS: [UnitWalkSpec; 14] = [
 ];
 
 pub(crate) fn run() {
+    #[cfg(not(feature = "trueos-blueprint"))]
     if std::env::args().any(|arg| arg == "--headless-intel-frame") {
         run_headless_intel_frame();
         return;
@@ -445,6 +447,7 @@ pub(crate) fn run() {
     ui_cli::tactics_window();
 }
 
+#[cfg(not(feature = "trueos-blueprint"))]
 fn run_headless_intel_frame() {
     let mut adapter = Adapter::new(AdapterConfig {
         width: WINDOW_WIDTH,
