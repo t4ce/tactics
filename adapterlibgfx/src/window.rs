@@ -2049,7 +2049,11 @@ fn handle_window_event<P: FrameProducer>(
     }
 
     match event {
-        WindowEvent::CloseRequested => event_loop.exit(),
+        WindowEvent::CloseRequested => {
+            if !producer.handle_close_requested() {
+                event_loop.exit();
+            }
+        }
         WindowEvent::Resized(size) => {
             adapter.resize(size.width, size.height);
             producer.resize(size.width, size.height);

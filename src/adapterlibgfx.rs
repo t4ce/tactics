@@ -1038,12 +1038,12 @@ pub mod window {
 
                 platform::poll_once();
 
-                close_unrequested_surface_window(&mut primary, &self.primary_create_request);
-                close_unrequested_surface_window(&mut secondary, &self.secondary_create_request);
-                close_unrequested_surface_window(&mut tertiary, &self.tertiary_create_request);
-                close_unrequested_surface_window(&mut quinary, &self.quinary_create_request);
-                close_unrequested_surface_window(&mut senary, &self.senary_create_request);
-                close_unrequested_surface_window(&mut septenary, &self.septenary_create_request);
+                hide_unrequested_surface_window(&mut primary, &self.primary_create_request);
+                hide_unrequested_surface_window(&mut secondary, &self.secondary_create_request);
+                hide_unrequested_surface_window(&mut tertiary, &self.tertiary_create_request);
+                hide_unrequested_surface_window(&mut quinary, &self.quinary_create_request);
+                hide_unrequested_surface_window(&mut senary, &self.senary_create_request);
+                hide_unrequested_surface_window(&mut septenary, &self.septenary_create_request);
 
                 if let Some(window) = primary.as_ref() {
                     dispatch_window_cursor_events(
@@ -1252,7 +1252,16 @@ pub mod window {
         }
     }
 
-    fn close_unrequested_surface_window(
+    fn hide_optional_surface_window(window: &mut Option<ui2::SurfaceWindow>) {
+        if let Some(window) = window.take() {
+            let id = window.id();
+            let _ = id.set_position(i32::MIN / 2, i32::MIN / 2);
+            let _ = id.set_size(1, 1);
+            let _ = window.leak();
+        }
+    }
+
+    fn hide_unrequested_surface_window(
         window: &mut Option<ui2::SurfaceWindow>,
         request: &Option<Arc<AtomicBool>>,
     ) {
@@ -1260,7 +1269,7 @@ pub mod window {
             .as_ref()
             .is_some_and(|request| !request.load(Ordering::Relaxed))
         {
-            close_optional_surface_window(window);
+            hide_optional_surface_window(window);
         }
     }
 
