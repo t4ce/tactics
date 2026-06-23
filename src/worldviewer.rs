@@ -1153,6 +1153,9 @@ impl FrameProducer for WorldViewer {
                     }
                 }
             }
+            InputEvent::CursorLeft => {
+                self.mouse = hidden_cursor_point();
+            }
             InputEvent::MouseButton {
                 button: InputMouseButton::Middle,
                 state: InputButtonState::Pressed,

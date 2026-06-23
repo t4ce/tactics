@@ -675,6 +675,7 @@ pub mod window {
             x: f32,
             y: f32,
         },
+        CursorLeft,
         MouseButton {
             button: InputMouseButton,
             state: InputButtonState,

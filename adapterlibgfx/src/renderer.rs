@@ -301,8 +301,8 @@ impl WgpuRenderer {
             .map_err(|err| RenderError::Surface(err.to_string()))?;
         let adapter = instance
             .request_adapter(&wgpu::RequestAdapterOptions {
-                power_preference: wgpu::PowerPreference::HighPerformance,
-                force_fallback_adapter: false,
+                power_preference: window_power_preference(),
+                force_fallback_adapter: window_force_fallback_adapter(),
                 compatible_surface: Some(&surface),
             })
             .await
@@ -932,6 +932,26 @@ impl WgpuRenderer {
                 cache: None,
             })
     }
+}
+
+#[cfg(target_os = "linux")]
+fn window_power_preference() -> wgpu::PowerPreference {
+    wgpu::PowerPreference::LowPower
+}
+
+#[cfg(not(target_os = "linux"))]
+fn window_power_preference() -> wgpu::PowerPreference {
+    wgpu::PowerPreference::HighPerformance
+}
+
+#[cfg(target_os = "linux")]
+fn window_force_fallback_adapter() -> bool {
+    true
+}
+
+#[cfg(not(target_os = "linux"))]
+fn window_force_fallback_adapter() -> bool {
+    false
 }
 
 impl WgpuHeadlessRenderer {

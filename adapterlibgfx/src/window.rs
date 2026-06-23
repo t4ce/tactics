@@ -86,6 +86,7 @@ pub enum InputEvent {
         x: f32,
         y: f32,
     },
+    CursorLeft,
     MouseButton {
         button: InputMouseButton,
         state: InputButtonState,
@@ -2102,6 +2103,7 @@ fn input_event(event: &WindowEvent) -> Option<InputEvent> {
             x: position.x as f32,
             y: position.y as f32,
         }),
+        WindowEvent::CursorLeft { .. } => Some(InputEvent::CursorLeft),
         WindowEvent::MouseInput { state, button, .. } => Some(InputEvent::MouseButton {
             button: mouse_button(*button),
             state: button_state(*state),

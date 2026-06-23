@@ -48,6 +48,7 @@ const LOADSCREEN_EDGE_CORNER_LEFT: ImageRegion = ImageRegion::new(0, 0, 189, 213
 const LOADSCREEN_EDGE_CORNER_RIGHT: ImageRegion = ImageRegion::new(204, 0, 196, 213);
 const LOADSCREEN_EDGE_CORNER_SCALE: f32 = 0.40;
 const LOADSCREEN_EDGE_CORNER_ALPHA: u8 = 217;
+const LOADSCREEN_BACKGROUND_BLUR_ENABLED: bool = false;
 const LOADSCREEN_ARROW_BYTES: &[u8] =
     include_bytes!("../ts_freepack/UI Elements/UI Elements/Icons/Icon_08.png");
 const LOADSCREEN_CLOSE_BYTES: &[u8] =
@@ -771,10 +772,14 @@ impl LoadScreen {
     }
 
     fn draw_background_scene(&self, adapter: &mut Adapter) {
-        let _ = adapter.set_render_target(LOADSCREEN_BACKGROUND_BLUR_TEXTURE);
-        self.draw_background_scene_to_current_target(adapter);
-        let _ = adapter.set_render_target(0);
-        self.draw_blurred_background_scene(adapter);
+        if LOADSCREEN_BACKGROUND_BLUR_ENABLED {
+            let _ = adapter.set_render_target(LOADSCREEN_BACKGROUND_BLUR_TEXTURE);
+            self.draw_background_scene_to_current_target(adapter);
+            let _ = adapter.set_render_target(0);
+            self.draw_blurred_background_scene(adapter);
+        } else {
+            self.draw_background_scene_to_current_target(adapter);
+        }
     }
 
     fn draw_background_scene_to_current_target(&self, adapter: &mut Adapter) {
@@ -1821,6 +1826,9 @@ impl FrameProducer for LoadScreen {
             InputEvent::CursorMoved { x, y } => {
                 self.mouse = Point { x, y };
             }
+            InputEvent::CursorLeft => {
+                self.mouse = hidden_cursor_point();
+            }
             InputEvent::MouseButton {
                 button: InputMouseButton::Left,
                 state: InputButtonState::Pressed,
@@ -1857,7 +1865,9 @@ impl FrameProducer for LoadScreen {
         self.poll_chat();
         self.update_background_scene();
         self.upload_assets(adapter);
-        self.ensure_background_blur_target(adapter);
+        if LOADSCREEN_BACKGROUND_BLUR_ENABLED {
+            self.ensure_background_blur_target(adapter);
+        }
 
         let _ = adapter.begin_frame(0xFFFFFF);
         let _ = adapter.set_sampler_raw(0, 0, 0, 0);

@@ -481,6 +481,13 @@ struct Point {
     y: f32,
 }
 
+fn hidden_cursor_point() -> Point {
+    Point {
+        x: -10_000.0,
+        y: -10_000.0,
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct TableRect {
     x: f32,
@@ -4158,6 +4165,9 @@ impl FrameProducer for Game {
                     self.erase_at_mouse();
                 }
             }
+            InputEvent::CursorLeft => {
+                self.mouse = hidden_cursor_point();
+            }
             InputEvent::MouseButton {
                 button: InputMouseButton::Left,
                 state: InputButtonState::Pressed,
@@ -7132,8 +7142,12 @@ impl IconViewer {
         if self.window_width != width || self.window_height != height {
             self.window_width = width;
             self.window_height = height;
-            self.render_frames_remaining = Self::STATIC_PRESENT_FRAMES;
+            self.request_static_present();
         }
+    }
+
+    fn request_static_present(&mut self) {
+        self.render_frames_remaining = Self::STATIC_PRESENT_FRAMES;
     }
 
     fn upload_assets(&mut self, adapter: &mut Adapter) {
@@ -8546,6 +8560,9 @@ impl FrameProducer for UnitWalkViewer {
             InputEvent::CursorMoved { x, y } => {
                 self.mouse = Point { x, y };
             }
+            InputEvent::CursorLeft => {
+                self.mouse = hidden_cursor_point();
+            }
             InputEvent::MouseButton {
                 button: InputMouseButton::Left,
                 state: InputButtonState::Pressed,
@@ -8721,6 +8738,9 @@ impl FrameProducer for IdleWorldViewer {
                 }
                 self.mouse = Point { x, y };
             }
+            InputEvent::CursorLeft => {
+                self.mouse = hidden_cursor_point();
+            }
             InputEvent::MouseButton {
                 button: InputMouseButton::Middle,
                 state: InputButtonState::Pressed,
@@ -8884,6 +8904,11 @@ impl FrameProducer for IconViewer {
         match event {
             InputEvent::CursorMoved { x, y } => {
                 self.mouse = Point { x, y };
+                self.request_static_present();
+            }
+            InputEvent::CursorLeft => {
+                self.mouse = hidden_cursor_point();
+                self.request_static_present();
             }
             InputEvent::MouseButton {
                 button: InputMouseButton::Left,
@@ -8892,6 +8917,7 @@ impl FrameProducer for IconViewer {
                 let _ = self
                     .chrome
                     .handle_close_press(self.mouse, self.window_width as f32);
+                self.request_static_present();
             }
             _ => {}
         }
@@ -8972,6 +8998,8 @@ impl FrameProducer for IconViewer {
 
         self.chrome
             .draw(adapter, self.window_width, self.window_height);
+        self.chrome
+            .draw_cursor(adapter, self.window_width, self.window_height, self.mouse);
         if adapter.end_frame().is_ok() {
             self.render_frames_remaining = self.render_frames_remaining.saturating_sub(1);
         }
@@ -8999,6 +9027,9 @@ impl FrameProducer for EventEditor {
         match event {
             InputEvent::CursorMoved { x, y } => {
                 self.mouse = Point { x, y };
+            }
+            InputEvent::CursorLeft => {
+                self.mouse = hidden_cursor_point();
             }
             InputEvent::MouseButton {
                 button: InputMouseButton::Left,
