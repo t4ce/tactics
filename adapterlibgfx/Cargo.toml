@@ -20,4 +20,3 @@ winit = "0.30.13"
 [features]
 default = ["ffi"]
 ffi = []
-shaderson = []

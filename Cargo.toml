@@ -12,7 +12,6 @@ asset-files = ["world.json", "techtree"]
 default = ["desktop-gfx"]
 chat = ["dep:reqwest"]
 desktop-gfx = ["dep:adapterlibgfx"]
-shaderson = ["desktop-gfx", "adapterlibgfx/shaderson"]
 trueos-blueprint = []
 
 [dependencies]

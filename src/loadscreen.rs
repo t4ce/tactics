@@ -178,7 +178,7 @@ pub(super) struct LoadScreen {
     background_world: TileWorld,
     background_visible: Vec<bool>,
     background_cloud_instances: Vec<CloudInstance>,
-    background_scene_index: u64,
+    background_backdrop_index: u64,
     started_at: Instant,
     lobbies: Vec<Lobby>,
     active_lobby: Option<Lobby>,
@@ -271,9 +271,9 @@ impl LoadScreen {
         let water_visuals = load_water_visual_assets();
         let plant_props = load_plant_prop_assets();
         let clouds = load_cloud_assets();
-        let background_scene_index = 0;
+        let background_backdrop_index = 0;
         let (background_world, background_visible, background_cloud_instances) =
-            generate_loadscreen_background_scene(background_scene_index, &clouds);
+            generate_loadscreen_background_backdrop(background_backdrop_index, &clouds);
 
         Self {
             terrain,
@@ -358,7 +358,7 @@ impl LoadScreen {
             background_world,
             background_visible,
             background_cloud_instances,
-            background_scene_index,
+            background_backdrop_index,
             started_at: Instant::now(),
             lobbies: Vec::new(),
             active_lobby: None,
@@ -735,27 +735,27 @@ impl LoadScreen {
         }
     }
 
-    fn update_background_scene(&mut self) {
-        let scene_index = self.started_at.elapsed().as_secs() / LOADSCREEN_BACKGROUND_RESEED_SECS;
-        if scene_index == self.background_scene_index {
+    fn update_background_backdrop(&mut self) {
+        let backdrop_index = self.started_at.elapsed().as_secs() / LOADSCREEN_BACKGROUND_RESEED_SECS;
+        if backdrop_index == self.background_backdrop_index {
             return;
         }
 
         let (world, visible, clouds) =
-            generate_loadscreen_background_scene(scene_index, &self.clouds);
+            generate_loadscreen_background_backdrop(backdrop_index, &self.clouds);
         self.background_world = world;
         self.background_visible = visible;
         self.background_cloud_instances = clouds;
-        self.background_scene_index = scene_index;
+        self.background_backdrop_index = backdrop_index;
     }
 
-    fn background_camera(&self) -> Point {
+    fn background_view_origin(&self) -> Point {
         let elapsed = self.started_at.elapsed().as_secs_f32();
         let view_w = self.window_width as f32 / LOADSCREEN_BACKGROUND_SCALE;
         let view_h = self.window_height as f32 / LOADSCREEN_BACKGROUND_SCALE;
         let max_x = (self.background_world.width_px() - view_w).max(0.0);
         let max_y = (self.background_world.height_px() - view_h).max(0.0);
-        let seed_offset = self.background_scene_index as f32 * 173.0;
+        let seed_offset = self.background_backdrop_index as f32 * 173.0;
         Point {
             x: if max_x > 0.0 {
                 (elapsed * LOADSCREEN_BACKGROUND_PAN_X + seed_offset).rem_euclid(max_x)
@@ -770,26 +770,26 @@ impl LoadScreen {
         }
     }
 
-    fn draw_background_scene(&self, adapter: &mut Adapter) {
+    fn draw_background_backdrop(&self, adapter: &mut Adapter) {
         if LOADSCREEN_BACKGROUND_BLUR_ENABLED {
             let _ = adapter.set_render_target(LOADSCREEN_BACKGROUND_BLUR_TEXTURE);
-            self.draw_background_scene_to_current_target(adapter);
+            self.draw_background_backdrop_to_current_target(adapter);
             let _ = adapter.set_render_target(0);
-            self.draw_blurred_background_scene(adapter);
+            self.draw_blurred_background_backdrop(adapter);
         } else {
-            self.draw_background_scene_to_current_target(adapter);
+            self.draw_background_backdrop_to_current_target(adapter);
         }
     }
 
-    fn draw_background_scene_to_current_target(&self, adapter: &mut Adapter) {
-        let camera = self.background_camera();
+    fn draw_background_backdrop_to_current_target(&self, adapter: &mut Adapter) {
+        let view_origin = self.background_view_origin();
         let tile_size = TILE_SIZE * LOADSCREEN_BACKGROUND_SCALE;
         let view_w = self.window_width as f32 / LOADSCREEN_BACKGROUND_SCALE;
         let view_h = self.window_height as f32 / LOADSCREEN_BACKGROUND_SCALE;
-        let start_col = (camera.x / TILE_SIZE).floor().max(0.0) as usize;
-        let start_row = (camera.y / TILE_SIZE).floor().max(0.0) as usize;
-        let end_col = ((camera.x + view_w) / TILE_SIZE).ceil() as usize + 1;
-        let end_row = ((camera.y + view_h) / TILE_SIZE).ceil() as usize + 1;
+        let start_col = (view_origin.x / TILE_SIZE).floor().max(0.0) as usize;
+        let start_row = (view_origin.y / TILE_SIZE).floor().max(0.0) as usize;
+        let end_col = ((view_origin.x + view_w) / TILE_SIZE).ceil() as usize + 1;
+        let end_row = ((view_origin.y + view_h) / TILE_SIZE).ceil() as usize + 1;
         let tint = Rgba8::new(255, 255, 255, LOADSCREEN_BACKGROUND_ALPHA);
         let mut water = SolidBatch::new(self.window_width, self.window_height);
         let mut backgrounds = SpriteBatch::new(self.window_width, self.window_height);
@@ -803,8 +803,8 @@ impl LoadScreen {
                     continue;
                 }
 
-                let x = (col as f32 * TILE_SIZE - camera.x) * LOADSCREEN_BACKGROUND_SCALE;
-                let y = (row as f32 * TILE_SIZE - camera.y) * LOADSCREEN_BACKGROUND_SCALE;
+                let x = (col as f32 * TILE_SIZE - view_origin.x) * LOADSCREEN_BACKGROUND_SCALE;
+                let y = (row as f32 * TILE_SIZE - view_origin.y) * LOADSCREEN_BACKGROUND_SCALE;
                 match self.background_world.render_background(col, row) {
                     BackgroundTile::Water => {
                         water.rect(
@@ -844,12 +844,12 @@ impl LoadScreen {
             adapter.draw_sprite_batch_no_present(self.terrain.texture_id, &under_foregrounds.bytes);
         let _ = adapter.draw_sprite_batch_no_present(self.terrain.texture_id, &foregrounds.bytes);
 
-        self.draw_background_world_assets(adapter, camera, start_col, start_row, end_col, end_row);
-        self.draw_background_clouds(adapter, camera);
+        self.draw_background_world_assets(adapter, view_origin, start_col, start_row, end_col, end_row);
+        self.draw_background_clouds(adapter, view_origin);
         let _ = adapter.set_texture_effect(TextureEffect::Plain);
     }
 
-    fn draw_blurred_background_scene(&self, adapter: &mut Adapter) {
+    fn draw_blurred_background_backdrop(&self, adapter: &mut Adapter) {
         let mut background = SpriteBatch::new(self.window_width, self.window_height);
         background.image(
             0.0,
@@ -867,7 +867,7 @@ impl LoadScreen {
     fn draw_background_world_assets(
         &self,
         adapter: &mut Adapter,
-        camera: Point,
+        view_origin: Point,
         start_col: usize,
         start_row: usize,
         end_col: usize,
@@ -893,7 +893,7 @@ impl LoadScreen {
                     image,
                     col,
                     row,
-                    camera,
+                    view_origin,
                     Rgba8::new(255, 255, 255, LOADSCREEN_BACKGROUND_ALPHA),
                 );
             }
@@ -924,7 +924,7 @@ impl LoadScreen {
                     image,
                     prop.x2,
                     prop.y2,
-                    camera,
+                    view_origin,
                     offset.x,
                     kind.render_offset_y() + offset.y,
                     kind.render_scale(),
@@ -955,15 +955,15 @@ impl LoadScreen {
         image: &ImageAsset,
         col: usize,
         row: usize,
-        camera: Point,
+        view_origin: Point,
         tint: Rgba8,
     ) {
         let w = image.width as f32 * BUILDING_SCALE * LOADSCREEN_BACKGROUND_SCALE;
         let h = image.height as f32 * BUILDING_SCALE * LOADSCREEN_BACKGROUND_SCALE;
         let tile_size = TILE_SIZE * LOADSCREEN_BACKGROUND_SCALE;
-        let x = (col as f32 * TILE_SIZE - camera.x) * LOADSCREEN_BACKGROUND_SCALE
+        let x = (col as f32 * TILE_SIZE - view_origin.x) * LOADSCREEN_BACKGROUND_SCALE
             + (tile_size - w) * 0.5;
-        let y = (row as f32 * TILE_SIZE - camera.y) * LOADSCREEN_BACKGROUND_SCALE
+        let y = (row as f32 * TILE_SIZE - view_origin.y) * LOADSCREEN_BACKGROUND_SCALE
             + (tile_size - h) * 0.5;
         self.push_background_image_batch(batches, image.texture_id, x, y, w, h, tint);
     }
@@ -974,7 +974,7 @@ impl LoadScreen {
         image: &ImageAsset,
         x2: usize,
         y2: usize,
-        camera: Point,
+        view_origin: Point,
         offset_x: f32,
         offset_y: f32,
         scale: f32,
@@ -983,10 +983,10 @@ impl LoadScreen {
         let w = image.width as f32 * BUILDING_SCALE * scale * LOADSCREEN_BACKGROUND_SCALE;
         let h = image.height as f32 * BUILDING_SCALE * scale * LOADSCREEN_BACKGROUND_SCALE;
         let tile_size = TILE_SIZE * LOADSCREEN_BACKGROUND_SCALE;
-        let x = (half_grid_to_px(x2) - camera.x) * LOADSCREEN_BACKGROUND_SCALE
+        let x = (half_grid_to_px(x2) - view_origin.x) * LOADSCREEN_BACKGROUND_SCALE
             + (tile_size - w) * 0.5
             + offset_x * LOADSCREEN_BACKGROUND_SCALE;
-        let y = (half_grid_to_px(y2 + BUILDING_GRID_DIVISIONS) - camera.y)
+        let y = (half_grid_to_px(y2 + BUILDING_GRID_DIVISIONS) - view_origin.y)
             * LOADSCREEN_BACKGROUND_SCALE
             - h
             + offset_y * LOADSCREEN_BACKGROUND_SCALE;
@@ -1015,7 +1015,7 @@ impl LoadScreen {
             );
     }
 
-    fn draw_background_clouds(&self, adapter: &mut Adapter, camera: Point) {
+    fn draw_background_clouds(&self, adapter: &mut Adapter, view_origin: Point) {
         if self.clouds.is_empty() {
             return;
         }
@@ -1038,8 +1038,8 @@ impl LoadScreen {
                 - image.width as f32 * scale * 0.5;
             let world_y = (cloud.y + cloud.drift_y * elapsed).rem_euclid(wrap_h)
                 - image.height as f32 * scale * 0.5;
-            let x = (world_x - camera.x) * LOADSCREEN_BACKGROUND_SCALE;
-            let y = (world_y - camera.y) * LOADSCREEN_BACKGROUND_SCALE;
+            let x = (world_x - view_origin.x) * LOADSCREEN_BACKGROUND_SCALE;
+            let y = (world_y - view_origin.y) * LOADSCREEN_BACKGROUND_SCALE;
             let w = image.width as f32 * scale * LOADSCREEN_BACKGROUND_SCALE;
             let h = image.height as f32 * scale * LOADSCREEN_BACKGROUND_SCALE;
 
@@ -1844,7 +1844,7 @@ impl FrameProducer for LoadScreen {
     fn build_frame(&mut self, adapter: &mut Adapter) {
         self.poll_lobbies();
         self.poll_chat();
-        self.update_background_scene();
+        self.update_background_backdrop();
         self.upload_assets(adapter);
         if LOADSCREEN_BACKGROUND_BLUR_ENABLED {
             self.ensure_background_blur_target(adapter);
@@ -1854,7 +1854,7 @@ impl FrameProducer for LoadScreen {
         let _ = adapter.set_sampler_raw(0, 0, 0, 0);
         let _ = adapter.set_blend_raw(1, 0x0302, 0x0303);
 
-        self.draw_background_scene(adapter);
+        self.draw_background_backdrop(adapter);
         let table_layout = offset_table_layout(
             loadscreen_table_layout(self.window_width as f32, self.window_height as f32),
             self.layout_offset,
@@ -2286,11 +2286,11 @@ fn chat_http_client() -> Result<reqwest::Client, String> {
         .map_err(|error| format!("chat client: {error}"))
 }
 
-fn generate_loadscreen_background_scene(
-    scene_index: u64,
+fn generate_loadscreen_background_backdrop(
+    backdrop_index: u64,
     cloud_assets: &[ImageAsset],
 ) -> (TileWorld, Vec<bool>, Vec<CloudInstance>) {
-    let seed = DEFAULT_SEED ^ 0x10AD_5CEE_2026 ^ scene_index.wrapping_mul(0x9E37_79B9_7F4A_7C15);
+    let seed = DEFAULT_SEED ^ 0x10AD_5CEE_2026 ^ backdrop_index.wrapping_mul(0x9E37_79B9_7F4A_7C15);
     let mut generator = wldgenerator::RunningGenerator::new(WORLD_COLS, WORLD_ROWS, seed);
     generator.complete_initial_seeds();
     while generator.fill_visual_voids_once(256) != 0 {}

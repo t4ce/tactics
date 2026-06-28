@@ -1414,7 +1414,7 @@ struct Game {
     selected: Option<Brush>,
     fog_drag_start: Option<(usize, usize)>,
     mouse: Point,
-    camera: Point,
+    view_origin: Point,
     left_down: bool,
     right_down: bool,
     ctrl_down: bool,
@@ -1485,7 +1485,7 @@ struct IdleWorldViewer {
     placement_building: Option<BuildingKind>,
     show_hotkey_menu: bool,
     mouse: Point,
-    camera: Point,
+    view_origin: Point,
     panning: bool,
     uploaded: bool,
     window_width: u32,
@@ -2389,7 +2389,7 @@ impl Game {
             selected: None,
             fog_drag_start: None,
             mouse: Point::default(),
-            camera: Point::default(),
+            view_origin: Point::default(),
             left_down: false,
             right_down: false,
             ctrl_down: false,
@@ -2418,7 +2418,7 @@ impl Game {
     fn resize_view(&mut self, width: u32, height: u32) {
         self.window_width = width.max(1);
         self.window_height = height.max(1);
-        self.clamp_camera();
+        self.clamp_view_origin();
     }
 
     fn window_w(&self) -> f32 {
@@ -2548,7 +2548,7 @@ impl Game {
         self.uploaded = true;
     }
 
-    fn update_camera(&mut self) {
+    fn update_view_origin(&mut self) {
         let now = Instant::now();
         let dt = now.duration_since(self.last_frame).as_secs_f32().min(0.05);
         self.last_frame = now;
@@ -2574,16 +2574,16 @@ impl Game {
             dy = scroll_strength(VIEW_Y + view_h - self.mouse.y);
         }
 
-        self.camera.x += dx * EDGE_SCROLL_SPEED * dt;
-        self.camera.y += dy * EDGE_SCROLL_SPEED * dt;
-        self.clamp_camera();
+        self.view_origin.x += dx * EDGE_SCROLL_SPEED * dt;
+        self.view_origin.y += dy * EDGE_SCROLL_SPEED * dt;
+        self.clamp_view_origin();
     }
 
-    fn clamp_camera(&mut self) {
+    fn clamp_view_origin(&mut self) {
         let max_x = (self.world.width_px() - self.view_w()).max(0.0);
         let max_y = (self.world.height_px() - self.view_h()).max(0.0);
-        self.camera.x = self.camera.x.clamp(0.0, max_x);
-        self.camera.y = self.camera.y.clamp(0.0, max_y);
+        self.view_origin.x = self.view_origin.x.clamp(0.0, max_x);
+        self.view_origin.y = self.view_origin.y.clamp(0.0, max_y);
     }
 
     fn update_environment(&mut self, dt: f32) {
@@ -2835,15 +2835,15 @@ impl Game {
                 return;
             }
             match edge {
-                WorldEdge::Top => self.camera.y -= TILE_SIZE,
-                WorldEdge::Left => self.camera.x -= TILE_SIZE,
+                WorldEdge::Top => self.view_origin.y -= TILE_SIZE,
+                WorldEdge::Left => self.view_origin.x -= TILE_SIZE,
                 WorldEdge::Bottom | WorldEdge::Right => {}
             }
         } else {
             self.world.add_edge(edge);
             match edge {
-                WorldEdge::Top => self.camera.y += TILE_SIZE,
-                WorldEdge::Left => self.camera.x += TILE_SIZE,
+                WorldEdge::Top => self.view_origin.y += TILE_SIZE,
+                WorldEdge::Left => self.view_origin.x += TILE_SIZE,
                 WorldEdge::Bottom | WorldEdge::Right => {}
             }
         }
@@ -2853,7 +2853,7 @@ impl Game {
         self.gold_animations.clear();
         self.fog_drag_start = None;
         self.terrain_cache.mark_dirty();
-        self.clamp_camera();
+        self.clamp_view_origin();
     }
 
     fn world_cell_at(&self, x: f32, y: f32) -> Option<(usize, usize)> {
@@ -2861,8 +2861,8 @@ impl Game {
             return None;
         }
 
-        let world_x = x - VIEW_X + self.camera.x;
-        let world_y = y - VIEW_Y + self.camera.y;
+        let world_x = x - VIEW_X + self.view_origin.x;
+        let world_y = y - VIEW_Y + self.view_origin.y;
         let col = (world_x / TILE_SIZE).floor() as usize;
         let row = (world_y / TILE_SIZE).floor() as usize;
         if col < self.world.cols && row < self.world.rows {
@@ -2877,8 +2877,8 @@ impl Game {
             return None;
         }
 
-        let world_x = x - VIEW_X + self.camera.x;
-        let world_y = y - VIEW_Y + self.camera.y;
+        let world_x = x - VIEW_X + self.view_origin.x;
+        let world_y = y - VIEW_Y + self.view_origin.y;
         let half_tile = TILE_SIZE / BUILDING_GRID_DIVISIONS as f32;
         let x2 = (world_x / half_tile).floor() as usize;
         let y2 = (world_y / half_tile).floor() as usize;
@@ -2982,17 +2982,17 @@ impl Game {
         let mut backgrounds = SpriteBatch::new(self.window_width, self.window_height);
         let mut under_foregrounds = SpriteBatch::new(self.window_width, self.window_height);
         let mut foregrounds = SpriteBatch::new(self.window_width, self.window_height);
-        let start_col = (self.camera.x / TILE_SIZE).floor().max(0.0) as usize;
-        let start_row = (self.camera.y / TILE_SIZE).floor().max(0.0) as usize;
-        let end_col = ((self.camera.x + self.view_w()) / TILE_SIZE).ceil() as usize + 1;
-        let end_row = ((self.camera.y + self.view_h()) / TILE_SIZE).ceil() as usize + 1;
+        let start_col = (self.view_origin.x / TILE_SIZE).floor().max(0.0) as usize;
+        let start_row = (self.view_origin.y / TILE_SIZE).floor().max(0.0) as usize;
+        let end_col = ((self.view_origin.x + self.view_w()) / TILE_SIZE).ceil() as usize + 1;
+        let end_row = ((self.view_origin.y + self.view_h()) / TILE_SIZE).ceil() as usize + 1;
 
         for row in start_row..end_row.min(self.world.rows) {
             for col in start_col..end_col.min(self.world.cols) {
                 if self.world.render_background(col, row) == BackgroundTile::Water {
                     water.rect(
-                        VIEW_X + col as f32 * TILE_SIZE - self.camera.x,
-                        VIEW_Y + row as f32 * TILE_SIZE - self.camera.y,
+                        VIEW_X + col as f32 * TILE_SIZE - self.view_origin.x,
+                        VIEW_Y + row as f32 * TILE_SIZE - self.view_origin.y,
                         TILE_SIZE,
                         TILE_SIZE,
                         Rgba8::new(71, 171, 169, 255),
@@ -3007,8 +3007,8 @@ impl Game {
             .iter()
             .filter(|cell| terrain_cell_visible(cell, start_col, start_row, end_col, end_row))
         {
-            let x = VIEW_X + cell.col as f32 * TILE_SIZE - self.camera.x;
-            let y = VIEW_Y + cell.row as f32 * TILE_SIZE - self.camera.y;
+            let x = VIEW_X + cell.col as f32 * TILE_SIZE - self.view_origin.x;
+            let y = VIEW_Y + cell.row as f32 * TILE_SIZE - self.view_origin.y;
             backgrounds.sprite(
                 &self.terrain,
                 cell.tile,
@@ -3026,8 +3026,8 @@ impl Game {
             .iter()
             .filter(|cell| terrain_cell_visible(cell, start_col, start_row, end_col, end_row))
         {
-            let x = VIEW_X + cell.col as f32 * TILE_SIZE - self.camera.x;
-            let y = VIEW_Y + cell.row as f32 * TILE_SIZE - self.camera.y;
+            let x = VIEW_X + cell.col as f32 * TILE_SIZE - self.view_origin.x;
+            let y = VIEW_Y + cell.row as f32 * TILE_SIZE - self.view_origin.y;
             under_foregrounds.sprite(
                 &self.terrain,
                 cell.tile,
@@ -3045,8 +3045,8 @@ impl Game {
             .iter()
             .filter(|cell| terrain_cell_visible(cell, start_col, start_row, end_col, end_row))
         {
-            let x = VIEW_X + cell.col as f32 * TILE_SIZE - self.camera.x;
-            let y = VIEW_Y + cell.row as f32 * TILE_SIZE - self.camera.y;
+            let x = VIEW_X + cell.col as f32 * TILE_SIZE - self.view_origin.x;
+            let y = VIEW_Y + cell.row as f32 * TILE_SIZE - self.view_origin.y;
             foregrounds.sprite(
                 &self.terrain,
                 cell.tile,
@@ -3062,8 +3062,8 @@ impl Game {
             self.selected,
             self.world_cell_at(self.mouse.x, self.mouse.y),
         ) {
-            let x = VIEW_X + col as f32 * TILE_SIZE - self.camera.x;
-            let y = VIEW_Y + row as f32 * TILE_SIZE - self.camera.y;
+            let x = VIEW_X + col as f32 * TILE_SIZE - self.view_origin.x;
+            let y = VIEW_Y + row as f32 * TILE_SIZE - self.view_origin.y;
             match brush {
                 Brush::Ramp(ramp) if row + 1 < self.world.rows => {
                     let tint = if self.world.can_place_ramp(col, row) {
@@ -3115,10 +3115,10 @@ impl Game {
 
     fn draw_water_states(&self, adapter: &mut Adapter) {
         let elapsed_ms = self.started_at.elapsed().as_millis() as u32;
-        let start_col = (self.camera.x / TILE_SIZE).floor().max(0.0) as usize;
-        let start_row = (self.camera.y / TILE_SIZE).floor().max(0.0) as usize;
-        let end_col = ((self.camera.x + self.view_w()) / TILE_SIZE).ceil() as usize + 1;
-        let end_row = ((self.camera.y + self.view_h()) / TILE_SIZE).ceil() as usize + 1;
+        let start_col = (self.view_origin.x / TILE_SIZE).floor().max(0.0) as usize;
+        let start_row = (self.view_origin.y / TILE_SIZE).floor().max(0.0) as usize;
+        let end_col = ((self.view_origin.x + self.view_w()) / TILE_SIZE).ceil() as usize + 1;
+        let end_row = ((self.view_origin.y + self.view_h()) / TILE_SIZE).ceil() as usize + 1;
         let mut batches = BTreeMap::new();
 
         for row in start_row..end_row.min(self.world.rows) {
@@ -3161,8 +3161,8 @@ impl Game {
     ) {
         let w = image.width as f32 * BUILDING_SCALE;
         let h = image.height as f32 * BUILDING_SCALE;
-        let x = VIEW_X + col as f32 * TILE_SIZE - self.camera.x + (TILE_SIZE - w) * 0.5;
-        let y = VIEW_Y + row as f32 * TILE_SIZE - self.camera.y + (TILE_SIZE - h) * 0.5;
+        let x = VIEW_X + col as f32 * TILE_SIZE - self.view_origin.x + (TILE_SIZE - w) * 0.5;
+        let y = VIEW_Y + row as f32 * TILE_SIZE - self.view_origin.y + (TILE_SIZE - h) * 0.5;
         self.push_image_batch(
             batches,
             image.texture_id,
@@ -3233,8 +3233,8 @@ impl Game {
                     terrain_batch.sprite(
                         &self.terrain,
                         tile,
-                        VIEW_X + half_grid_to_px(prop.x2) - self.camera.x,
-                        VIEW_Y + half_grid_to_px(prop.y2) - self.camera.y,
+                        VIEW_X + half_grid_to_px(prop.x2) - self.view_origin.x,
+                        VIEW_Y + half_grid_to_px(prop.y2) - self.view_origin.y,
                         TILE_SIZE,
                         TILE_SIZE,
                         Rgba8::WHITE,
@@ -3484,9 +3484,9 @@ impl Game {
     ) {
         let w = image.width as f32 * BUILDING_SCALE * scale;
         let h = image.height as f32 * BUILDING_SCALE * scale;
-        let x = VIEW_X + half_grid_to_px(x2) - self.camera.x + (TILE_SIZE - w) * 0.5 + offset_x;
+        let x = VIEW_X + half_grid_to_px(x2) - self.view_origin.x + (TILE_SIZE - w) * 0.5 + offset_x;
         let y =
-            VIEW_Y + half_grid_to_px(y2 + BUILDING_GRID_DIVISIONS) - self.camera.y - h + offset_y;
+            VIEW_Y + half_grid_to_px(y2 + BUILDING_GRID_DIVISIONS) - self.view_origin.y - h + offset_y;
         self.push_image_batch(
             batches,
             image.texture_id,
@@ -3544,8 +3544,8 @@ impl Game {
                 - image.width as f32 * scale * 0.5;
             let world_y = (cloud.y + cloud.drift_y * elapsed).rem_euclid(wrap_h)
                 - image.height as f32 * scale * 0.5;
-            let x = VIEW_X + world_x - self.camera.x;
-            let y = VIEW_Y + world_y - self.camera.y;
+            let x = VIEW_X + world_x - self.view_origin.x;
+            let y = VIEW_Y + world_y - self.view_origin.y;
             let w = image.width as f32 * scale;
             let h = image.height as f32 * scale;
 
@@ -3574,8 +3574,8 @@ impl Game {
         let mut batches = BTreeMap::new();
         for building in &self.world.buildings {
             let image = &self.buildings[building.kind.index()];
-            let x = VIEW_X + signed_half_grid_to_px(building.x2) - self.camera.x;
-            let y = VIEW_Y + signed_half_grid_to_px(building.y2) - self.camera.y;
+            let x = VIEW_X + signed_half_grid_to_px(building.x2) - self.view_origin.x;
+            let y = VIEW_Y + signed_half_grid_to_px(building.y2) - self.view_origin.y;
             let w = image.width as f32 * BUILDING_SCALE;
             let h = image.height as f32 * BUILDING_SCALE;
             if x + w < VIEW_X
@@ -3609,8 +3609,8 @@ impl Game {
         };
         let mut sprite = SpriteBatch::new(self.window_width, self.window_height);
         sprite.image(
-            VIEW_X + signed_half_grid_to_px(x2) - self.camera.x,
-            VIEW_Y + signed_half_grid_to_px(y2) - self.camera.y,
+            VIEW_X + signed_half_grid_to_px(x2) - self.view_origin.x,
+            VIEW_Y + signed_half_grid_to_px(y2) - self.view_origin.y,
             image.width as f32 * BUILDING_SCALE,
             image.height as f32 * BUILDING_SCALE,
             tint,
@@ -3620,17 +3620,17 @@ impl Game {
 
     fn draw_fog(&self, adapter: &mut Adapter) {
         let mut fog = SpriteBatch::new(self.window_width, self.window_height);
-        let start_col = (self.camera.x / TILE_SIZE).floor().max(0.0) as usize;
-        let start_row = (self.camera.y / TILE_SIZE).floor().max(0.0) as usize;
-        let end_col = ((self.camera.x + self.view_w()) / TILE_SIZE).ceil() as usize + 1;
-        let end_row = ((self.camera.y + self.view_h()) / TILE_SIZE).ceil() as usize + 1;
+        let start_col = (self.view_origin.x / TILE_SIZE).floor().max(0.0) as usize;
+        let start_row = (self.view_origin.y / TILE_SIZE).floor().max(0.0) as usize;
+        let end_col = ((self.view_origin.x + self.view_w()) / TILE_SIZE).ceil() as usize + 1;
+        let end_row = ((self.view_origin.y + self.view_h()) / TILE_SIZE).ceil() as usize + 1;
 
         for row in start_row..end_row.min(self.world.rows) {
             for col in start_col..end_col.min(self.world.cols) {
                 if self.world.fog(col, row) {
                     fog.image(
-                        VIEW_X + col as f32 * TILE_SIZE - self.camera.x,
-                        VIEW_Y + row as f32 * TILE_SIZE - self.camera.y,
+                        VIEW_X + col as f32 * TILE_SIZE - self.view_origin.x,
+                        VIEW_Y + row as f32 * TILE_SIZE - self.view_origin.y,
                         TILE_SIZE,
                         TILE_SIZE,
                         Rgba8::new(255, 255, 255, 190),
@@ -3649,8 +3649,8 @@ impl Game {
                 if self.selected == Some(Brush::FogRect) {
                     if self.left_down && self.fog_drag_start.is_some() {
                         let rect = self.fog_selection_rect((col, row));
-                        let x = VIEW_X + rect.0 as f32 * TILE_SIZE - self.camera.x;
-                        let y = VIEW_Y + rect.1 as f32 * TILE_SIZE - self.camera.y;
+                        let x = VIEW_X + rect.0 as f32 * TILE_SIZE - self.view_origin.x;
+                        let y = VIEW_Y + rect.1 as f32 * TILE_SIZE - self.view_origin.y;
                         let width = ((rect.2 - rect.0 + 1) as f32) * TILE_SIZE;
                         let height = ((rect.3 - rect.1 + 1) as f32) * TILE_SIZE;
                         self.draw_selection_corners(adapter, x, y, width, height);
@@ -3716,8 +3716,8 @@ impl Game {
                     ),
                 };
                 let (footprint_x2, footprint_y2, footprint_w2, footprint_h2) = footprint_rect2;
-                let x = VIEW_X + signed_half_grid_to_px(footprint_x2) - self.camera.x;
-                let y = VIEW_Y + signed_half_grid_to_px(footprint_y2) - self.camera.y;
+                let x = VIEW_X + signed_half_grid_to_px(footprint_x2) - self.view_origin.x;
+                let y = VIEW_Y + signed_half_grid_to_px(footprint_y2) - self.view_origin.y;
                 let width = half_grid_to_px(footprint_w2);
                 let height = half_grid_to_px(footprint_h2);
                 outline_rect(
@@ -4131,7 +4131,7 @@ impl Game {
                 self.plant_animations.clear();
                 self.gold_animations.clear();
                 self.terrain_cache.mark_dirty();
-                self.clamp_camera();
+                self.clamp_view_origin();
                 eprintln!("loaded world from {WORLD_SAVE_PATH}");
             }
             Err(error) => eprintln!("failed to load {WORLD_SAVE_PATH}: {error}"),
@@ -4216,7 +4216,7 @@ impl FrameProducer for Game {
 
     fn build_frame(&mut self, adapter: &mut Adapter) {
         self.upload_assets(adapter);
-        self.update_camera();
+        self.update_view_origin();
         self.draw(adapter);
     }
 }
@@ -4437,7 +4437,7 @@ impl IdleWorldViewer {
             placement_building: None,
             show_hotkey_menu: false,
             mouse: Point::default(),
-            camera: Point::default(),
+            view_origin: Point::default(),
             panning: false,
             uploaded: false,
             window_width: WINDOW_WIDTH,
@@ -4468,7 +4468,7 @@ impl IdleWorldViewer {
     fn resize_view(&mut self, width: u32, height: u32) {
         self.window_width = width.max(1);
         self.window_height = height.max(1);
-        self.clamp_idle_camera();
+        self.clamp_idle_view_origin();
     }
 
     fn upload_assets(&mut self, adapter: &mut Adapter) {
@@ -4655,20 +4655,20 @@ impl IdleWorldViewer {
         self.window_height as f32
     }
 
-    fn clamp_idle_camera(&mut self) {
+    fn clamp_idle_view_origin(&mut self) {
         let max_x = (self.world.width_px() - self.idle_view_w()).max(0.0);
         let max_y = (self.world.height_px() - self.idle_view_h()).max(0.0);
-        self.camera.x = self.camera.x.clamp(0.0, max_x);
-        self.camera.y = self.camera.y.clamp(0.0, max_y);
+        self.view_origin.x = self.view_origin.x.clamp(0.0, max_x);
+        self.view_origin.y = self.view_origin.y.clamp(0.0, max_y);
     }
 
-    fn scroll_idle_camera(&mut self, dx: f32, dy: f32) {
-        self.camera.x += dx;
-        self.camera.y += dy;
-        self.clamp_idle_camera();
+    fn scroll_idle_view_origin(&mut self, dx: f32, dy: f32) {
+        self.view_origin.x += dx;
+        self.view_origin.y += dy;
+        self.clamp_idle_view_origin();
     }
 
-    fn update_idle_camera(&mut self, dt: f32) {
+    fn update_idle_view_origin(&mut self, dt: f32) {
         if self.show_hotkey_menu
             || !inside_rect(
                 self.mouse.x,
@@ -4696,13 +4696,13 @@ impl IdleWorldViewer {
             dy = scroll_strength(self.idle_view_h() - self.mouse.y);
         }
 
-        self.scroll_idle_camera(dx * EDGE_SCROLL_SPEED * dt, dy * EDGE_SCROLL_SPEED * dt);
+        self.scroll_idle_view_origin(dx * EDGE_SCROLL_SPEED * dt, dy * EDGE_SCROLL_SPEED * dt);
     }
 
     fn idle_world_point_at(&self, point: Point) -> Point {
         Point {
-            x: point.x + self.camera.x,
-            y: point.y + self.camera.y,
+            x: point.x + self.view_origin.x,
+            y: point.y + self.view_origin.y,
         }
     }
 
@@ -4800,7 +4800,7 @@ impl IdleWorldViewer {
         self.last_frame = now;
         let elapsed_ms = self.elapsed_ms();
         self.update_idle_environment(dt, elapsed_ms);
-        self.update_idle_camera(dt);
+        self.update_idle_view_origin(dt);
         self.update_right_click_indicators();
         self.update_idle_retile_transition();
         self.apply_due_geomancer_wall_placements(elapsed_ms);
@@ -5558,8 +5558,8 @@ impl IdleWorldViewer {
         let h = frame.height as f32 * scale;
         Some((
             TableRect {
-                x: unit.position.x - self.camera.x - w * 0.5 + clip.offset_x,
-                y: unit.position.y - self.camera.y - h + clip.offset_y,
+                x: unit.position.x - self.view_origin.x - w * 0.5 + clip.offset_x,
+                y: unit.position.y - self.view_origin.y - h + clip.offset_y,
                 w,
                 h,
             },
@@ -5985,8 +5985,8 @@ impl IdleWorldViewer {
         let w = image.width as f32 * BUILDING_SCALE * scale;
         let h = image.height as f32 * BUILDING_SCALE * scale;
         TableRect {
-            x: half_grid_to_px(x2) - self.camera.x + (TILE_SIZE - w) * 0.5,
-            y: half_grid_to_px(y2 + BUILDING_GRID_DIVISIONS) - self.camera.y - h + offset_y,
+            x: half_grid_to_px(x2) - self.view_origin.x + (TILE_SIZE - w) * 0.5,
+            y: half_grid_to_px(y2 + BUILDING_GRID_DIVISIONS) - self.view_origin.y - h + offset_y,
             w: w.max(1.0),
             h: h.max(1.0),
         }
@@ -6009,17 +6009,17 @@ impl IdleWorldViewer {
         let mut backgrounds = SpriteBatch::new(self.window_width, self.window_height);
         let mut under_foregrounds = SpriteBatch::new(self.window_width, self.window_height);
         let mut foregrounds = SpriteBatch::new(self.window_width, self.window_height);
-        let start_col = (self.camera.x / TILE_SIZE).floor().max(0.0) as usize;
-        let start_row = (self.camera.y / TILE_SIZE).floor().max(0.0) as usize;
-        let end_col = ((self.camera.x + self.idle_view_w()) / TILE_SIZE).ceil() as usize + 1;
-        let end_row = ((self.camera.y + self.idle_view_h()) / TILE_SIZE).ceil() as usize + 1;
+        let start_col = (self.view_origin.x / TILE_SIZE).floor().max(0.0) as usize;
+        let start_row = (self.view_origin.y / TILE_SIZE).floor().max(0.0) as usize;
+        let end_col = ((self.view_origin.x + self.idle_view_w()) / TILE_SIZE).ceil() as usize + 1;
+        let end_row = ((self.view_origin.y + self.idle_view_h()) / TILE_SIZE).ceil() as usize + 1;
 
         for row in start_row..end_row.min(self.world.rows) {
             for col in start_col..end_col.min(self.world.cols) {
                 if self.world.render_background(col, row) == BackgroundTile::Water {
                     water.rect(
-                        col as f32 * TILE_SIZE - self.camera.x,
-                        row as f32 * TILE_SIZE - self.camera.y,
+                        col as f32 * TILE_SIZE - self.view_origin.x,
+                        row as f32 * TILE_SIZE - self.view_origin.y,
                         TILE_SIZE,
                         TILE_SIZE,
                         Rgba8::new(71, 171, 169, 255),
@@ -6037,8 +6037,8 @@ impl IdleWorldViewer {
             backgrounds.sprite(
                 &self.terrain,
                 cell.tile,
-                cell.col as f32 * TILE_SIZE - self.camera.x,
-                cell.row as f32 * TILE_SIZE - self.camera.y,
+                cell.col as f32 * TILE_SIZE - self.view_origin.x,
+                cell.row as f32 * TILE_SIZE - self.view_origin.y,
                 TILE_SIZE,
                 TILE_SIZE,
                 Rgba8::WHITE,
@@ -6054,8 +6054,8 @@ impl IdleWorldViewer {
             under_foregrounds.sprite(
                 &self.terrain,
                 cell.tile,
-                cell.col as f32 * TILE_SIZE - self.camera.x,
-                cell.row as f32 * TILE_SIZE - self.camera.y,
+                cell.col as f32 * TILE_SIZE - self.view_origin.x,
+                cell.row as f32 * TILE_SIZE - self.view_origin.y,
                 TILE_SIZE,
                 TILE_SIZE,
                 Rgba8::WHITE,
@@ -6071,8 +6071,8 @@ impl IdleWorldViewer {
             foregrounds.sprite(
                 &self.terrain,
                 cell.tile,
-                cell.col as f32 * TILE_SIZE - self.camera.x,
-                cell.row as f32 * TILE_SIZE - self.camera.y,
+                cell.col as f32 * TILE_SIZE - self.view_origin.x,
+                cell.row as f32 * TILE_SIZE - self.view_origin.y,
                 TILE_SIZE,
                 TILE_SIZE,
                 Rgba8::WHITE,
@@ -6114,8 +6114,8 @@ impl IdleWorldViewer {
         let mut foregrounds = SpriteBatch::new(self.window_width, self.window_height);
 
         for tile in &transition.flyout_tiles {
-            let x = tile.col as f32 * TILE_SIZE - self.camera.x + tile.dir_x * travel;
-            let y = tile.row as f32 * TILE_SIZE - self.camera.y + tile.dir_y * travel;
+            let x = tile.col as f32 * TILE_SIZE - self.view_origin.x + tile.dir_x * travel;
+            let y = tile.row as f32 * TILE_SIZE - self.view_origin.y + tile.dir_y * travel;
             let tint = Rgba8::new(255, 255, 255, alpha);
             match tile.background {
                 BackgroundTile::Water => {
@@ -6156,9 +6156,9 @@ impl IdleWorldViewer {
         let mut batch = SpriteBatch::new(self.window_width, self.window_height);
         let bob_y = transition.cover_bob_y(elapsed_ms);
         let angle_rad = transition.cover_rotation(elapsed_ms);
-        let origin_x = transition.rect.col as f32 * TILE_SIZE - self.camera.x
+        let origin_x = transition.rect.col as f32 * TILE_SIZE - self.view_origin.x
             + transition.rect.cols as f32 * TILE_SIZE * 0.5;
-        let origin_y = transition.rect.row as f32 * TILE_SIZE - self.camera.y
+        let origin_y = transition.rect.row as f32 * TILE_SIZE - self.view_origin.y
             + transition.rect.rows as f32 * TILE_SIZE * 0.5
             + bob_y;
 
@@ -6167,8 +6167,8 @@ impl IdleWorldViewer {
             else {
                 continue;
             };
-            let x = tile.col as f32 * TILE_SIZE - self.camera.x;
-            let y = tile.row as f32 * TILE_SIZE - self.camera.y + bob_y;
+            let x = tile.col as f32 * TILE_SIZE - self.view_origin.x;
+            let y = tile.row as f32 * TILE_SIZE - self.view_origin.y + bob_y;
             push_idle_retile_cover_tile(
                 &mut batch,
                 &self.retile_cover,
@@ -6233,8 +6233,8 @@ impl IdleWorldViewer {
                     continue;
                 }
 
-                let x = tile.col as f32 * TILE_SIZE - self.camera.x;
-                let y = tile.row as f32 * TILE_SIZE - self.camera.y + slide_y;
+                let x = tile.col as f32 * TILE_SIZE - self.view_origin.x;
+                let y = tile.row as f32 * TILE_SIZE - self.view_origin.y + slide_y;
                 let mut batch = SpriteBatch::new(self.window_width, self.window_height);
                 batch.image_uv_rotated_around(
                     x,
@@ -6279,12 +6279,12 @@ impl IdleWorldViewer {
     }
 
     fn set_idle_tile_scissor(&self, adapter: &mut Adapter, col: usize, row: usize) -> bool {
-        let left = (col as f32 * TILE_SIZE - self.camera.x).floor().max(0.0);
-        let top = (row as f32 * TILE_SIZE - self.camera.y).floor().max(0.0);
-        let right = (col as f32 * TILE_SIZE - self.camera.x + TILE_SIZE)
+        let left = (col as f32 * TILE_SIZE - self.view_origin.x).floor().max(0.0);
+        let top = (row as f32 * TILE_SIZE - self.view_origin.y).floor().max(0.0);
+        let right = (col as f32 * TILE_SIZE - self.view_origin.x + TILE_SIZE)
             .ceil()
             .min(self.window_width as f32);
-        let bottom = (row as f32 * TILE_SIZE - self.camera.y + TILE_SIZE)
+        let bottom = (row as f32 * TILE_SIZE - self.view_origin.y + TILE_SIZE)
             .ceil()
             .min(self.window_height as f32);
 
@@ -6303,10 +6303,10 @@ impl IdleWorldViewer {
 
     fn draw_idle_water_states(&self, adapter: &mut Adapter, elapsed_ms: u32) {
         let mut batches = BTreeMap::new();
-        let start_col = (self.camera.x / TILE_SIZE).floor().max(0.0) as usize;
-        let start_row = (self.camera.y / TILE_SIZE).floor().max(0.0) as usize;
-        let end_col = ((self.camera.x + self.idle_view_w()) / TILE_SIZE).ceil() as usize + 1;
-        let end_row = ((self.camera.y + self.idle_view_h()) / TILE_SIZE).ceil() as usize + 1;
+        let start_col = (self.view_origin.x / TILE_SIZE).floor().max(0.0) as usize;
+        let start_row = (self.view_origin.y / TILE_SIZE).floor().max(0.0) as usize;
+        let end_col = ((self.view_origin.x + self.idle_view_w()) / TILE_SIZE).ceil() as usize + 1;
+        let end_row = ((self.view_origin.y + self.idle_view_h()) / TILE_SIZE).ceil() as usize + 1;
 
         for row in start_row..end_row.min(self.world.rows) {
             for col in start_col..end_col.min(self.world.cols) {
@@ -6322,8 +6322,8 @@ impl IdleWorldViewer {
                         self.push_idle_image_batch(
                             &mut batches,
                             image.texture_id,
-                            col as f32 * TILE_SIZE - self.camera.x + (TILE_SIZE - w) * 0.5,
-                            row as f32 * TILE_SIZE - self.camera.y + (TILE_SIZE - h) * 0.5,
+                            col as f32 * TILE_SIZE - self.view_origin.x + (TILE_SIZE - w) * 0.5,
+                            row as f32 * TILE_SIZE - self.view_origin.y + (TILE_SIZE - h) * 0.5,
                             w.max(1.0),
                             h.max(1.0),
                             Rgba8::WHITE,
@@ -6345,8 +6345,8 @@ impl IdleWorldViewer {
                 self.push_idle_image_batch(
                     &mut batches,
                     image.texture_id,
-                    col as f32 * TILE_SIZE - self.camera.x + (TILE_SIZE - w) * 0.5,
-                    row as f32 * TILE_SIZE - self.camera.y + (TILE_SIZE - h) * 0.5,
+                    col as f32 * TILE_SIZE - self.view_origin.x + (TILE_SIZE - w) * 0.5,
+                    row as f32 * TILE_SIZE - self.view_origin.y + (TILE_SIZE - h) * 0.5,
                     w.max(1.0),
                     h.max(1.0),
                     Rgba8::WHITE,
@@ -6411,8 +6411,8 @@ impl IdleWorldViewer {
                     terrain_batch.sprite(
                         &self.terrain,
                         tile,
-                        half_grid_to_px(prop.x2) - self.camera.x,
-                        half_grid_to_px(prop.y2) - self.camera.y,
+                        half_grid_to_px(prop.x2) - self.view_origin.x,
+                        half_grid_to_px(prop.y2) - self.view_origin.y,
                         TILE_SIZE,
                         TILE_SIZE,
                         Rgba8::WHITE,
@@ -6534,8 +6534,8 @@ impl IdleWorldViewer {
         let elapsed_ms = self.started_at.elapsed().as_millis() as u32;
         for building in &self.world.buildings {
             let image = &self.buildings[building.kind.index()];
-            let x = signed_half_grid_to_px(building.x2) - self.camera.x;
-            let y = signed_half_grid_to_px(building.y2) - self.camera.y;
+            let x = signed_half_grid_to_px(building.x2) - self.view_origin.x;
+            let y = signed_half_grid_to_px(building.y2) - self.view_origin.y;
             let w = image.width as f32 * BUILDING_SCALE;
             let h = image.height as f32 * BUILDING_SCALE;
             if x + w < 0.0
@@ -6608,8 +6608,8 @@ impl IdleWorldViewer {
             return None;
         }
 
-        let x = x + self.camera.x;
-        let y = y + self.camera.y;
+        let x = x + self.view_origin.x;
+        let y = y + self.view_origin.y;
         let half_tile = TILE_SIZE / BUILDING_GRID_DIVISIONS as f32;
         let x2 = (x / half_tile).floor() as usize;
         let y2 = (y / half_tile).floor() as usize;
@@ -6667,8 +6667,8 @@ impl IdleWorldViewer {
         let mut overlay = SolidBatch::new(self.window_width, self.window_height);
         outline_rect(
             &mut overlay,
-            signed_half_grid_to_px(footprint_x2) - self.camera.x,
-            signed_half_grid_to_px(footprint_y2) - self.camera.y,
+            signed_half_grid_to_px(footprint_x2) - self.view_origin.x,
+            signed_half_grid_to_px(footprint_y2) - self.view_origin.y,
             half_grid_to_px(footprint_w2),
             half_grid_to_px(footprint_h2),
             2.0,
@@ -6682,8 +6682,8 @@ impl IdleWorldViewer {
 
         let mut sprite = SpriteBatch::new(self.window_width, self.window_height);
         sprite.image(
-            signed_half_grid_to_px(x2) - self.camera.x,
-            signed_half_grid_to_px(y2) - self.camera.y,
+            signed_half_grid_to_px(x2) - self.view_origin.x,
+            signed_half_grid_to_px(y2) - self.view_origin.y,
             image.width as f32 * BUILDING_SCALE,
             image.height as f32 * BUILDING_SCALE,
             tint,
@@ -6695,8 +6695,8 @@ impl IdleWorldViewer {
             let elapsed_ms = self.started_at.elapsed().as_millis() as u32;
             let icon_size = Self::idle_house_icon_size(elapsed_ms, icon_index);
             let mut inlay = SpriteBatch::new(self.window_width, self.window_height);
-            let x = signed_half_grid_to_px(x2) - self.camera.x;
-            let y = signed_half_grid_to_px(y2) - self.camera.y;
+            let x = signed_half_grid_to_px(x2) - self.view_origin.x;
+            let y = signed_half_grid_to_px(y2) - self.view_origin.y;
             let w = image.width as f32 * BUILDING_SCALE;
             let h = image.height as f32 * BUILDING_SCALE;
             inlay.image(
@@ -6712,17 +6712,17 @@ impl IdleWorldViewer {
 
     fn draw_idle_fog(&self, adapter: &mut Adapter) {
         let mut fog = SpriteBatch::new(self.window_width, self.window_height);
-        let start_col = (self.camera.x / TILE_SIZE).floor().max(0.0) as usize;
-        let start_row = (self.camera.y / TILE_SIZE).floor().max(0.0) as usize;
-        let end_col = ((self.camera.x + self.idle_view_w()) / TILE_SIZE).ceil() as usize + 1;
-        let end_row = ((self.camera.y + self.idle_view_h()) / TILE_SIZE).ceil() as usize + 1;
+        let start_col = (self.view_origin.x / TILE_SIZE).floor().max(0.0) as usize;
+        let start_row = (self.view_origin.y / TILE_SIZE).floor().max(0.0) as usize;
+        let end_col = ((self.view_origin.x + self.idle_view_w()) / TILE_SIZE).ceil() as usize + 1;
+        let end_row = ((self.view_origin.y + self.idle_view_h()) / TILE_SIZE).ceil() as usize + 1;
 
         for row in start_row..end_row.min(self.world.rows) {
             for col in start_col..end_col.min(self.world.cols) {
                 if self.world.fog(col, row) {
                     fog.image(
-                        col as f32 * TILE_SIZE - self.camera.x,
-                        row as f32 * TILE_SIZE - self.camera.y,
+                        col as f32 * TILE_SIZE - self.view_origin.x,
+                        row as f32 * TILE_SIZE - self.view_origin.y,
                         TILE_SIZE,
                         TILE_SIZE,
                         Rgba8::new(255, 255, 255, 190),
@@ -6747,8 +6747,8 @@ impl IdleWorldViewer {
     ) {
         let w = image.width as f32 * BUILDING_SCALE * scale;
         let h = image.height as f32 * BUILDING_SCALE * scale;
-        let x = half_grid_to_px(x2) - self.camera.x + (TILE_SIZE - w) * 0.5 + offset_x;
-        let y = half_grid_to_px(y2 + BUILDING_GRID_DIVISIONS) - self.camera.y - h + offset_y;
+        let x = half_grid_to_px(x2) - self.view_origin.x + (TILE_SIZE - w) * 0.5 + offset_x;
+        let y = half_grid_to_px(y2 + BUILDING_GRID_DIVISIONS) - self.view_origin.y - h + offset_y;
         self.push_idle_image_batch(
             batches,
             image.texture_id,
@@ -6772,8 +6772,8 @@ impl IdleWorldViewer {
         self.push_idle_image_batch(
             batches,
             image.texture_id,
-            col as f32 * TILE_SIZE - self.camera.x + (TILE_SIZE - w) * 0.5,
-            row as f32 * TILE_SIZE - self.camera.y + (TILE_SIZE - h) * 0.5,
+            col as f32 * TILE_SIZE - self.view_origin.x + (TILE_SIZE - w) * 0.5,
+            row as f32 * TILE_SIZE - self.view_origin.y + (TILE_SIZE - h) * 0.5,
             w.max(1.0),
             h.max(1.0),
             Rgba8::WHITE,
@@ -6824,8 +6824,8 @@ impl IdleWorldViewer {
                 - image.width as f32 * scale * 0.5;
             let y = (cloud.y + cloud.drift_y * elapsed).rem_euclid(wrap_h)
                 - image.height as f32 * scale * 0.5;
-            let screen_x = x - self.camera.x;
-            let screen_y = y - self.camera.y;
+            let screen_x = x - self.view_origin.x;
+            let screen_y = y - self.view_origin.y;
             let w = image.width as f32 * scale;
             let h = image.height as f32 * scale;
             if screen_x + w < 0.0
@@ -8716,7 +8716,7 @@ impl FrameProducer for IdleWorldViewer {
         match event {
             InputEvent::CursorMoved { x, y } => {
                 if self.panning {
-                    self.scroll_idle_camera(self.mouse.x - x, self.mouse.y - y);
+                    self.scroll_idle_view_origin(self.mouse.x - x, self.mouse.y - y);
                 }
                 self.mouse = Point { x, y };
             }

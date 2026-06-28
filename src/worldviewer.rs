@@ -211,7 +211,7 @@ pub(super) struct WorldViewer {
     retile_transition: Option<RetileTransition>,
     wall_growths: Vec<WallGrowth>,
     seed: u64,
-    camera: Point,
+    view_origin: Point,
     mouse: Point,
     panning: bool,
     selection_start_screen: Option<Point>,
@@ -243,7 +243,7 @@ impl WorldViewer {
             retile_transition: None,
             wall_growths: Vec::new(),
             seed: DEFAULT_SEED,
-            camera: Point::default(),
+            view_origin: Point::default(),
             mouse: Point::default(),
             panning: false,
             selection_start_screen: None,
@@ -269,7 +269,7 @@ impl WorldViewer {
     fn resize_view(&mut self, width: u32, height: u32) {
         self.window_width = width.max(1);
         self.window_height = height.max(1);
-        self.clamp_camera();
+        self.clamp_view_origin();
     }
 
     fn upload_assets(&mut self, adapter: &mut Adapter) {
@@ -346,18 +346,18 @@ impl WorldViewer {
         self.window_height as f32
     }
 
-    fn clamp_camera(&mut self) {
+    fn clamp_view_origin(&mut self) {
         let world = self.generator.world();
         let max_x = (world.width_px() - self.view_w()).max(0.0);
         let max_y = (world.height_px() - self.view_h()).max(0.0);
-        self.camera.x = self.camera.x.clamp(0.0, max_x);
-        self.camera.y = self.camera.y.clamp(0.0, max_y);
+        self.view_origin.x = self.view_origin.x.clamp(0.0, max_x);
+        self.view_origin.y = self.view_origin.y.clamp(0.0, max_y);
     }
 
     fn scroll(&mut self, dx: f32, dy: f32) {
-        self.camera.x += dx;
-        self.camera.y += dy;
-        self.clamp_camera();
+        self.view_origin.x += dx;
+        self.view_origin.y += dy;
+        self.clamp_view_origin();
     }
 
     fn step_seed(&mut self, delta: i64) {
@@ -376,7 +376,7 @@ impl WorldViewer {
         self.horizontal_wall_len = 1;
         self.vertical_wall_len = 2;
         self.waiting_for_initial_platform_click = true;
-        self.clamp_camera();
+        self.clamp_view_origin();
         eprintln!("viewer generated world seed {}", self.seed);
     }
 
@@ -423,10 +423,10 @@ impl WorldViewer {
         let mut backgrounds = SpriteBatch::new(self.window_width, self.window_height);
         let mut under_foregrounds = SpriteBatch::new(self.window_width, self.window_height);
         let mut foregrounds = SpriteBatch::new(self.window_width, self.window_height);
-        let start_col = (self.camera.x / TILE_SIZE).floor().max(0.0) as usize;
-        let start_row = (self.camera.y / TILE_SIZE).floor().max(0.0) as usize;
-        let end_col = ((self.camera.x + self.view_w()) / TILE_SIZE).ceil() as usize + 1;
-        let end_row = ((self.camera.y + self.view_h()) / TILE_SIZE).ceil() as usize + 1;
+        let start_col = (self.view_origin.x / TILE_SIZE).floor().max(0.0) as usize;
+        let start_row = (self.view_origin.y / TILE_SIZE).floor().max(0.0) as usize;
+        let end_col = ((self.view_origin.x + self.view_w()) / TILE_SIZE).ceil() as usize + 1;
+        let end_row = ((self.view_origin.y + self.view_h()) / TILE_SIZE).ceil() as usize + 1;
 
         for row in start_row..end_row.min(world.rows) {
             for col in start_col..end_col.min(world.cols) {
@@ -434,8 +434,8 @@ impl WorldViewer {
                 if !visual_world.visible[index] {
                     continue;
                 }
-                let x = col as f32 * TILE_SIZE - self.camera.x;
-                let y = row as f32 * TILE_SIZE - self.camera.y;
+                let x = col as f32 * TILE_SIZE - self.view_origin.x;
+                let y = row as f32 * TILE_SIZE - self.view_origin.y;
                 match world.background(col, row) {
                     BackgroundTile::Water => {
                         water.rect(x, y, TILE_SIZE, TILE_SIZE, GENERATED_WATER_COLOR)
@@ -542,8 +542,8 @@ impl WorldViewer {
         let mut foregrounds = SpriteBatch::new(self.window_width, self.window_height);
 
         for tile in &transition.flyout_tiles {
-            let x = tile.col as f32 * TILE_SIZE - self.camera.x + tile.dir_x * travel;
-            let y = tile.row as f32 * TILE_SIZE - self.camera.y + tile.dir_y * travel;
+            let x = tile.col as f32 * TILE_SIZE - self.view_origin.x + tile.dir_x * travel;
+            let y = tile.row as f32 * TILE_SIZE - self.view_origin.y + tile.dir_y * travel;
             let tint = Rgba8::new(255, 255, 255, alpha);
             match tile.background {
                 BackgroundTile::Water => water.rect(
@@ -593,9 +593,9 @@ impl WorldViewer {
         let mut batch = SpriteBatch::new(self.window_width, self.window_height);
         let bob_y = transition.cover_bob_y(elapsed_ms);
         let angle_rad = transition.cover_rotation(elapsed_ms);
-        let origin_x = transition.rect.col as f32 * TILE_SIZE - self.camera.x
+        let origin_x = transition.rect.col as f32 * TILE_SIZE - self.view_origin.x
             + transition.rect.cols as f32 * TILE_SIZE * 0.5;
-        let origin_y = transition.rect.row as f32 * TILE_SIZE - self.camera.y
+        let origin_y = transition.rect.row as f32 * TILE_SIZE - self.view_origin.y
             + transition.rect.rows as f32 * TILE_SIZE * 0.5
             + bob_y;
 
@@ -604,8 +604,8 @@ impl WorldViewer {
             else {
                 continue;
             };
-            let x = tile.col as f32 * TILE_SIZE - self.camera.x;
-            let y = tile.row as f32 * TILE_SIZE - self.camera.y + bob_y;
+            let x = tile.col as f32 * TILE_SIZE - self.view_origin.x;
+            let y = tile.row as f32 * TILE_SIZE - self.view_origin.y + bob_y;
             push_retile_cover_tile(
                 &mut batch,
                 &self.retile_cover,
@@ -669,8 +669,8 @@ impl WorldViewer {
                     continue;
                 }
 
-                let x = tile.col as f32 * TILE_SIZE - self.camera.x;
-                let y = tile.row as f32 * TILE_SIZE - self.camera.y + slide_y;
+                let x = tile.col as f32 * TILE_SIZE - self.view_origin.x;
+                let y = tile.row as f32 * TILE_SIZE - self.view_origin.y + slide_y;
                 let mut batch = SpriteBatch::new(self.window_width, self.window_height);
                 batch.image_uv_rotated_around(
                     x,
@@ -720,12 +720,12 @@ impl WorldViewer {
     }
 
     fn set_tile_scissor(&self, adapter: &mut Adapter, col: usize, row: usize) -> bool {
-        let left = (col as f32 * TILE_SIZE - self.camera.x).floor().max(0.0);
-        let top = (row as f32 * TILE_SIZE - self.camera.y).floor().max(0.0);
-        let right = (col as f32 * TILE_SIZE - self.camera.x + TILE_SIZE)
+        let left = (col as f32 * TILE_SIZE - self.view_origin.x).floor().max(0.0);
+        let top = (row as f32 * TILE_SIZE - self.view_origin.y).floor().max(0.0);
+        let right = (col as f32 * TILE_SIZE - self.view_origin.x + TILE_SIZE)
             .ceil()
             .min(self.window_width as f32);
-        let bottom = (row as f32 * TILE_SIZE - self.camera.y + TILE_SIZE)
+        let bottom = (row as f32 * TILE_SIZE - self.view_origin.y + TILE_SIZE)
             .ceil()
             .min(self.window_height as f32);
 
@@ -748,10 +748,10 @@ impl WorldViewer {
         world: &TileWorld,
         visible: &[bool],
     ) {
-        let start_col = (self.camera.x / TILE_SIZE).floor().max(0.0) as usize;
-        let start_row = (self.camera.y / TILE_SIZE).floor().max(0.0) as usize;
-        let end_col = ((self.camera.x + self.view_w()) / TILE_SIZE).ceil() as usize + 1;
-        let end_row = ((self.camera.y + self.view_h()) / TILE_SIZE).ceil() as usize + 1;
+        let start_col = (self.view_origin.x / TILE_SIZE).floor().max(0.0) as usize;
+        let start_row = (self.view_origin.y / TILE_SIZE).floor().max(0.0) as usize;
+        let end_col = ((self.view_origin.x + self.view_w()) / TILE_SIZE).ceil() as usize + 1;
+        let end_row = ((self.view_origin.y + self.view_h()) / TILE_SIZE).ceil() as usize + 1;
         let mut batches = BTreeMap::new();
 
         for row in start_row..end_row.min(world.rows) {
@@ -832,8 +832,8 @@ impl WorldViewer {
     ) {
         let w = image.width as f32 * BUILDING_SCALE;
         let h = image.height as f32 * BUILDING_SCALE;
-        let x = col as f32 * TILE_SIZE - self.camera.x + (TILE_SIZE - w) * 0.5;
-        let y = row as f32 * TILE_SIZE - self.camera.y + (TILE_SIZE - h) * 0.5;
+        let x = col as f32 * TILE_SIZE - self.view_origin.x + (TILE_SIZE - w) * 0.5;
+        let y = row as f32 * TILE_SIZE - self.view_origin.y + (TILE_SIZE - h) * 0.5;
         self.push_image_batch(
             batches,
             image.texture_id,
@@ -858,8 +858,8 @@ impl WorldViewer {
     ) {
         let w = image.width as f32 * BUILDING_SCALE * scale;
         let h = image.height as f32 * BUILDING_SCALE * scale;
-        let x = half_grid_to_px(x2) - self.camera.x + (TILE_SIZE - w) * 0.5 + offset_x;
-        let y = half_grid_to_px(y2 + BUILDING_GRID_DIVISIONS) - self.camera.y - h + offset_y;
+        let x = half_grid_to_px(x2) - self.view_origin.x + (TILE_SIZE - w) * 0.5 + offset_x;
+        let y = half_grid_to_px(y2 + BUILDING_GRID_DIVISIONS) - self.view_origin.y - h + offset_y;
         self.push_image_batch(
             batches,
             image.texture_id,
@@ -900,8 +900,8 @@ impl WorldViewer {
             return;
         };
 
-        let x = rect.col as f32 * TILE_SIZE - self.camera.x;
-        let y = rect.row as f32 * TILE_SIZE - self.camera.y;
+        let x = rect.col as f32 * TILE_SIZE - self.view_origin.x;
+        let y = rect.row as f32 * TILE_SIZE - self.view_origin.y;
         let w = rect.cols as f32 * TILE_SIZE;
         let h = rect.rows as f32 * TILE_SIZE;
         let mut batch = SolidBatch::new(self.window_width, self.window_height);
@@ -938,8 +938,8 @@ impl WorldViewer {
             batch.sprite(
                 &self.terrain,
                 preview.tile,
-                preview.col as f32 * TILE_SIZE - self.camera.x,
-                preview.row as f32 * TILE_SIZE - self.camera.y,
+                preview.col as f32 * TILE_SIZE - self.view_origin.x,
+                preview.row as f32 * TILE_SIZE - self.view_origin.y,
                 TILE_SIZE,
                 TILE_SIZE,
                 WALL_PREVIEW_TINT,
@@ -952,8 +952,8 @@ impl WorldViewer {
     }
 
     fn world_cell_at(&self, x: f32, y: f32) -> Option<(usize, usize)> {
-        let col = ((x + self.camera.x) / TILE_SIZE).floor() as isize;
-        let row = ((y + self.camera.y) / TILE_SIZE).floor() as isize;
+        let col = ((x + self.view_origin.x) / TILE_SIZE).floor() as isize;
+        let row = ((y + self.view_origin.y) / TILE_SIZE).floor() as isize;
         let world = self.generator.world();
         if col < 0 || row < 0 || col >= world.cols as isize || row >= world.rows as isize {
             return None;

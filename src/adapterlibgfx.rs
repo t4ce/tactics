@@ -154,8 +154,10 @@ pub mod api {
     use std::collections::BTreeMap;
 
     use super::command::{Frame, FrameCommand, ScissorRect, TextureEffect};
-    use super::records::{decode_solid_rects, usable_solid_len, usable_sprite_len};
-    use super::ui3_frame::{FrameId, gfx};
+    use super::records::{
+        decode_solid_rects, usable_solid_len, usable_sprite_len, Rgba8, SPRITE_QUAD_SIZE,
+    };
+    use super::ui3_frame::{gfx, FrameId};
 
     const PRESERVE_RENDER_TARGET_CLEAR_RGB: u32 = u32::MAX;
     const SUPPRESS_REPAINT_WINDOW_ID: u32 = u32::MAX;
@@ -556,9 +558,12 @@ pub mod api {
             }
 
             if !failed && surface_tex_id != 0 && backbuffer_tex_id != 0 {
-                let vertices = fullscreen_tex_vertices();
+                let (surface_w, surface_h) = self
+                    .texture_dimensions(surface_tex_id)
+                    .unwrap_or((frame.logical_width.max(1), frame.logical_height.max(1)));
+                let sprite_quads = fullscreen_sprite_quad_records(surface_w, surface_h);
                 if gfx::set_render_target(surface_tex_id) != 0
-                    || gfx::draw_sprite_batch_no_present(backbuffer_tex_id, &vertices) != 0
+                    || gfx::draw_sprite_batch_no_present(backbuffer_tex_id, &sprite_quads) != 0
                 {
                     self.mark_surface_backpressure();
                     failed = true;
@@ -629,35 +634,35 @@ pub mod api {
         }
     }
 
-    fn fullscreen_tex_vertices() -> Vec<u8> {
-        let mut bytes = Vec::with_capacity(6 * 20);
+    fn fullscreen_sprite_quad_records(width: u32, height: u32) -> Vec<u8> {
+        let mut bytes = Vec::with_capacity(SPRITE_QUAD_SIZE);
+        let w = width.max(1) as f32;
+        let h = height.max(1) as f32;
         for (x, y, u, v) in [
-            (-1.0, 1.0, 0.0, 0.0),
-            (1.0, 1.0, 1.0, 0.0),
-            (1.0, -1.0, 1.0, 1.0),
-            (-1.0, 1.0, 0.0, 0.0),
-            (1.0, -1.0, 1.0, 1.0),
-            (-1.0, -1.0, 0.0, 1.0),
+            (0.0, 0.0, 0.0, 0.0),
+            (w, 0.0, 1.0, 0.0),
+            (w, h, 1.0, 1.0),
+            (0.0, h, 0.0, 1.0),
         ] {
-            push_tex_vertex(&mut bytes, x, y, u, v, [255, 255, 255, 255]);
+            push_sprite_corner(&mut bytes, x, y, u, v);
         }
+        bytes.extend_from_slice(&Rgba8::WHITE.array());
         bytes
     }
 
-    fn push_tex_vertex(bytes: &mut Vec<u8>, x: f32, y: f32, u: f32, v: f32, color: [u8; 4]) {
+    fn push_sprite_corner(bytes: &mut Vec<u8>, x: f32, y: f32, u: f32, v: f32) {
         bytes.extend_from_slice(&x.to_le_bytes());
         bytes.extend_from_slice(&y.to_le_bytes());
         bytes.extend_from_slice(&u.to_le_bytes());
         bytes.extend_from_slice(&v.to_le_bytes());
-        bytes.extend_from_slice(&color);
     }
 }
 
 #[cfg(feature = "trueos-blueprint")]
 pub mod window {
     use std::sync::{
-        Arc,
         atomic::{AtomicBool, Ordering},
+        Arc,
     };
 
     use super::api::{Adapter, AdapterConfig};
