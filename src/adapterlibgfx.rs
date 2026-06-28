@@ -2,6 +2,17 @@
 pub use adapterlibgfx::*;
 
 #[cfg(feature = "trueos-blueprint")]
+mod ui3_frame {
+    pub(crate) mod gfx {
+        pub(crate) use trueos::ui3::gfx::*;
+    }
+
+    pub(crate) use trueos::ui3::frame::{
+        Frame as FrameWindow, FrameBounds as FrameRect, FrameId,
+    };
+}
+
+#[cfg(feature = "trueos-blueprint")]
 pub mod vertex {
     pub const RGB_VERTEX_SIZE: usize = 12;
     pub const TEX_VERTEX_SIZE: usize = 20;
@@ -73,10 +84,10 @@ pub mod vertex {
         out
     }
 
-    pub fn encode_rgb_vertices(vertices: &[RgbVertex]) -> Vec<trueos::ui2::gfx::RgbVertex> {
+    pub fn encode_rgb_vertices(vertices: &[RgbVertex]) -> Vec<super::ui3_frame::gfx::RgbVertex> {
         vertices
             .iter()
-            .map(|v| trueos::ui2::gfx::RgbVertex::new(v.x, v.y, v.color.array()))
+            .map(|v| super::ui3_frame::gfx::RgbVertex::new(v.x, v.y, v.color.array()))
             .collect()
     }
 }
@@ -139,8 +150,8 @@ pub mod api {
     use std::collections::BTreeMap;
 
     use super::command::{Frame, FrameCommand, ScissorRect, TextureEffect};
+    use super::ui3_frame::{gfx, FrameId};
     use super::vertex::{decode_rgb_vertices, encode_rgb_vertices, usable_rgb_len, usable_tex_len};
-    use trueos::ui2::{WindowId, gfx};
 
     const PRESERVE_RENDER_TARGET_CLEAR_RGB: u32 = u32::MAX;
     const SUPPRESS_REPAINT_WINDOW_ID: u32 = u32::MAX;
@@ -551,8 +562,8 @@ pub mod api {
                 return;
             }
             if !failed && self.repaint_window_id != SUPPRESS_REPAINT_WINDOW_ID {
-                if let Some(window_id) = WindowId::new(self.repaint_window_id) {
-                    let _ = window_id.request_repaint();
+                if let Some(frame_id) = FrameId::new(self.repaint_window_id) {
+                    let _ = frame_id.request_repaint();
                 }
             }
         }
@@ -638,12 +649,13 @@ pub mod api {
 #[cfg(feature = "trueos-blueprint")]
 pub mod window {
     use std::sync::{
-        Arc,
         atomic::{AtomicBool, Ordering},
+        Arc,
     };
 
     use super::api::{Adapter, AdapterConfig};
-    use trueos::{platform, ui2};
+    use super::ui3_frame::{FrameRect, FrameWindow};
+    use trueos::platform;
 
     const PRIMARY_BUTTON_MASK: u32 = 1;
 
@@ -697,22 +709,6 @@ pub mod window {
 
     pub trait FrameProducer {
         fn cursor_visible(&self) -> bool {
-            true
-        }
-
-        fn window_decorations(&self) -> bool {
-            true
-        }
-
-        fn window_titlebar(&self) -> bool {
-            true
-        }
-
-        fn window_bottom_bar(&self) -> bool {
-            true
-        }
-
-        fn window_scrollbars(&self) -> bool {
             true
         }
 
@@ -890,7 +886,7 @@ pub mod window {
                     .primary_producer
                     .window_assets_ready(&self.primary_adapter)
                 {
-                    Some(bind_window(
+                    Some(bind_frame(
                         &self.primary_title,
                         self.primary_config,
                         &self.primary_producer,
@@ -911,7 +907,7 @@ pub mod window {
                     .secondary_producer
                     .window_assets_ready(&self.secondary_adapter)
                 {
-                    Some(bind_window(
+                    Some(bind_frame(
                         &self.secondary_title,
                         self.secondary_config,
                         &self.secondary_producer,
@@ -932,7 +928,7 @@ pub mod window {
                     .tertiary_producer
                     .window_assets_ready(&self.tertiary_adapter)
                 {
-                    Some(bind_window(
+                    Some(bind_frame(
                         &self.tertiary_title,
                         self.tertiary_config,
                         &self.tertiary_producer,
@@ -948,7 +944,7 @@ pub mod window {
             };
             self.quaternary_producer
                 .prepare_window_assets(&mut self.quaternary_adapter);
-            let quaternary = bind_window(
+            let quaternary = bind_frame(
                 &self.quaternary_title,
                 self.quaternary_config,
                 &self.quaternary_producer,
@@ -963,7 +959,7 @@ pub mod window {
                     .quinary_producer
                     .window_assets_ready(&self.quinary_adapter)
                 {
-                    Some(bind_window(
+                    Some(bind_frame(
                         &self.quinary_title,
                         self.quinary_config,
                         &self.quinary_producer,
@@ -984,7 +980,7 @@ pub mod window {
                     .senary_producer
                     .window_assets_ready(&self.senary_adapter)
                 {
-                    Some(bind_window(
+                    Some(bind_frame(
                         &self.senary_title,
                         self.senary_config,
                         &self.senary_producer,
@@ -1005,7 +1001,7 @@ pub mod window {
                     .septenary_producer
                     .window_assets_ready(&self.septenary_adapter)
                 {
-                    Some(bind_window(
+                    Some(bind_frame(
                         &self.septenary_title,
                         self.septenary_config,
                         &self.septenary_producer,
@@ -1027,67 +1023,67 @@ pub mod window {
                     .as_ref()
                     .is_some_and(|request| request.load(Ordering::Relaxed))
                 {
-                    close_optional_surface_window(&mut primary);
-                    close_optional_surface_window(&mut secondary);
-                    close_optional_surface_window(&mut tertiary);
-                    close_surface_window(&quaternary);
-                    close_optional_surface_window(&mut quinary);
-                    close_optional_surface_window(&mut senary);
-                    close_optional_surface_window(&mut septenary);
+                    close_optional_frame_window(&mut primary);
+                    close_optional_frame_window(&mut secondary);
+                    close_optional_frame_window(&mut tertiary);
+                    close_frame_window(&quaternary);
+                    close_optional_frame_window(&mut quinary);
+                    close_optional_frame_window(&mut senary);
+                    close_optional_frame_window(&mut septenary);
                     return Ok(());
                 }
 
                 platform::poll_once();
 
-                hide_unrequested_surface_window(&mut primary, &self.primary_create_request);
-                hide_unrequested_surface_window(&mut secondary, &self.secondary_create_request);
-                hide_unrequested_surface_window(&mut tertiary, &self.tertiary_create_request);
-                hide_unrequested_surface_window(&mut quinary, &self.quinary_create_request);
-                hide_unrequested_surface_window(&mut senary, &self.senary_create_request);
-                hide_unrequested_surface_window(&mut septenary, &self.septenary_create_request);
+                hide_unrequested_frame_window(&mut primary, &self.primary_create_request);
+                hide_unrequested_frame_window(&mut secondary, &self.secondary_create_request);
+                hide_unrequested_frame_window(&mut tertiary, &self.tertiary_create_request);
+                hide_unrequested_frame_window(&mut quinary, &self.quinary_create_request);
+                hide_unrequested_frame_window(&mut senary, &self.senary_create_request);
+                hide_unrequested_frame_window(&mut septenary, &self.septenary_create_request);
 
                 if let Some(window) = primary.as_ref() {
-                    dispatch_window_cursor_events(
+                    dispatch_frame_cursor_events(
                         window,
                         &mut self.primary_producer,
                         &mut input_pump,
                     );
                 }
                 if let Some(window) = secondary.as_ref() {
-                    dispatch_window_cursor_events(
+                    dispatch_frame_cursor_events(
                         window,
                         &mut self.secondary_producer,
                         &mut input_pump,
                     );
                 }
                 if let Some(window) = tertiary.as_ref() {
-                    dispatch_window_cursor_events(
+                    dispatch_frame_cursor_events(
                         window,
                         &mut self.tertiary_producer,
                         &mut input_pump,
                     );
                 }
-                dispatch_window_cursor_events(
+                dispatch_frame_cursor_events(
                     &quaternary,
                     &mut self.quaternary_producer,
                     &mut input_pump,
                 );
                 if let Some(window) = quinary.as_ref() {
-                    dispatch_window_cursor_events(
+                    dispatch_frame_cursor_events(
                         window,
                         &mut self.quinary_producer,
                         &mut input_pump,
                     );
                 }
                 if let Some(window) = senary.as_ref() {
-                    dispatch_window_cursor_events(
+                    dispatch_frame_cursor_events(
                         window,
                         &mut self.senary_producer,
                         &mut input_pump,
                     );
                 }
                 if let Some(window) = septenary.as_ref() {
-                    dispatch_window_cursor_events(
+                    dispatch_frame_cursor_events(
                         window,
                         &mut self.septenary_producer,
                         &mut input_pump,
@@ -1102,7 +1098,7 @@ pub mod window {
                             .primary_producer
                             .window_assets_ready(&self.primary_adapter)
                         {
-                            primary = Some(bind_window(
+                            primary = Some(bind_frame(
                                 &self.primary_title,
                                 self.primary_config,
                                 &self.primary_producer,
@@ -1124,7 +1120,7 @@ pub mod window {
                             .secondary_producer
                             .window_assets_ready(&self.secondary_adapter)
                         {
-                            secondary = Some(bind_window(
+                            secondary = Some(bind_frame(
                                 &self.secondary_title,
                                 self.secondary_config,
                                 &self.secondary_producer,
@@ -1147,7 +1143,7 @@ pub mod window {
                             .tertiary_producer
                             .window_assets_ready(&self.tertiary_adapter)
                         {
-                            tertiary = Some(bind_window(
+                            tertiary = Some(bind_frame(
                                 &self.tertiary_title,
                                 self.tertiary_config,
                                 &self.tertiary_producer,
@@ -1172,7 +1168,7 @@ pub mod window {
                             .quinary_producer
                             .window_assets_ready(&self.quinary_adapter)
                         {
-                            quinary = Some(bind_window(
+                            quinary = Some(bind_frame(
                                 &self.quinary_title,
                                 self.quinary_config,
                                 &self.quinary_producer,
@@ -1194,7 +1190,7 @@ pub mod window {
                             .senary_producer
                             .window_assets_ready(&self.senary_adapter)
                         {
-                            senary = Some(bind_window(
+                            senary = Some(bind_frame(
                                 &self.senary_title,
                                 self.senary_config,
                                 &self.senary_producer,
@@ -1216,7 +1212,7 @@ pub mod window {
                             .septenary_producer
                             .window_assets_ready(&self.septenary_adapter)
                         {
-                            septenary = Some(bind_window(
+                            septenary = Some(bind_frame(
                                 &self.septenary_title,
                                 self.septenary_config,
                                 &self.septenary_producer,
@@ -1243,34 +1239,34 @@ pub mod window {
             .is_none_or(|request| request.load(Ordering::Relaxed))
     }
 
-    fn close_surface_window(window: &ui2::SurfaceWindow) {
-        let _ = window.id().close();
+    fn close_frame_window(frame: &FrameWindow) {
+        let _ = frame.id().close();
     }
 
-    fn close_optional_surface_window(window: &mut Option<ui2::SurfaceWindow>) {
-        if let Some(window) = window.take() {
-            close_surface_window(&window);
+    fn close_optional_frame_window(frame: &mut Option<FrameWindow>) {
+        if let Some(frame) = frame.take() {
+            close_frame_window(&frame);
         }
     }
 
-    fn hide_optional_surface_window(window: &mut Option<ui2::SurfaceWindow>) {
-        if let Some(window) = window.take() {
-            let id = window.id();
+    fn hide_optional_frame_window(frame: &mut Option<FrameWindow>) {
+        if let Some(frame) = frame.take() {
+            let id = frame.id();
             let _ = id.set_position(i32::MIN / 2, i32::MIN / 2);
             let _ = id.set_size(1, 1);
-            let _ = window.leak();
+            let _ = frame.leak();
         }
     }
 
-    fn hide_unrequested_surface_window(
-        window: &mut Option<ui2::SurfaceWindow>,
+    fn hide_unrequested_frame_window(
+        frame: &mut Option<FrameWindow>,
         request: &Option<Arc<AtomicBool>>,
     ) {
         if request
             .as_ref()
             .is_some_and(|request| !request.load(Ordering::Relaxed))
         {
-            hide_optional_surface_window(window);
+            hide_optional_frame_window(frame);
         }
     }
 
@@ -1302,8 +1298,8 @@ pub mod window {
             }
         }
 
-        fn poll_window(&mut self, window: &ui2::SurfaceWindow) -> Vec<CursorInputEvent> {
-            let events = window.id().take_cursor_events(64);
+        fn poll_frame(&mut self, frame: &FrameWindow) -> Vec<CursorInputEvent> {
+            let events = frame.id().take_cursor_events(64);
             let mut out = Vec::with_capacity(events.len());
             for event in events {
                 let slot_id = event.slot_id.max(1);
@@ -1344,7 +1340,7 @@ pub mod window {
     }
 
     fn dispatch_cursor_to_producer<P: FrameProducer>(
-        window: &ui2::SurfaceWindow,
+        frame: &FrameWindow,
         producer: &mut P,
         event: CursorInputEvent,
     ) -> bool {
@@ -1353,7 +1349,7 @@ pub mod window {
             y: event.y,
         });
 
-        if event.left_pressed() && producer.window_drag_region() && window.id().begin_move() {
+        if event.left_pressed() && producer.window_drag_region() && frame.id().begin_move() {
             return true;
         }
 
@@ -1368,13 +1364,13 @@ pub mod window {
         true
     }
 
-    fn dispatch_window_cursor_events<P: FrameProducer>(
-        window: &ui2::SurfaceWindow,
+    fn dispatch_frame_cursor_events<P: FrameProducer>(
+        frame: &FrameWindow,
         producer: &mut P,
         input_pump: &mut CursorInputPump,
     ) {
-        for event in input_pump.poll_window(window) {
-            let _ = dispatch_cursor_to_producer(window, producer, event);
+        for event in input_pump.poll_frame(frame) {
+            let _ = dispatch_cursor_to_producer(frame, producer, event);
         }
     }
 
@@ -1403,17 +1399,17 @@ pub mod window {
         }
     }
 
-    fn bind_window<P: FrameProducer>(
+    fn bind_frame<P: FrameProducer>(
         title: &str,
         config: AdapterConfig,
-        producer: &P,
+        _producer: &P,
         adapter: &mut Adapter,
         tex_id: u32,
         offset: i32,
-    ) -> Result<ui2::SurfaceWindow, &'static str> {
-        let window = ui2::SurfaceWindow::create(
+    ) -> Result<FrameWindow, &'static str> {
+        let frame = FrameWindow::create(
             title,
-            ui2::Rect {
+            FrameRect {
                 x: offset,
                 y: offset,
                 width: config.width.max(1),
@@ -1421,21 +1417,8 @@ pub mod window {
             },
             tex_id,
         )
-        .ok_or("failed to create ui2 surface window")?;
-        if !producer.window_decorations() {
-            let _ = window.id().set_decorations(ui2::WindowDecorationMode::None);
-        }
-        if !producer.window_titlebar() {
-            let _ = window.id().set_titlebar_visible(false);
-        }
-        if !producer.window_bottom_bar() {
-            let _ = window.id().set_bottom_bar_visible(false);
-        }
-        if !producer.window_scrollbars() {
-            let _ = window.id().set_vertical_scrollbar_visible(false);
-            let _ = window.id().set_horizontal_scrollbar_visible(false);
-        }
-        adapter.bind_surface(window.tex_id(), window.id().raw());
-        Ok(window)
+        .ok_or("failed to create ui3 frame window")?;
+        adapter.bind_surface(frame.tex_id(), frame.id().raw());
+        Ok(frame)
     }
 }

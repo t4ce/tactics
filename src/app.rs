@@ -1,7 +1,7 @@
-use crate::adapterlibgfx::api::{Adapter, AdapterConfig};
-use crate::adapterlibgfx::command::{ScissorRect, TextureEffect};
 #[cfg(not(feature = "trueos-blueprint"))]
 use crate::adapterlibgfx::WgpuHeadlessRenderer;
+use crate::adapterlibgfx::api::{Adapter, AdapterConfig};
+use crate::adapterlibgfx::command::{ScissorRect, TextureEffect};
 use crate::adapterlibgfx::vertex::{Rgba8, TexVertex};
 use crate::adapterlibgfx::window::{
     FrameProducer, InputButtonState, InputEvent, InputKey, InputMouseButton,
@@ -4143,10 +4143,6 @@ impl Game {
 
 impl FrameProducer for Game {
     fn cursor_visible(&self) -> bool {
-        false
-    }
-
-    fn window_decorations(&self) -> bool {
         false
     }
 
@@ -8547,10 +8543,6 @@ impl FrameProducer for UnitWalkViewer {
         false
     }
 
-    fn window_decorations(&self) -> bool {
-        false
-    }
-
     fn resize(&mut self, width: u32, height: u32) {
         self.resize_view(width, height);
     }
@@ -8722,10 +8714,6 @@ impl FrameProducer for IdleWorldViewer {
         false
     }
 
-    fn window_decorations(&self) -> bool {
-        false
-    }
-
     fn resize(&mut self, width: u32, height: u32) {
         self.resize_view(width, height);
     }
@@ -8892,10 +8880,6 @@ impl FrameProducer for IconViewer {
         false
     }
 
-    fn window_decorations(&self) -> bool {
-        false
-    }
-
     fn resize(&mut self, width: u32, height: u32) {
         self.resize_view(width, height);
     }
@@ -9008,10 +8992,6 @@ impl FrameProducer for IconViewer {
 
 impl FrameProducer for EventEditor {
     fn cursor_visible(&self) -> bool {
-        false
-    }
-
-    fn window_decorations(&self) -> bool {
         false
     }
 
@@ -11108,7 +11088,7 @@ struct DecodedRgbaPng {
 
 fn decode_png_rgba(bytes: &[u8]) -> Result<DecodedRgbaPng, String> {
     #[cfg(feature = "trueos-blueprint")]
-    let cursor = png::io::Cursor::new(bytes);
+    let cursor = std::io::Cursor::new(bytes);
     #[cfg(not(feature = "trueos-blueprint"))]
     let cursor = std::io::Cursor::new(bytes);
     let mut decoder = png::Decoder::new(cursor);

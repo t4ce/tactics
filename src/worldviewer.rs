@@ -1132,10 +1132,6 @@ impl FrameProducer for WorldViewer {
         false
     }
 
-    fn window_decorations(&self) -> bool {
-        false
-    }
-
     fn resize(&mut self, width: u32, height: u32) {
         self.resize_view(width, height);
     }
