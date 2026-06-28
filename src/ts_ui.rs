@@ -1,4 +1,4 @@
-use crate::adapterlibgfx::vertex::{Rgba8, TexVertex};
+use crate::adapterlibgfx::records::Rgba8;
 
 pub const BANNER_TEXTURE: u32 = 21;
 pub const BIG_RIBBONS_TEXTURE: u32 = 22;
@@ -80,8 +80,6 @@ const SMALL_BAR_FILL_TOP: f32 = 30.0;
 const SMALL_BAR_FILL_BOTTOM: f32 = 33.0;
 
 pub struct UiBatch {
-    window_width: u32,
-    window_height: u32,
     pub texture_bytes: Vec<u8>,
     pub ribbon_bytes: Vec<u8>,
     pub button_bytes: Vec<u8>,
@@ -104,17 +102,13 @@ pub struct HotkeyEntry<'a> {
 }
 
 pub struct SmallBarBatch {
-    window_width: u32,
-    window_height: u32,
     pub base_bytes: Vec<u8>,
     pub fill_solid_bytes: Vec<u8>,
 }
 
 impl SmallBarBatch {
-    pub fn new(window_width: u32, window_height: u32) -> Self {
+    pub fn new(_window_width: u32, _window_height: u32) -> Self {
         Self {
-            window_width,
-            window_height,
             base_bytes: Vec::new(),
             fill_solid_bytes: Vec::new(),
         }
@@ -209,62 +203,17 @@ impl SmallBarBatch {
     }
 
     fn image_uv(&mut self, x: f32, y: f32, w: f32, h: f32, uv: [f32; 4], color: Rgba8) {
-        let [u0, v0, u1, v1] = uv;
-        let (x0, y0) = self.to_clip(x, y);
-        let (x1, y1) = self.to_clip(x + w, y + h);
-        self.tex_vertex(x0, y0, u0, v0, color);
-        self.tex_vertex(x1, y0, u1, v0, color);
-        self.tex_vertex(x1, y1, u1, v1, color);
-        self.tex_vertex(x0, y0, u0, v0, color);
-        self.tex_vertex(x1, y1, u1, v1, color);
-        self.tex_vertex(x0, y1, u0, v1, color);
+        push_sprite_quad(&mut self.base_bytes, x, y, w, h, uv, color);
     }
 
     fn solid_rect(&mut self, x: f32, y: f32, w: f32, h: f32, color: Rgba8) {
-        let (x0, y0) = self.to_clip(x, y);
-        let (x1, y1) = self.to_clip(x + w, y + h);
-        self.solid_vertex(x0, y0, color);
-        self.solid_vertex(x1, y0, color);
-        self.solid_vertex(x1, y1, color);
-        self.solid_vertex(x0, y0, color);
-        self.solid_vertex(x1, y1, color);
-        self.solid_vertex(x0, y1, color);
-    }
-
-    fn tex_vertex(&mut self, x: f32, y: f32, u: f32, v: f32, color: Rgba8) {
-        let vertex = TexVertex { x, y, u, v, color };
-        push_f32(&mut self.base_bytes, vertex.x);
-        push_f32(&mut self.base_bytes, vertex.y);
-        push_f32(&mut self.base_bytes, vertex.u);
-        push_f32(&mut self.base_bytes, vertex.v);
-        self.base_bytes.extend_from_slice(&[
-            vertex.color.r,
-            vertex.color.g,
-            vertex.color.b,
-            vertex.color.a,
-        ]);
-    }
-
-    fn solid_vertex(&mut self, x: f32, y: f32, color: Rgba8) {
-        push_f32(&mut self.fill_solid_bytes, x);
-        push_f32(&mut self.fill_solid_bytes, y);
-        self.fill_solid_bytes
-            .extend_from_slice(&[color.r, color.g, color.b, color.a]);
-    }
-
-    fn to_clip(&self, x: f32, y: f32) -> (f32, f32) {
-        (
-            (x / self.window_width as f32) * 2.0 - 1.0,
-            1.0 - (y / self.window_height as f32) * 2.0,
-        )
+        push_solid_rect(&mut self.fill_solid_bytes, x, y, w, h, color);
     }
 }
 
 impl UiBatch {
-    pub fn new(window_width: u32, window_height: u32) -> Self {
+    pub fn new(_window_width: u32, _window_height: u32) -> Self {
         Self {
-            window_width,
-            window_height,
             texture_bytes: Vec::new(),
             ribbon_bytes: Vec::new(),
             button_bytes: Vec::new(),
@@ -750,27 +699,11 @@ impl UiBatch {
     }
 
     fn image_uv(&mut self, x: f32, y: f32, w: f32, h: f32, uv: [f32; 4], color: Rgba8) {
-        let [u0, v0, u1, v1] = uv;
-        let (x0, y0) = self.to_clip(x, y);
-        let (x1, y1) = self.to_clip(x + w, y + h);
-        self.tex_vertex(x0, y0, u0, v0, color);
-        self.tex_vertex(x1, y0, u1, v0, color);
-        self.tex_vertex(x1, y1, u1, v1, color);
-        self.tex_vertex(x0, y0, u0, v0, color);
-        self.tex_vertex(x1, y1, u1, v1, color);
-        self.tex_vertex(x0, y1, u0, v1, color);
+        push_sprite_quad(&mut self.texture_bytes, x, y, w, h, uv, color);
     }
 
     fn ribbon_image_uv(&mut self, x: f32, y: f32, w: f32, h: f32, uv: [f32; 4], color: Rgba8) {
-        let [u0, v0, u1, v1] = uv;
-        let (x0, y0) = self.to_clip(x, y);
-        let (x1, y1) = self.to_clip(x + w, y + h);
-        self.ribbon_vertex(x0, y0, u0, v0, color);
-        self.ribbon_vertex(x1, y0, u1, v0, color);
-        self.ribbon_vertex(x1, y1, u1, v1, color);
-        self.ribbon_vertex(x0, y0, u0, v0, color);
-        self.ribbon_vertex(x1, y1, u1, v1, color);
-        self.ribbon_vertex(x0, y1, u0, v1, color);
+        push_sprite_quad(&mut self.ribbon_bytes, x, y, w, h, uv, color);
     }
 
     fn hotkey_button(&mut self, x: f32, y: f32, label: &str, text_scale: f32, text_color: Rgba8) {
@@ -786,14 +719,15 @@ impl UiBatch {
     }
 
     fn blue_square_button(&mut self, x: f32, y: f32, w: f32, h: f32, color: Rgba8) {
-        let (x0, y0) = self.to_clip(x, y);
-        let (x1, y1) = self.to_clip(x + w, y + h);
-        self.button_vertex(x0, y0, 0.0, 0.0, color);
-        self.button_vertex(x1, y0, 1.0, 0.0, color);
-        self.button_vertex(x1, y1, 1.0, 1.0, color);
-        self.button_vertex(x0, y0, 0.0, 0.0, color);
-        self.button_vertex(x1, y1, 1.0, 1.0, color);
-        self.button_vertex(x0, y1, 0.0, 1.0, color);
+        push_sprite_quad(
+            &mut self.button_bytes,
+            x,
+            y,
+            w,
+            h,
+            [0.0, 0.0, 1.0, 1.0],
+            color,
+        );
     }
 
     fn glyph(&mut self, ch: char, x: f32, y: f32, scale: f32, color: Rgba8) {
@@ -814,71 +748,32 @@ impl UiBatch {
     }
 
     fn solid_rect(&mut self, x: f32, y: f32, w: f32, h: f32, color: Rgba8) {
-        let (x0, y0) = self.to_clip(x, y);
-        let (x1, y1) = self.to_clip(x + w, y + h);
-        self.solid_vertex(x0, y0, color);
-        self.solid_vertex(x1, y0, color);
-        self.solid_vertex(x1, y1, color);
-        self.solid_vertex(x0, y0, color);
-        self.solid_vertex(x1, y1, color);
-        self.solid_vertex(x0, y1, color);
+        push_solid_rect(&mut self.solid_bytes, x, y, w, h, color);
     }
+}
 
-    fn tex_vertex(&mut self, x: f32, y: f32, u: f32, v: f32, color: Rgba8) {
-        let vertex = TexVertex { x, y, u, v, color };
-        push_f32(&mut self.texture_bytes, vertex.x);
-        push_f32(&mut self.texture_bytes, vertex.y);
-        push_f32(&mut self.texture_bytes, vertex.u);
-        push_f32(&mut self.texture_bytes, vertex.v);
-        self.texture_bytes.extend_from_slice(&[
-            vertex.color.r,
-            vertex.color.g,
-            vertex.color.b,
-            vertex.color.a,
-        ]);
+fn push_sprite_quad(out: &mut Vec<u8>, x: f32, y: f32, w: f32, h: f32, uv: [f32; 4], color: Rgba8) {
+    let [u0, v0, u1, v1] = uv;
+    for (x, y, u, v) in [
+        (x, y, u0, v0),
+        (x + w, y, u1, v0),
+        (x + w, y + h, u1, v1),
+        (x, y + h, u0, v1),
+    ] {
+        push_f32(out, x);
+        push_f32(out, y);
+        push_f32(out, u);
+        push_f32(out, v);
     }
+    out.extend_from_slice(&[color.r, color.g, color.b, color.a]);
+}
 
-    fn ribbon_vertex(&mut self, x: f32, y: f32, u: f32, v: f32, color: Rgba8) {
-        let vertex = TexVertex { x, y, u, v, color };
-        push_f32(&mut self.ribbon_bytes, vertex.x);
-        push_f32(&mut self.ribbon_bytes, vertex.y);
-        push_f32(&mut self.ribbon_bytes, vertex.u);
-        push_f32(&mut self.ribbon_bytes, vertex.v);
-        self.ribbon_bytes.extend_from_slice(&[
-            vertex.color.r,
-            vertex.color.g,
-            vertex.color.b,
-            vertex.color.a,
-        ]);
-    }
-
-    fn button_vertex(&mut self, x: f32, y: f32, u: f32, v: f32, color: Rgba8) {
-        let vertex = TexVertex { x, y, u, v, color };
-        push_f32(&mut self.button_bytes, vertex.x);
-        push_f32(&mut self.button_bytes, vertex.y);
-        push_f32(&mut self.button_bytes, vertex.u);
-        push_f32(&mut self.button_bytes, vertex.v);
-        self.button_bytes.extend_from_slice(&[
-            vertex.color.r,
-            vertex.color.g,
-            vertex.color.b,
-            vertex.color.a,
-        ]);
-    }
-
-    fn solid_vertex(&mut self, x: f32, y: f32, color: Rgba8) {
-        push_f32(&mut self.solid_bytes, x);
-        push_f32(&mut self.solid_bytes, y);
-        self.solid_bytes
-            .extend_from_slice(&[color.r, color.g, color.b, color.a]);
-    }
-
-    fn to_clip(&self, x: f32, y: f32) -> (f32, f32) {
-        (
-            (x / self.window_width as f32) * 2.0 - 1.0,
-            1.0 - (y / self.window_height as f32) * 2.0,
-        )
-    }
+fn push_solid_rect(out: &mut Vec<u8>, x: f32, y: f32, w: f32, h: f32, color: Rgba8) {
+    push_f32(out, x);
+    push_f32(out, y);
+    push_f32(out, w);
+    push_f32(out, h);
+    out.extend_from_slice(&[color.r, color.g, color.b, color.a]);
 }
 
 pub fn hotkey_menu_page_size(entry_count: usize) -> (f32, f32) {

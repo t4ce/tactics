@@ -1,6 +1,6 @@
 use std::sync::{
-    atomic::{AtomicBool, Ordering},
     Arc,
+    atomic::{AtomicBool, Ordering},
 };
 
 use winit::application::ApplicationHandler;
@@ -1297,13 +1297,13 @@ impl<P: FrameProducer, S: FrameProducer, T: FrameProducer, U: FrameProducer, V: 
 }
 
 impl<
-        P: FrameProducer,
-        S: FrameProducer,
-        T: FrameProducer,
-        U: FrameProducer,
-        V: FrameProducer,
-        W: FrameProducer,
-    > ApplicationHandler for WgpuSixWindowApp<P, S, T, U, V, W>
+    P: FrameProducer,
+    S: FrameProducer,
+    T: FrameProducer,
+    U: FrameProducer,
+    V: FrameProducer,
+    W: FrameProducer,
+> ApplicationHandler for WgpuSixWindowApp<P, S, T, U, V, W>
 {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         if self.primary_window.is_none() {
@@ -1499,14 +1499,14 @@ impl<
 }
 
 impl<
-        P: FrameProducer,
-        S: FrameProducer,
-        T: FrameProducer,
-        U: FrameProducer,
-        V: FrameProducer,
-        W: FrameProducer,
-        X: FrameProducer,
-    > ApplicationHandler for WgpuSevenWindowApp<P, S, T, U, V, W, X>
+    P: FrameProducer,
+    S: FrameProducer,
+    T: FrameProducer,
+    U: FrameProducer,
+    V: FrameProducer,
+    W: FrameProducer,
+    X: FrameProducer,
+> ApplicationHandler for WgpuSevenWindowApp<P, S, T, U, V, W, X>
 {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         if self.primary_create_request.is_none() && self.primary_window.is_none() {

@@ -476,11 +476,11 @@ impl WorldViewer {
         }
 
         let _ = adapter.set_texture_effect(TextureEffect::World);
-        let _ = adapter.draw_rgb_triangles_no_present(&water.bytes);
-        let _ = adapter.draw_tex_triangles_no_present(self.terrain.texture_id, &backgrounds.bytes);
-        let _ = adapter
-            .draw_tex_triangles_no_present(self.terrain.texture_id, &under_foregrounds.bytes);
-        let _ = adapter.draw_tex_triangles_no_present(self.terrain.texture_id, &foregrounds.bytes);
+        let _ = adapter.draw_solid_batch_no_present(&water.bytes);
+        let _ = adapter.draw_sprite_batch_no_present(self.terrain.texture_id, &backgrounds.bytes);
+        let _ =
+            adapter.draw_sprite_batch_no_present(self.terrain.texture_id, &under_foregrounds.bytes);
+        let _ = adapter.draw_sprite_batch_no_present(self.terrain.texture_id, &foregrounds.bytes);
         let _ = adapter.set_texture_effect(TextureEffect::Plain);
     }
 
@@ -577,11 +577,11 @@ impl WorldViewer {
         }
 
         let _ = adapter.set_texture_effect(TextureEffect::World);
-        let _ = adapter.draw_rgb_triangles_no_present(&water.bytes);
-        let _ = adapter.draw_tex_triangles_no_present(self.terrain.texture_id, &backgrounds.bytes);
-        let _ = adapter
-            .draw_tex_triangles_no_present(self.terrain.texture_id, &under_foregrounds.bytes);
-        let _ = adapter.draw_tex_triangles_no_present(self.terrain.texture_id, &foregrounds.bytes);
+        let _ = adapter.draw_solid_batch_no_present(&water.bytes);
+        let _ = adapter.draw_sprite_batch_no_present(self.terrain.texture_id, &backgrounds.bytes);
+        let _ =
+            adapter.draw_sprite_batch_no_present(self.terrain.texture_id, &under_foregrounds.bytes);
+        let _ = adapter.draw_sprite_batch_no_present(self.terrain.texture_id, &foregrounds.bytes);
         let _ = adapter.set_texture_effect(TextureEffect::Plain);
     }
 
@@ -620,7 +620,7 @@ impl WorldViewer {
         }
 
         let _ = adapter.set_texture_effect(TextureEffect::Plain);
-        let _ = adapter.draw_tex_triangles_no_present(self.retile_cover.texture_id, &batch.bytes);
+        let _ = adapter.draw_sprite_batch_no_present(self.retile_cover.texture_id, &batch.bytes);
     }
 
     fn draw_retile_particles(&self, adapter: &mut Adapter) {
@@ -683,8 +683,7 @@ impl WorldViewer {
                     angle_rad,
                     Rgba8::WHITE,
                 );
-                let _ =
-                    adapter.draw_tex_triangles_no_present(self.terrain.texture_id, &batch.bytes);
+                let _ = adapter.draw_sprite_batch_no_present(self.terrain.texture_id, &batch.bytes);
                 any_drawn = true;
             }
         }
@@ -891,7 +890,7 @@ impl WorldViewer {
     fn draw_image_batches(&self, adapter: &mut Adapter, batches: BTreeMap<u32, SpriteBatch>) {
         for (texture_id, batch) in batches {
             if !batch.bytes.is_empty() {
-                let _ = adapter.draw_tex_triangles_no_present(texture_id, &batch.bytes);
+                let _ = adapter.draw_sprite_batch_no_present(texture_id, &batch.bytes);
             }
         }
     }
@@ -910,7 +909,7 @@ impl WorldViewer {
         outline_rect(&mut batch, x, y, w, h, 2.0, SELECTION_BORDER);
 
         let _ = adapter.set_texture_effect(TextureEffect::Plain);
-        let _ = adapter.draw_rgb_triangles_no_present(&batch.bytes);
+        let _ = adapter.draw_solid_batch_no_present(&batch.bytes);
     }
 
     fn draw_wall_preview(&self, adapter: &mut Adapter) {
@@ -948,7 +947,7 @@ impl WorldViewer {
         }
 
         let _ = adapter.set_texture_effect(TextureEffect::World);
-        let _ = adapter.draw_tex_triangles_no_present(self.terrain.texture_id, &batch.bytes);
+        let _ = adapter.draw_sprite_batch_no_present(self.terrain.texture_id, &batch.bytes);
         let _ = adapter.set_texture_effect(TextureEffect::Plain);
     }
 

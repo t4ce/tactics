@@ -114,7 +114,7 @@ pub unsafe extern "C" fn trueos_cabi_gfx_clear_render_target() -> i32 {
 
 #[cfg(feature = "ffi")]
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn trueos_cabi_gfx_draw_rgb_triangles_no_present(
+pub unsafe extern "C" fn trueos_cabi_gfx_draw_solid_batch_no_present(
     vtx_ptr: *const u8,
     vtx_len: usize,
 ) -> i32 {
@@ -122,12 +122,12 @@ pub unsafe extern "C" fn trueos_cabi_gfx_draw_rgb_triangles_no_present(
         return if vtx_len == 0 { 0 } else { -1 };
     }
     let bytes = unsafe { core::slice::from_raw_parts(vtx_ptr, vtx_len) };
-    ADAPTER.lock().draw_rgb_triangles_no_present(bytes)
+    ADAPTER.lock().draw_solid_batch_no_present(bytes)
 }
 
 #[cfg(feature = "ffi")]
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn trueos_cabi_gfx_draw_tex_triangles_no_present(
+pub unsafe extern "C" fn trueos_cabi_gfx_draw_sprite_batch_no_present(
     tex_id: u32,
     vtx_ptr: *const u8,
     vtx_len: usize,
@@ -136,7 +136,7 @@ pub unsafe extern "C" fn trueos_cabi_gfx_draw_tex_triangles_no_present(
         return if vtx_len == 0 { 0 } else { -2 };
     }
     let bytes = unsafe { core::slice::from_raw_parts(vtx_ptr, vtx_len) };
-    ADAPTER.lock().draw_tex_triangles_no_present(tex_id, bytes)
+    ADAPTER.lock().draw_sprite_batch_no_present(tex_id, bytes)
 }
 
 #[cfg(feature = "ffi")]

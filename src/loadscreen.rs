@@ -577,8 +577,7 @@ impl LoadScreen {
             self.cursor_default.height as f32,
             Rgba8::WHITE,
         );
-        let _ =
-            adapter.draw_tex_triangles_no_present(self.cursor_default.texture_id, &cursor.bytes);
+        let _ = adapter.draw_sprite_batch_no_present(self.cursor_default.texture_id, &cursor.bytes);
     }
 
     fn poll_lobbies(&mut self) {
@@ -839,11 +838,11 @@ impl LoadScreen {
         }
 
         let _ = adapter.set_texture_effect(TextureEffect::World);
-        let _ = adapter.draw_rgb_triangles_no_present(&water.bytes);
-        let _ = adapter.draw_tex_triangles_no_present(self.terrain.texture_id, &backgrounds.bytes);
-        let _ = adapter
-            .draw_tex_triangles_no_present(self.terrain.texture_id, &under_foregrounds.bytes);
-        let _ = adapter.draw_tex_triangles_no_present(self.terrain.texture_id, &foregrounds.bytes);
+        let _ = adapter.draw_solid_batch_no_present(&water.bytes);
+        let _ = adapter.draw_sprite_batch_no_present(self.terrain.texture_id, &backgrounds.bytes);
+        let _ =
+            adapter.draw_sprite_batch_no_present(self.terrain.texture_id, &under_foregrounds.bytes);
+        let _ = adapter.draw_sprite_batch_no_present(self.terrain.texture_id, &foregrounds.bytes);
 
         self.draw_background_world_assets(adapter, camera, start_col, start_row, end_col, end_row);
         self.draw_background_clouds(adapter, camera);
@@ -861,7 +860,7 @@ impl LoadScreen {
         );
         let _ = adapter.set_texture_effect(TextureEffect::Blur);
         let _ = adapter
-            .draw_tex_triangles_no_present(LOADSCREEN_BACKGROUND_BLUR_TEXTURE, &background.bytes);
+            .draw_sprite_batch_no_present(LOADSCREEN_BACKGROUND_BLUR_TEXTURE, &background.bytes);
         let _ = adapter.set_texture_effect(TextureEffect::Plain);
     }
 
@@ -935,7 +934,7 @@ impl LoadScreen {
         }
 
         for (texture_id, batch) in batches {
-            let _ = adapter.draw_tex_triangles_no_present(texture_id, &batch.bytes);
+            let _ = adapter.draw_sprite_batch_no_present(texture_id, &batch.bytes);
         }
     }
 
@@ -1070,7 +1069,7 @@ impl LoadScreen {
         }
 
         for (texture_id, batch) in batches {
-            let _ = adapter.draw_tex_triangles_no_present(texture_id, &batch.bytes);
+            let _ = adapter.draw_sprite_batch_no_present(texture_id, &batch.bytes);
         }
     }
 
@@ -1127,9 +1126,9 @@ impl LoadScreen {
         }
 
         let _ = adapter
-            .draw_tex_triangles_no_present(self.special_paper.texture_id, &papers.texture_bytes);
-        let _ = adapter.draw_rgb_triangles_no_present(&labels.solid_bytes);
-        let _ = adapter.draw_tex_triangles_no_present(self.arrow_icon.texture_id, &arrows.bytes);
+            .draw_sprite_batch_no_present(self.special_paper.texture_id, &papers.texture_bytes);
+        let _ = adapter.draw_solid_batch_no_present(&labels.solid_bytes);
+        let _ = adapter.draw_sprite_batch_no_present(self.arrow_icon.texture_id, &arrows.bytes);
     }
 
     fn draw_lobby_action_row(&self, adapter: &mut Adapter, table: TableRect) {
@@ -1168,7 +1167,7 @@ impl LoadScreen {
         let mut row_paper = ts_ui::UiBatch::new(self.window_width, self.window_height);
         draw_lobby_card_panel(&mut row_paper, row.x, row.y, row.w, row.h);
         let _ = adapter
-            .draw_tex_triangles_no_present(self.special_paper.texture_id, &row_paper.texture_bytes);
+            .draw_sprite_batch_no_present(self.special_paper.texture_id, &row_paper.texture_bytes);
 
         let mut text = ts_ui::UiBatch::new(self.window_width, self.window_height);
         let title = self
@@ -1201,7 +1200,7 @@ impl LoadScreen {
             1.0,
             LOBBY_MUTED_TEXT,
         );
-        let _ = adapter.draw_rgb_triangles_no_present(&text.solid_bytes);
+        let _ = adapter.draw_solid_batch_no_present(&text.solid_bytes);
 
         if self.active_lobby.is_none() {
             let button_asset = if play_hovered && self.lobby_rx.is_none() {
@@ -1211,7 +1210,7 @@ impl LoadScreen {
             };
             let mut button = SpriteBatch::new(self.window_width, self.window_height);
             button.image(play_rect.x, play_rect.y, play_rect.w, play_rect.h, tint);
-            let _ = adapter.draw_tex_triangles_no_present(button_asset.texture_id, &button.bytes);
+            let _ = adapter.draw_sprite_batch_no_present(button_asset.texture_id, &button.bytes);
 
             let mut icon = SpriteBatch::new(self.window_width, self.window_height);
             icon.image(
@@ -1221,8 +1220,8 @@ impl LoadScreen {
                 LOBBY_ACTION_ICON_SIZE,
                 tint,
             );
-            let _ = adapter
-                .draw_tex_triangles_no_present(self.create_game_icon.texture_id, &icon.bytes);
+            let _ =
+                adapter.draw_sprite_batch_no_present(self.create_game_icon.texture_id, &icon.bytes);
         } else {
             let button_asset = if leave_hovered && self.lobby_rx.is_none() {
                 &self.small_blue_square_button_hover
@@ -1231,7 +1230,7 @@ impl LoadScreen {
             };
             let mut button = SpriteBatch::new(self.window_width, self.window_height);
             button.image(leave_rect.x, leave_rect.y, leave_rect.w, leave_rect.h, tint);
-            let _ = adapter.draw_tex_triangles_no_present(button_asset.texture_id, &button.bytes);
+            let _ = adapter.draw_sprite_batch_no_present(button_asset.texture_id, &button.bytes);
 
             let mut icon = SpriteBatch::new(self.window_width, self.window_height);
             icon.image(
@@ -1242,7 +1241,7 @@ impl LoadScreen {
                 tint,
             );
             let _ = adapter
-                .draw_tex_triangles_no_present(self.small_red_round_button.texture_id, &icon.bytes);
+                .draw_sprite_batch_no_present(self.small_red_round_button.texture_id, &icon.bytes);
         }
 
         if play_hovered || leave_hovered {
@@ -1262,7 +1261,7 @@ impl LoadScreen {
                 1.0,
                 LOBBY_TEXT,
             );
-            let _ = adapter.draw_rgb_triangles_no_present(&label.solid_bytes);
+            let _ = adapter.draw_solid_batch_no_present(&label.solid_bytes);
         }
     }
 
@@ -1279,7 +1278,7 @@ impl LoadScreen {
             Rgba8::WHITE,
         );
         let _ = adapter
-            .draw_tex_triangles_no_present(self.regular_paper.texture_id, &paper.texture_bytes);
+            .draw_sprite_batch_no_present(self.regular_paper.texture_id, &paper.texture_bytes);
 
         let mut buttons = SpriteBatch::new(self.window_width, self.window_height);
         let mut hover_buttons = SpriteBatch::new(self.window_width, self.window_height);
@@ -1311,11 +1310,9 @@ impl LoadScreen {
             );
         }
 
-        let _ = adapter.draw_tex_triangles_no_present(
-            self.small_blue_square_button.texture_id,
-            &buttons.bytes,
-        );
-        let _ = adapter.draw_tex_triangles_no_present(
+        let _ = adapter
+            .draw_sprite_batch_no_present(self.small_blue_square_button.texture_id, &buttons.bytes);
+        let _ = adapter.draw_sprite_batch_no_present(
             self.small_blue_square_button_hover.texture_id,
             &hover_buttons.bytes,
         );
@@ -1326,7 +1323,7 @@ impl LoadScreen {
             let mut icon_batch = SpriteBatch::new(self.window_width, self.window_height);
             icon_batch.image(icon_x, icon_y, TOP_ICON_SIZE, TOP_ICON_SIZE, Rgba8::WHITE);
             let _ = adapter
-                .draw_tex_triangles_no_present(self.top_icons[0].texture_id, &icon_batch.bytes);
+                .draw_sprite_batch_no_present(self.top_icons[0].texture_id, &icon_batch.bytes);
         }
 
         for (index, icon) in self.top_icons.iter().enumerate() {
@@ -1335,7 +1332,7 @@ impl LoadScreen {
             let icon_y = rect.y + (rect.h - TOP_ICON_SIZE) * 0.5;
             let mut icon_batch = SpriteBatch::new(self.window_width, self.window_height);
             icon_batch.image(icon_x, icon_y, TOP_ICON_SIZE, TOP_ICON_SIZE, Rgba8::WHITE);
-            let _ = adapter.draw_tex_triangles_no_present(icon.texture_id, &icon_batch.bytes);
+            let _ = adapter.draw_sprite_batch_no_present(icon.texture_id, &icon_batch.bytes);
         }
 
         let mut status = ts_ui::UiBatch::new(self.window_width, self.window_height);
@@ -1348,7 +1345,7 @@ impl LoadScreen {
             2.0,
             PAPER_TEXT,
         );
-        let _ = adapter.draw_rgb_triangles_no_present(&status.solid_bytes);
+        let _ = adapter.draw_solid_batch_no_present(&status.solid_bytes);
     }
 
     fn draw_server_status(&self, adapter: &mut Adapter, table: TableRect) {
@@ -1376,7 +1373,7 @@ impl LoadScreen {
             SERVER_STATUS_ICON_SIZE,
             Rgba8::WHITE,
         );
-        let _ = adapter.draw_tex_triangles_no_present(icon.texture_id, &icon_batch.bytes);
+        let _ = adapter.draw_sprite_batch_no_present(icon.texture_id, &icon_batch.bytes);
 
         let mut label = ts_ui::UiBatch::new(self.window_width, self.window_height);
         label.text(
@@ -1390,7 +1387,7 @@ impl LoadScreen {
             text_scale,
             LOBBY_MUTED_TEXT,
         );
-        let _ = adapter.draw_rgb_triangles_no_present(&label.solid_bytes);
+        let _ = adapter.draw_solid_batch_no_present(&label.solid_bytes);
     }
 
     fn draw_chat(&self, adapter: &mut Adapter, table: TableRect, input: TableRect) {
@@ -1405,7 +1402,7 @@ impl LoadScreen {
             Rgba8::WHITE,
         );
         let _ = adapter
-            .draw_tex_triangles_no_present(self.special_paper.texture_id, &paper.texture_bytes);
+            .draw_sprite_batch_no_present(self.special_paper.texture_id, &paper.texture_bytes);
 
         let mut solid = SolidBatch::new(self.window_width, self.window_height);
         solid.rect(
@@ -1428,7 +1425,7 @@ impl LoadScreen {
                 Rgba8::new(121, 138, 150, 255)
             },
         );
-        let _ = adapter.draw_rgb_triangles_no_present(&solid.bytes);
+        let _ = adapter.draw_solid_batch_no_present(&solid.bytes);
 
         let mut labels = ts_ui::UiBatch::new(self.window_width, self.window_height);
         draw_centered_text(
@@ -1508,7 +1505,7 @@ impl LoadScreen {
             );
         }
 
-        let _ = adapter.draw_rgb_triangles_no_present(&labels.solid_bytes);
+        let _ = adapter.draw_solid_batch_no_present(&labels.solid_bytes);
     }
 
     fn draw_frame(&self, adapter: &mut Adapter) {
@@ -1565,7 +1562,7 @@ impl LoadScreen {
             corner_h,
             corner_tint,
         );
-        let _ = adapter.draw_tex_triangles_no_present(self.edge_corners.texture_id, &corners.bytes);
+        let _ = adapter.draw_sprite_batch_no_present(self.edge_corners.texture_id, &corners.bytes);
 
         let mut border = SolidBatch::new(self.window_width, self.window_height);
         outline_rect(
@@ -1577,7 +1574,7 @@ impl LoadScreen {
             2.0,
             Rgba8::new(0, 0, 0, 255),
         );
-        let _ = adapter.draw_rgb_triangles_no_present(&border.bytes);
+        let _ = adapter.draw_solid_batch_no_present(&border.bytes);
     }
 
     fn window_drag_region_at(&self, point: Point) -> bool {
@@ -1654,7 +1651,7 @@ impl LoadScreen {
         };
         let mut button = SpriteBatch::new(self.window_width, self.window_height);
         button.image(rect.x, rect.y, rect.w, rect.h, Rgba8::WHITE);
-        let _ = adapter.draw_tex_triangles_no_present(button_asset.texture_id, &button.bytes);
+        let _ = adapter.draw_sprite_batch_no_present(button_asset.texture_id, &button.bytes);
 
         let mut close = SpriteBatch::new(self.window_width, self.window_height);
         close.image(
@@ -1664,7 +1661,7 @@ impl LoadScreen {
             CLOSE_ICON_SIZE,
             Rgba8::WHITE,
         );
-        let _ = adapter.draw_tex_triangles_no_present(self.close_icon.texture_id, &close.bytes);
+        let _ = adapter.draw_sprite_batch_no_present(self.close_icon.texture_id, &close.bytes);
     }
 
     fn status_card_text(&self) -> (&str, &str, &str) {
@@ -1877,7 +1874,7 @@ impl FrameProducer for LoadScreen {
                 table.h,
             );
         }
-        let _ = adapter.draw_tex_triangles_no_present(self.wood_table.texture_id, &tables.bytes);
+        let _ = adapter.draw_sprite_batch_no_present(self.wood_table.texture_id, &tables.bytes);
 
         let large_table = table_layout[0];
         self.draw_lobby_action_row(adapter, large_table);

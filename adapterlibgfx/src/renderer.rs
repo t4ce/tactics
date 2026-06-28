@@ -1,220 +1,16 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
-use std::time::Instant;
 
 use futures::executor::block_on;
-use wgpu::util::DeviceExt;
 use winit::dpi::PhysicalSize;
 use winit::window::Window;
 
 use crate::command::{
-    BlendFactor, BlendState, Frame, FrameCommand, SamplerFilter, SamplerState, SamplerWrap,
-    ScissorRect, TextureEffect, TextureSampleKind,
+    BlendFactor, BlendState, Frame, FrameCommand, SamplerFilter, SamplerState, ScissorRect,
+    TextureEffect, TextureSampleKind,
 };
+use crate::records::{Rgba8, SolidRect, SpriteQuad};
 use crate::texture::{TextureImage, TextureRegistry};
-use crate::vertex::{GpuRgbVertex, GpuTexVertex, RgbVertex, TexVertex};
-
-const SHADER_COMMON: &str = r#"
-struct RgbIn {
-    @location(0) position: vec2<f32>,
-    @location(1) color: vec4<f32>,
-};
-
-struct RgbOut {
-    @builtin(position) position: vec4<f32>,
-    @location(0) color: vec4<f32>,
-};
-
-struct FrameParams {
-    data: vec4<f32>,
-};
-
-@group(0) @binding(0) var<uniform> frame_params: FrameParams;
-
-@vertex
-fn rgb_vs(in: RgbIn) -> RgbOut {
-    var out: RgbOut;
-    out.position = vec4<f32>(in.position, 0.0, 1.0);
-    out.color = in.color;
-    return out;
-}
-
-@fragment
-fn rgb_fs(in: RgbOut) -> @location(0) vec4<f32> {
-    return in.color;
-}
-
-struct TexIn {
-    @location(0) position: vec2<f32>,
-    @location(1) uv: vec2<f32>,
-    @location(2) color: vec4<f32>,
-};
-
-struct TexOut {
-    @builtin(position) position: vec4<f32>,
-    @location(0) uv: vec2<f32>,
-    @location(1) color: vec4<f32>,
-};
-
-@group(1) @binding(0) var tex_sampler: sampler;
-@group(1) @binding(1) var tex_image: texture_2d<f32>;
-
-@vertex
-fn tex_vs(in: TexIn) -> TexOut {
-    var out: TexOut;
-    out.position = vec4<f32>(in.position, 0.0, 1.0);
-    out.uv = in.uv;
-    out.color = in.color;
-    return out;
-}
-
-@fragment
-fn tex_mask_fs(in: TexOut) -> @location(0) vec4<f32> {
-    let tex = textureSample(tex_image, tex_sampler, in.uv);
-    let mask = select(tex.r, tex.a, tex.a < 1.0);
-    return vec4<f32>(in.color.rgb * mask, in.color.a * mask);
-}
-"#;
-
-#[cfg(not(feature = "shaderson"))]
-const SHADER_TEX_FRAGMENT: &str = r#"
-@fragment
-fn world_rgb_fs(in: RgbOut) -> @location(0) vec4<f32> {
-    return in.color;
-}
-
-@fragment
-fn tex_fs(in: TexOut) -> @location(0) vec4<f32> {
-    return textureSample(tex_image, tex_sampler, in.uv) * in.color;
-}
-
-@fragment
-fn world_tex_fs(in: TexOut) -> @location(0) vec4<f32> {
-    return textureSample(tex_image, tex_sampler, in.uv) * in.color;
-}
-
-@fragment
-fn blur_tex_fs(in: TexOut) -> @location(0) vec4<f32> {
-    let dims = max(vec2<f32>(textureDimensions(tex_image, 0u)), vec2<f32>(1.0, 1.0));
-    let texel = 1.0 / dims;
-    let center = textureSample(tex_image, tex_sampler, in.uv) * 4.0;
-    let cardinal =
-        textureSample(tex_image, tex_sampler, in.uv + vec2<f32>(-texel.x, 0.0)) * 2.0 +
-        textureSample(tex_image, tex_sampler, in.uv + vec2<f32>( texel.x, 0.0)) * 2.0 +
-        textureSample(tex_image, tex_sampler, in.uv + vec2<f32>(0.0, -texel.y)) * 2.0 +
-        textureSample(tex_image, tex_sampler, in.uv + vec2<f32>(0.0,  texel.y)) * 2.0;
-    let diagonal =
-        textureSample(tex_image, tex_sampler, in.uv + vec2<f32>(-texel.x, -texel.y)) +
-        textureSample(tex_image, tex_sampler, in.uv + vec2<f32>( texel.x, -texel.y)) +
-        textureSample(tex_image, tex_sampler, in.uv + vec2<f32>(-texel.x,  texel.y)) +
-        textureSample(tex_image, tex_sampler, in.uv + vec2<f32>( texel.x,  texel.y));
-    return ((center + cardinal + diagonal) / 16.0) * in.color;
-}
-"#;
-
-#[cfg(feature = "shaderson")]
-const SHADER_TEX_FRAGMENT: &str = r#"
-fn tex_alpha(uv: vec2<f32>) -> f32 {
-    return textureSample(tex_image, tex_sampler, uv).a;
-}
-
-fn frame_time() -> f32 {
-    return frame_params.data.x;
-}
-
-fn hash21(pixel: vec2<f32>) -> f32 {
-    return fract(sin(dot(pixel, vec2<f32>(12.9898, 78.233))) * 43758.5453);
-}
-
-fn day_night_tint(color: vec4<f32>) -> vec4<f32> {
-    let cycle = fract(frame_time() / 180.0);
-    let night = smoothstep(0.48, 0.72, cycle) * (1.0 - smoothstep(0.88, 1.0, cycle));
-    let dawn = smoothstep(0.88, 1.0, cycle) + (1.0 - smoothstep(0.0, 0.12, cycle));
-    let dusk = smoothstep(0.38, 0.52, cycle) * (1.0 - smoothstep(0.52, 0.66, cycle));
-    var rgb = color.rgb;
-    rgb = mix(rgb, rgb * vec3<f32>(0.58, 0.66, 0.88) + vec3<f32>(0.010, 0.018, 0.045), night * 0.42);
-    rgb = mix(rgb, rgb * vec3<f32>(1.08, 0.94, 0.78) + vec3<f32>(0.030, 0.018, 0.004), (dawn + dusk) * 0.16);
-    return vec4<f32>(clamp(rgb, vec3<f32>(0.0), vec3<f32>(1.0)), color.a);
-}
-
-@fragment
-fn world_rgb_fs(in: RgbOut) -> @location(0) vec4<f32> {
-    return day_night_tint(in.color);
-}
-
-@fragment
-fn tex_fs(in: TexOut) -> @location(0) vec4<f32> {
-    let base = textureSample(tex_image, tex_sampler, in.uv) * in.color;
-    return base;
-}
-
-@fragment
-fn world_tex_fs(in: TexOut) -> @location(0) vec4<f32> {
-    let base = textureSample(tex_image, tex_sampler, in.uv) * in.color;
-    let dims = max(vec2<f32>(textureDimensions(tex_image, 0u)), vec2<f32>(1.0, 1.0));
-    let texel = 1.0 / dims;
-
-    let left = tex_alpha(in.uv - vec2<f32>(texel.x, 0.0));
-    let right = tex_alpha(in.uv + vec2<f32>(texel.x, 0.0));
-    let up = tex_alpha(in.uv - vec2<f32>(0.0, texel.y));
-    let down = tex_alpha(in.uv + vec2<f32>(0.0, texel.y));
-    let neighbor_max = max(max(left, right), max(up, down));
-
-    if base.a < 0.02 {
-        if neighbor_max > 0.20 {
-            return vec4<f32>(0.015, 0.018, 0.026, neighbor_max * in.color.a * 0.34);
-        }
-        return base;
-    }
-
-    let coverage = smoothstep(0.02, 0.20, base.a);
-    let luma = dot(base.rgb, vec3<f32>(0.299, 0.587, 0.114));
-    let pixel = floor(in.position.xy);
-    let foliage = smoothstep(0.03, 0.22, base.g - max(base.r, base.b));
-    let gold = smoothstep(0.08, 0.34, base.r - base.b)
-        * smoothstep(0.00, 0.22, base.g - base.b)
-        * smoothstep(0.34, 0.78, luma);
-
-    let local_y = fract(in.uv.y * dims.y);
-    let tile_band = smoothstep(0.0, 0.55, local_y) * (1.0 - smoothstep(0.72, 1.0, local_y));
-    let top_light = max(0.0, 1.0 - min(left, up)) * coverage;
-    let foot_shadow = max(0.0, 1.0 - min(right, down)) * coverage;
-    let alpha_slope = clamp((right + down - left - up) * 0.38, -0.22, 0.22);
-
-    let gray = vec3<f32>(luma);
-    var rgb = gray + (base.rgb - gray) * (1.05 + foliage * 0.08 + gold * 0.10);
-    rgb += vec3<f32>(1.0, 0.86, 0.52) * top_light * (0.08 + gold * 0.12);
-    rgb -= vec3<f32>(0.025, 0.040, 0.075) * foot_shadow * (0.30 + foliage * 0.16);
-    rgb += vec3<f32>(0.030, 0.050, 0.020) * foliage * tile_band;
-    rgb *= 1.0 + alpha_slope;
-
-    rgb += vec3<f32>(1.0, 0.82, 0.30) * gold * step(0.965, hash21(pixel)) * 0.20;
-
-    let grain = hash21(pixel) - 0.5;
-    let dither = step(0.5, fract((pixel.x + pixel.y) * 0.5)) * 0.018 - 0.009;
-    rgb *= 0.995 + grain * 0.018 + dither;
-
-    return day_night_tint(vec4<f32>(clamp(rgb, vec3<f32>(0.0), vec3<f32>(1.0)), base.a));
-}
-
-@fragment
-fn blur_tex_fs(in: TexOut) -> @location(0) vec4<f32> {
-    let dims = max(vec2<f32>(textureDimensions(tex_image, 0u)), vec2<f32>(1.0, 1.0));
-    let texel = 1.0 / dims;
-    let center = textureSample(tex_image, tex_sampler, in.uv) * 4.0;
-    let cardinal =
-        textureSample(tex_image, tex_sampler, in.uv + vec2<f32>(-texel.x, 0.0)) * 2.0 +
-        textureSample(tex_image, tex_sampler, in.uv + vec2<f32>( texel.x, 0.0)) * 2.0 +
-        textureSample(tex_image, tex_sampler, in.uv + vec2<f32>(0.0, -texel.y)) * 2.0 +
-        textureSample(tex_image, tex_sampler, in.uv + vec2<f32>(0.0,  texel.y)) * 2.0;
-    let diagonal =
-        textureSample(tex_image, tex_sampler, in.uv + vec2<f32>(-texel.x, -texel.y)) +
-        textureSample(tex_image, tex_sampler, in.uv + vec2<f32>( texel.x, -texel.y)) +
-        textureSample(tex_image, tex_sampler, in.uv + vec2<f32>(-texel.x,  texel.y)) +
-        textureSample(tex_image, tex_sampler, in.uv + vec2<f32>( texel.x,  texel.y));
-    return ((center + cardinal + diagonal) / 16.0) * in.color;
-}
-"#;
 
 #[derive(Debug)]
 pub enum RenderError {
@@ -225,27 +21,103 @@ pub enum RenderError {
     InvalidTarget(u32),
 }
 
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
-enum PipelineKind {
-    Rgb,
-    Tex,
-}
-
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
-struct PipelineKey {
-    kind: PipelineKind,
-    texture_effect: TextureEffect,
-    sample_kind: TextureSampleKind,
-    blend: BlendState,
-    format: wgpu::TextureFormat,
-}
-
-struct GpuTexture {
+#[derive(Clone)]
+struct CpuSurface {
     width: u32,
     height: u32,
-    revision: u64,
-    _texture: wgpu::Texture,
-    view: wgpu::TextureView,
+    rgba: Vec<u8>,
+}
+
+impl CpuSurface {
+    fn new(width: u32, height: u32) -> Self {
+        let width = width.max(1);
+        let height = height.max(1);
+        Self {
+            width,
+            height,
+            rgba: vec![0; byte_len(width, height)],
+        }
+    }
+
+    fn from_image(image: &TextureImage) -> Self {
+        Self {
+            width: image.width.max(1),
+            height: image.height.max(1),
+            rgba: image.rgba.clone(),
+        }
+    }
+
+    fn clear(&mut self, rgb: u32) {
+        let r = ((rgb >> 16) & 0xff) as u8;
+        let g = ((rgb >> 8) & 0xff) as u8;
+        let b = (rgb & 0xff) as u8;
+        for px in self.rgba.chunks_exact_mut(4) {
+            px[0] = r;
+            px[1] = g;
+            px[2] = b;
+            px[3] = 255;
+        }
+    }
+
+    fn resize(&mut self, width: u32, height: u32) {
+        let width = width.max(1);
+        let height = height.max(1);
+        if self.width == width && self.height == height {
+            return;
+        }
+        self.width = width;
+        self.height = height;
+        self.rgba.resize(byte_len(width, height), 0);
+    }
+}
+
+#[derive(Clone, Copy)]
+struct PaintState {
+    blend: BlendState,
+    sampler: SamplerState,
+    effect: TextureEffect,
+    scissor: Option<ScissorRect>,
+    target: u32,
+}
+
+impl Default for PaintState {
+    fn default() -> Self {
+        Self {
+            blend: BlendState::default(),
+            sampler: SamplerState::default(),
+            effect: TextureEffect::default(),
+            scissor: None,
+            target: 0,
+        }
+    }
+}
+
+enum SourceImage<'a> {
+    Texture(&'a TextureImage),
+    Surface(&'a CpuSurface),
+}
+
+impl SourceImage<'_> {
+    fn width(&self) -> u32 {
+        match self {
+            Self::Texture(image) => image.width,
+            Self::Surface(surface) => surface.width,
+        }
+    }
+
+    fn height(&self) -> u32 {
+        match self {
+            Self::Texture(image) => image.height,
+            Self::Surface(surface) => surface.height,
+        }
+    }
+
+    fn rgba(&self) -> &[u8] {
+        match self {
+            Self::Texture(image) => &image.rgba,
+            Self::Surface(surface) => &surface.rgba,
+        }
+    }
 }
 
 pub struct WgpuRenderer {
@@ -254,138 +126,78 @@ pub struct WgpuRenderer {
     device: wgpu::Device,
     queue: wgpu::Queue,
     config: wgpu::SurfaceConfiguration,
-    shader: wgpu::ShaderModule,
-    started_at: Instant,
-    frame_layout: wgpu::BindGroupLayout,
-    texture_layout: wgpu::BindGroupLayout,
-    pipelines: HashMap<PipelineKey, wgpu::RenderPipeline>,
-    textures: HashMap<u32, GpuTexture>,
-    sampler: SamplerState,
-    texture_effect: TextureEffect,
-    blend: BlendState,
-    scissor: Option<ScissorRect>,
+    surfaces: HashMap<u32, CpuSurface>,
 }
 
 pub struct WgpuHeadlessRenderer {
-    device: wgpu::Device,
-    queue: wgpu::Queue,
+    _device: wgpu::Device,
+    _queue: wgpu::Queue,
     width: u32,
     height: u32,
-    format: wgpu::TextureFormat,
-    _target: wgpu::Texture,
-    target_view: wgpu::TextureView,
-    shader: wgpu::ShaderModule,
-    started_at: Instant,
-    frame_layout: wgpu::BindGroupLayout,
-    texture_layout: wgpu::BindGroupLayout,
-    pipelines: HashMap<PipelineKey, wgpu::RenderPipeline>,
-    textures: HashMap<u32, GpuTexture>,
-    sampler: SamplerState,
-    texture_effect: TextureEffect,
-    blend: BlendState,
-    scissor: Option<ScissorRect>,
+    surfaces: HashMap<u32, CpuSurface>,
 }
 
 impl WgpuRenderer {
     pub fn new(window: Arc<Window>) -> Result<Self, RenderError> {
-        block_on(Self::new_async(window))
-    }
-
-    pub async fn new_async(window: Arc<Window>) -> Result<Self, RenderError> {
-        let size = window.inner_size();
-        let width = size.width.max(1);
-        let height = size.height.max(1);
         let instance = wgpu::Instance::default();
         let surface = instance
             .create_surface(window.clone())
-            .map_err(|err| RenderError::Surface(err.to_string()))?;
-        let adapter = instance
-            .request_adapter(&wgpu::RequestAdapterOptions {
-                power_preference: window_power_preference(),
-                force_fallback_adapter: window_force_fallback_adapter(),
-                compatible_surface: Some(&surface),
-            })
-            .await
+            .map_err(|error| RenderError::Surface(error.to_string()))?;
+        let adapter = block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
+            power_preference: wgpu::PowerPreference::HighPerformance,
+            compatible_surface: Some(&surface),
+            force_fallback_adapter: false,
+        }))
+        .ok_or(RenderError::AdapterUnavailable)?;
+        let (device, queue) = block_on(adapter.request_device(
+            &wgpu::DeviceDescriptor {
+                label: Some("adapterlibgfx-copy-device"),
+                required_features: wgpu::Features::empty(),
+                required_limits: wgpu::Limits::default(),
+                memory_hints: wgpu::MemoryHints::Performance,
+            },
+            None,
+        ))
+        .map_err(|error| RenderError::DeviceUnavailable(error.to_string()))?;
+        let size = window.inner_size();
+        let caps = surface.get_capabilities(&adapter);
+        let format = caps
+            .formats
+            .iter()
+            .copied()
+            .find(|format| format.is_srgb())
+            .or_else(|| caps.formats.first().copied())
             .ok_or(RenderError::AdapterUnavailable)?;
-        let (device, queue) = adapter
-            .request_device(
-                &wgpu::DeviceDescriptor {
-                    label: Some("adapterlibgfx-device"),
-                    required_features: wgpu::Features::empty(),
-                    required_limits: wgpu::Limits::default(),
-                    memory_hints: wgpu::MemoryHints::default(),
-                },
-                None,
-            )
-            .await
-            .map_err(|err| RenderError::DeviceUnavailable(err.to_string()))?;
-        let mut config = surface
-            .get_default_config(&adapter, width, height)
-            .ok_or(RenderError::AdapterUnavailable)?;
-        config.usage = wgpu::TextureUsages::RENDER_ATTACHMENT;
+        let present_mode = caps
+            .present_modes
+            .iter()
+            .copied()
+            .find(|mode| *mode == wgpu::PresentMode::Fifo)
+            .unwrap_or(wgpu::PresentMode::AutoVsync);
+        let alpha_mode = caps
+            .alpha_modes
+            .first()
+            .copied()
+            .unwrap_or(wgpu::CompositeAlphaMode::Opaque);
+        let config = wgpu::SurfaceConfiguration {
+            usage: wgpu::TextureUsages::COPY_DST,
+            format,
+            width: size.width.max(1),
+            height: size.height.max(1),
+            present_mode,
+            alpha_mode,
+            view_formats: vec![],
+            desired_maximum_frame_latency: 2,
+        };
         surface.configure(&device, &config);
-
-        let shader_source = [SHADER_COMMON, SHADER_TEX_FRAGMENT].concat();
-        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("adapterlibgfx-shader"),
-            source: wgpu::ShaderSource::Wgsl(shader_source.into()),
-        });
-        let frame_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("adapterlibgfx-frame-layout"),
-            entries: &[wgpu::BindGroupLayoutEntry {
-                binding: 0,
-                visibility: wgpu::ShaderStages::FRAGMENT,
-                ty: wgpu::BindingType::Buffer {
-                    ty: wgpu::BufferBindingType::Uniform,
-                    has_dynamic_offset: false,
-                    min_binding_size: None,
-                },
-                count: None,
-            }],
-        });
-        let texture_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("adapterlibgfx-texture-layout"),
-            entries: &[
-                wgpu::BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 1,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Texture {
-                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                        view_dimension: wgpu::TextureViewDimension::D2,
-                        multisampled: false,
-                    },
-                    count: None,
-                },
-            ],
-        });
-
         Ok(Self {
             window,
             surface,
             device,
             queue,
             config,
-            shader,
-            started_at: Instant::now(),
-            frame_layout,
-            texture_layout,
-            pipelines: HashMap::new(),
-            textures: HashMap::new(),
-            sampler: SamplerState::default(),
-            texture_effect: TextureEffect::default(),
-            blend: BlendState::default(),
-            scissor: None,
+            surfaces: HashMap::new(),
         })
-    }
-
-    pub fn window(&self) -> &Arc<Window> {
-        &self.window
     }
 
     pub fn resize(&mut self, size: PhysicalSize<u32>) {
@@ -404,570 +216,57 @@ impl WgpuRenderer {
         textures: &TextureRegistry,
         frame: &Frame,
     ) -> Result<(), RenderError> {
-        self.sync_textures(textures);
-        let surface_texture = if frame.allow_present {
-            match self.surface.get_current_texture() {
-                Ok(texture) => Some(texture),
-                Err(wgpu::SurfaceError::Lost | wgpu::SurfaceError::Outdated) => {
-                    self.surface.configure(&self.device, &self.config);
-                    Some(
-                        self.surface
-                            .get_current_texture()
-                            .map_err(|err| RenderError::Surface(err.to_string()))?,
-                    )
-                }
-                Err(wgpu::SurfaceError::Timeout) => return Ok(()),
-                Err(err) => return Err(RenderError::Surface(err.to_string())),
+        let logical = paint_frame(
+            textures,
+            frame,
+            &mut self.surfaces,
+            self.config.width,
+            self.config.height,
+        )?;
+        if !frame.allow_present {
+            return Ok(());
+        }
+
+        let surface_frame = match self.surface.get_current_texture() {
+            Ok(texture) => texture,
+            Err(wgpu::SurfaceError::Lost | wgpu::SurfaceError::Outdated) => {
+                self.resize(self.window.inner_size());
+                self.surface
+                    .get_current_texture()
+                    .map_err(|error| RenderError::Surface(error.to_string()))?
             }
-        } else {
-            None
+            Err(error) => return Err(RenderError::Surface(error.to_string())),
         };
-        let surface_view = surface_texture.as_ref().map(|texture| {
-            texture
-                .texture
-                .create_view(&wgpu::TextureViewDescriptor::default())
-        });
-
-        self.sampler = SamplerState::default();
-        self.texture_effect = TextureEffect::default();
-        self.blend = BlendState::default();
-        self.scissor = None;
-
-        let mut encoder = self
-            .device
-            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("adapterlibgfx-frame"),
-            });
-        let frame_params = [
-            self.started_at.elapsed().as_secs_f32(),
-            frame.logical_width.max(1) as f32,
-            frame.logical_height.max(1) as f32,
-            0.0,
-        ];
-        let frame_buffer = self
-            .device
-            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some("adapterlibgfx-frame-params"),
-                contents: bytemuck::cast_slice(&frame_params),
-                usage: wgpu::BufferUsages::UNIFORM,
-            });
-        let frame_bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("adapterlibgfx-frame-bind-group"),
-            layout: &self.frame_layout,
-            entries: &[wgpu::BindGroupEntry {
-                binding: 0,
-                resource: frame_buffer.as_entire_binding(),
-            }],
-        });
-        let mut current_target = 0u32;
-        let mut cleared_targets = HashSet::new();
-
-        if frame.commands.is_empty() && frame.allow_present {
-            if let Some(view) = surface_view.as_ref() {
-                self.clear_target(&mut encoder, view, frame.clear_rgb);
-            }
-        }
-
-        for command in &frame.commands {
-            match command {
-                FrameCommand::SetBlend(blend) => self.blend = *blend,
-                FrameCommand::SetSampler(sampler) => self.sampler = *sampler,
-                FrameCommand::SetTextureEffect(effect) => self.texture_effect = *effect,
-                FrameCommand::SetScissor(scissor) => {
-                    self.scissor = if current_target == 0 {
-                        scissor.map(|rect| self.clip_surface_scissor(rect))
-                    } else {
-                        *scissor
-                    };
-                }
-                FrameCommand::SetRenderTarget(tex_id) => {
-                    current_target = *tex_id;
-                    self.scissor = None;
-                }
-                FrameCommand::DrawRgb { vertices } => {
-                    let Some(view) = self.target_view(current_target, surface_view.as_ref())?
-                    else {
-                        continue;
-                    };
-                    let format = self.target_format(current_target);
-                    let load = self.load_op_for_target(&mut cleared_targets, current_target, frame);
-                    if current_target == 0 {
-                        let vertices = self.surface_rgb_vertices(vertices, frame);
-                        self.draw_rgb(
-                            &mut encoder,
-                            &view,
-                            format,
-                            load,
-                            &frame_bind_group,
-                            &vertices,
-                        );
-                    } else {
-                        self.draw_rgb(
-                            &mut encoder,
-                            &view,
-                            format,
-                            load,
-                            &frame_bind_group,
-                            vertices,
-                        );
-                    }
-                }
-                FrameCommand::DrawTex {
-                    tex_id,
-                    sample_kind,
-                    vertices,
-                } => {
-                    let Some(view) = self.target_view(current_target, surface_view.as_ref())?
-                    else {
-                        continue;
-                    };
-                    let Some(source) = self.textures.get(tex_id) else {
-                        return Err(RenderError::MissingTexture(*tex_id));
-                    };
-                    let source_view = source.view.clone();
-                    let format = self.target_format(current_target);
-                    let load = self.load_op_for_target(&mut cleared_targets, current_target, frame);
-                    if current_target == 0 {
-                        let vertices = self.surface_tex_vertices(vertices, frame);
-                        self.draw_tex(
-                            &mut encoder,
-                            &view,
-                            format,
-                            load,
-                            &frame_bind_group,
-                            &source_view,
-                            *sample_kind,
-                            &vertices,
-                        );
-                    } else {
-                        self.draw_tex(
-                            &mut encoder,
-                            &view,
-                            format,
-                            load,
-                            &frame_bind_group,
-                            &source_view,
-                            *sample_kind,
-                            vertices,
-                        );
-                    }
-                }
-            }
-        }
-
-        self.queue.submit(Some(encoder.finish()));
-        if let Some(texture) = surface_texture {
-            texture.present();
-        }
-        Ok(())
-    }
-
-    fn sync_textures(&mut self, textures: &TextureRegistry) {
-        for (&tex_id, image) in textures.iter() {
-            let needs_upload = self
-                .textures
-                .get(&tex_id)
-                .map(|gpu| {
-                    gpu.revision != image.revision
-                        || gpu.width != image.width
-                        || gpu.height != image.height
-                })
-                .unwrap_or(true);
-            if needs_upload {
-                let gpu = self.create_or_upload_texture(tex_id, image);
-                self.textures.insert(tex_id, gpu);
-            }
-        }
-    }
-
-    fn create_or_upload_texture(&self, tex_id: u32, image: &TextureImage) -> GpuTexture {
-        let texture = self.device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("adapterlibgfx-texture"),
-            size: wgpu::Extent3d {
-                width: image.width,
-                height: image.height,
-                depth_or_array_layers: 1,
-            },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::Rgba8UnormSrgb,
-            usage: wgpu::TextureUsages::TEXTURE_BINDING
-                | wgpu::TextureUsages::COPY_DST
-                | wgpu::TextureUsages::RENDER_ATTACHMENT,
-            view_formats: &[],
-        });
+        let present = scale_surface(&logical, self.config.width, self.config.height);
         self.queue.write_texture(
             wgpu::TexelCopyTextureInfo {
-                texture: &texture,
+                texture: &surface_frame.texture,
                 mip_level: 0,
                 origin: wgpu::Origin3d::ZERO,
                 aspect: wgpu::TextureAspect::All,
             },
-            &image.rgba,
+            &present.rgba,
             wgpu::TexelCopyBufferLayout {
                 offset: 0,
-                bytes_per_row: Some(image.width * 4),
-                rows_per_image: Some(image.height),
+                bytes_per_row: Some(present.width * 4),
+                rows_per_image: Some(present.height),
             },
             wgpu::Extent3d {
-                width: image.width,
-                height: image.height,
+                width: present.width,
+                height: present.height,
                 depth_or_array_layers: 1,
             },
         );
-        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
-        let _ = tex_id;
-        GpuTexture {
-            width: image.width,
-            height: image.height,
-            revision: image.revision,
-            _texture: texture,
-            view,
-        }
+        surface_frame.present();
+        Ok(())
     }
-
-    fn target_view(
-        &self,
-        tex_id: u32,
-        surface_view: Option<&wgpu::TextureView>,
-    ) -> Result<Option<wgpu::TextureView>, RenderError> {
-        if tex_id == 0 {
-            Ok(surface_view.cloned())
-        } else {
-            self.textures
-                .get(&tex_id)
-                .map(|texture| Some(texture.view.clone()))
-                .ok_or(RenderError::InvalidTarget(tex_id))
-        }
-    }
-
-    fn load_op_for_target(
-        &self,
-        cleared_targets: &mut HashSet<u32>,
-        tex_id: u32,
-        frame: &Frame,
-    ) -> wgpu::LoadOp<wgpu::Color> {
-        if frame.preserve_contents || !cleared_targets.insert(tex_id) {
-            wgpu::LoadOp::Load
-        } else {
-            wgpu::LoadOp::Clear(clear_color(frame.clear_rgb))
-        }
-    }
-
-    fn target_format(&self, tex_id: u32) -> wgpu::TextureFormat {
-        if tex_id == 0 {
-            self.config.format
-        } else {
-            wgpu::TextureFormat::Rgba8UnormSrgb
-        }
-    }
-
-    fn clip_surface_scissor(&self, rect: crate::command::ScissorRect) -> crate::command::ScissorRect {
-        let x = rect.x.min(self.config.width.saturating_sub(1));
-        let y = rect.y.min(self.config.height.saturating_sub(1));
-        crate::command::ScissorRect {
-            x,
-            y,
-            width: rect.width.min(self.config.width.saturating_sub(x)).max(1),
-            height: rect.height.min(self.config.height.saturating_sub(y)).max(1),
-        }
-    }
-
-    fn surface_rgb_vertices(&self, vertices: &[RgbVertex], frame: &Frame) -> Vec<RgbVertex> {
-        vertices
-            .iter()
-            .copied()
-            .map(|mut vertex| {
-                vertex.x = self.logical_clip_x_to_surface_clip(vertex.x, frame);
-                vertex.y = self.logical_clip_y_to_surface_clip(vertex.y, frame);
-                vertex
-            })
-            .collect()
-    }
-
-    fn surface_tex_vertices(&self, vertices: &[TexVertex], frame: &Frame) -> Vec<TexVertex> {
-        vertices
-            .iter()
-            .copied()
-            .map(|mut vertex| {
-                vertex.x = self.logical_clip_x_to_surface_clip(vertex.x, frame);
-                vertex.y = self.logical_clip_y_to_surface_clip(vertex.y, frame);
-                vertex
-            })
-            .collect()
-    }
-
-    fn logical_clip_x_to_surface_clip(&self, x: f32, frame: &Frame) -> f32 {
-        let logical_x = (x + 1.0) * 0.5 * frame.logical_width.max(1) as f32;
-        logical_x / self.config.width.max(1) as f32 * 2.0 - 1.0
-    }
-
-    fn logical_clip_y_to_surface_clip(&self, y: f32, frame: &Frame) -> f32 {
-        let logical_y = (1.0 - y) * 0.5 * frame.logical_height.max(1) as f32;
-        1.0 - logical_y / self.config.height.max(1) as f32 * 2.0
-    }
-
-    fn clear_target(
-        &self,
-        encoder: &mut wgpu::CommandEncoder,
-        view: &wgpu::TextureView,
-        clear_rgb: u32,
-    ) {
-        let _pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-            label: Some("adapterlibgfx-clear"),
-            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                view,
-                resolve_target: None,
-                ops: wgpu::Operations {
-                    load: wgpu::LoadOp::Clear(clear_color(clear_rgb)),
-                    store: wgpu::StoreOp::Store,
-                },
-            })],
-            depth_stencil_attachment: None,
-            timestamp_writes: None,
-            occlusion_query_set: None,
-        });
-    }
-
-    fn draw_rgb(
-        &mut self,
-        encoder: &mut wgpu::CommandEncoder,
-        view: &wgpu::TextureView,
-        format: wgpu::TextureFormat,
-        load: wgpu::LoadOp<wgpu::Color>,
-        frame_bind_group: &wgpu::BindGroup,
-        vertices: &[crate::vertex::RgbVertex],
-    ) {
-        if vertices.is_empty() {
-            return;
-        }
-        let gpu_vertices = vertices
-            .iter()
-            .copied()
-            .map(GpuRgbVertex::from)
-            .collect::<Vec<_>>();
-        let vertex_buffer = self
-            .device
-            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some("adapterlibgfx-rgb-vertices"),
-                contents: bytemuck::cast_slice(&gpu_vertices),
-                usage: wgpu::BufferUsages::VERTEX,
-            });
-        let pipeline = self
-            .pipeline(PipelineKind::Rgb, TextureSampleKind::Rgba, format)
-            .clone();
-        let mut pass = self.begin_draw_pass(encoder, view, load);
-        pass.set_pipeline(&pipeline);
-        pass.set_bind_group(0, frame_bind_group, &[]);
-        if let Some(scissor) = self.scissor {
-            pass.set_scissor_rect(scissor.x, scissor.y, scissor.width, scissor.height);
-        }
-        pass.set_vertex_buffer(0, vertex_buffer.slice(..));
-        pass.draw(0..gpu_vertices.len() as u32, 0..1);
-    }
-
-    fn draw_tex(
-        &mut self,
-        encoder: &mut wgpu::CommandEncoder,
-        view: &wgpu::TextureView,
-        format: wgpu::TextureFormat,
-        load: wgpu::LoadOp<wgpu::Color>,
-        frame_bind_group: &wgpu::BindGroup,
-        source_view: &wgpu::TextureView,
-        sample_kind: TextureSampleKind,
-        vertices: &[crate::vertex::TexVertex],
-    ) {
-        if vertices.is_empty() {
-            return;
-        }
-        let gpu_vertices = vertices
-            .iter()
-            .copied()
-            .map(GpuTexVertex::from)
-            .collect::<Vec<_>>();
-        let vertex_buffer = self
-            .device
-            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some("adapterlibgfx-tex-vertices"),
-                contents: bytemuck::cast_slice(&gpu_vertices),
-                usage: wgpu::BufferUsages::VERTEX,
-            });
-        let sampler = self
-            .device
-            .create_sampler(&sampler_descriptor(self.sampler));
-        let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("adapterlibgfx-texture-bind-group"),
-            layout: &self.texture_layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: wgpu::BindingResource::Sampler(&sampler),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: wgpu::BindingResource::TextureView(source_view),
-                },
-            ],
-        });
-        let pipeline = self
-            .pipeline(PipelineKind::Tex, sample_kind, format)
-            .clone();
-        let mut pass = self.begin_draw_pass(encoder, view, load);
-        pass.set_pipeline(&pipeline);
-        pass.set_bind_group(0, frame_bind_group, &[]);
-        pass.set_bind_group(1, &bind_group, &[]);
-        if let Some(scissor) = self.scissor {
-            pass.set_scissor_rect(scissor.x, scissor.y, scissor.width, scissor.height);
-        }
-        pass.set_vertex_buffer(0, vertex_buffer.slice(..));
-        pass.draw(0..gpu_vertices.len() as u32, 0..1);
-    }
-
-    fn begin_draw_pass<'a>(
-        &'a self,
-        encoder: &'a mut wgpu::CommandEncoder,
-        view: &'a wgpu::TextureView,
-        load: wgpu::LoadOp<wgpu::Color>,
-    ) -> wgpu::RenderPass<'a> {
-        encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-            label: Some("adapterlibgfx-draw"),
-            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                view,
-                resolve_target: None,
-                ops: wgpu::Operations {
-                    load,
-                    store: wgpu::StoreOp::Store,
-                },
-            })],
-            depth_stencil_attachment: None,
-            timestamp_writes: None,
-            occlusion_query_set: None,
-        })
-    }
-
-    fn pipeline(
-        &mut self,
-        kind: PipelineKind,
-        sample_kind: TextureSampleKind,
-        format: wgpu::TextureFormat,
-    ) -> &wgpu::RenderPipeline {
-        let key = PipelineKey {
-            kind,
-            texture_effect: self.texture_effect,
-            sample_kind,
-            blend: self.blend,
-            format,
-        };
-        if !self.pipelines.contains_key(&key) {
-            let pipeline = self.create_pipeline(key);
-            self.pipelines.insert(key, pipeline);
-        }
-        self.pipelines.get(&key).unwrap()
-    }
-
-    fn create_pipeline(&self, key: PipelineKey) -> wgpu::RenderPipeline {
-        let (vs, fs, buffers, layout) = match key.kind {
-            PipelineKind::Rgb => (
-                "rgb_vs",
-                match key.texture_effect {
-                    TextureEffect::Plain => "rgb_fs",
-                    TextureEffect::World => "world_rgb_fs",
-                    TextureEffect::Blur => "rgb_fs",
-                },
-                vec![GpuRgbVertex::layout()],
-                self.device
-                    .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-                        label: Some("adapterlibgfx-rgb-layout"),
-                        bind_group_layouts: &[&self.frame_layout],
-                        push_constant_ranges: &[],
-                    }),
-            ),
-            PipelineKind::Tex => (
-                "tex_vs",
-                match key.sample_kind {
-                    TextureSampleKind::Mask => "tex_mask_fs",
-                    TextureSampleKind::Rgba => match key.texture_effect {
-                        TextureEffect::Plain => "tex_fs",
-                        TextureEffect::World => "world_tex_fs",
-                        TextureEffect::Blur => "blur_tex_fs",
-                    },
-                },
-                vec![GpuTexVertex::layout()],
-                self.device
-                    .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-                        label: Some("adapterlibgfx-tex-layout"),
-                        bind_group_layouts: &[&self.frame_layout, &self.texture_layout],
-                        push_constant_ranges: &[],
-                    }),
-            ),
-        };
-        self.device
-            .create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-                label: Some("adapterlibgfx-pipeline"),
-                layout: Some(&layout),
-                vertex: wgpu::VertexState {
-                    module: &self.shader,
-                    entry_point: Some(vs),
-                    compilation_options: wgpu::PipelineCompilationOptions::default(),
-                    buffers: &buffers,
-                },
-                fragment: Some(wgpu::FragmentState {
-                    module: &self.shader,
-                    entry_point: Some(fs),
-                    compilation_options: wgpu::PipelineCompilationOptions::default(),
-                    targets: &[Some(wgpu::ColorTargetState {
-                        format: key.format,
-                        blend: blend_state_to_wgpu(key.blend),
-                        write_mask: wgpu::ColorWrites::ALL,
-                    })],
-                }),
-                primitive: wgpu::PrimitiveState {
-                    topology: wgpu::PrimitiveTopology::TriangleList,
-                    ..Default::default()
-                },
-                depth_stencil: None,
-                multisample: wgpu::MultisampleState::default(),
-                multiview: None,
-                cache: None,
-            })
-    }
-}
-
-#[cfg(target_os = "linux")]
-fn window_power_preference() -> wgpu::PowerPreference {
-    wgpu::PowerPreference::LowPower
-}
-
-#[cfg(not(target_os = "linux"))]
-fn window_power_preference() -> wgpu::PowerPreference {
-    wgpu::PowerPreference::HighPerformance
-}
-
-#[cfg(target_os = "linux")]
-fn window_force_fallback_adapter() -> bool {
-    true
-}
-
-#[cfg(not(target_os = "linux"))]
-fn window_force_fallback_adapter() -> bool {
-    false
 }
 
 impl WgpuHeadlessRenderer {
     pub fn new_intel(width: u32, height: u32) -> Result<Self, RenderError> {
-        block_on(Self::new_intel_async(width, height))
-    }
-
-    pub async fn new_intel_async(width: u32, height: u32) -> Result<Self, RenderError> {
-        let width = width.max(1);
-        let height = height.max(1);
-        let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
-            backends: wgpu::Backends::VULKAN,
-            ..Default::default()
-        });
-        let adapter = instance
-            .enumerate_adapters(wgpu::Backends::VULKAN)
+        let instance = wgpu::Instance::default();
+        let adapters = instance.enumerate_adapters(wgpu::Backends::all());
+        let adapter = adapters
             .into_iter()
             .find(|adapter| adapter.get_info().vendor == 0x8086)
             .ok_or(RenderError::AdapterUnavailable)?;
@@ -976,78 +275,22 @@ impl WgpuHeadlessRenderer {
             "adapterlibgfx headless selected: backend={:?} vendor=0x{:04X} device=0x{:04X} name={}",
             info.backend, info.vendor, info.device, info.name
         );
-        let (device, queue) = adapter
-            .request_device(
-                &wgpu::DeviceDescriptor {
-                    label: Some("adapterlibgfx-headless-intel-device"),
-                    required_features: wgpu::Features::empty(),
-                    required_limits: wgpu::Limits::default(),
-                    memory_hints: wgpu::MemoryHints::default(),
-                },
-                None,
-            )
-            .await
-            .map_err(|err| RenderError::DeviceUnavailable(err.to_string()))?;
-        let format = wgpu::TextureFormat::Rgba8UnormSrgb;
-        let (target, target_view) = create_headless_target(&device, width, height, format);
-        let shader_source = [SHADER_COMMON, SHADER_TEX_FRAGMENT].concat();
-        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("adapterlibgfx-headless-shader"),
-            source: wgpu::ShaderSource::Wgsl(shader_source.into()),
-        });
-        let frame_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("adapterlibgfx-headless-frame-layout"),
-            entries: &[wgpu::BindGroupLayoutEntry {
-                binding: 0,
-                visibility: wgpu::ShaderStages::FRAGMENT,
-                ty: wgpu::BindingType::Buffer {
-                    ty: wgpu::BufferBindingType::Uniform,
-                    has_dynamic_offset: false,
-                    min_binding_size: None,
-                },
-                count: None,
-            }],
-        });
-        let texture_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("adapterlibgfx-headless-texture-layout"),
-            entries: &[
-                wgpu::BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 1,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Texture {
-                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                        view_dimension: wgpu::TextureViewDimension::D2,
-                        multisampled: false,
-                    },
-                    count: None,
-                },
-            ],
-        });
-
+        let (device, queue) = block_on(adapter.request_device(
+            &wgpu::DeviceDescriptor {
+                label: Some("adapterlibgfx-headless-copy-device"),
+                required_features: wgpu::Features::empty(),
+                required_limits: wgpu::Limits::default(),
+                memory_hints: wgpu::MemoryHints::Performance,
+            },
+            None,
+        ))
+        .map_err(|error| RenderError::DeviceUnavailable(error.to_string()))?;
         Ok(Self {
-            device,
-            queue,
-            width,
-            height,
-            format,
-            _target: target,
-            target_view,
-            shader,
-            started_at: Instant::now(),
-            frame_layout,
-            texture_layout,
-            pipelines: HashMap::new(),
-            textures: HashMap::new(),
-            sampler: SamplerState::default(),
-            texture_effect: TextureEffect::default(),
-            blend: BlendState::default(),
-            scissor: None,
+            _device: device,
+            _queue: queue,
+            width: width.max(1),
+            height: height.max(1),
+            surfaces: HashMap::new(),
         })
     }
 
@@ -1056,573 +299,459 @@ impl WgpuHeadlessRenderer {
         textures: &TextureRegistry,
         frame: &Frame,
     ) -> Result<(), RenderError> {
-        self.sync_textures(textures);
-        self.sampler = SamplerState::default();
-        self.texture_effect = TextureEffect::default();
-        self.blend = BlendState::default();
-        self.scissor = None;
-
-        let mut encoder = self
-            .device
-            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("adapterlibgfx-headless-frame"),
-            });
-        let frame_params = [
-            self.started_at.elapsed().as_secs_f32(),
-            frame.logical_width.max(1) as f32,
-            frame.logical_height.max(1) as f32,
-            0.0,
-        ];
-        let frame_buffer = self
-            .device
-            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some("adapterlibgfx-headless-frame-params"),
-                contents: bytemuck::cast_slice(&frame_params),
-                usage: wgpu::BufferUsages::UNIFORM,
-            });
-        let frame_bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("adapterlibgfx-headless-frame-bind-group"),
-            layout: &self.frame_layout,
-            entries: &[wgpu::BindGroupEntry {
-                binding: 0,
-                resource: frame_buffer.as_entire_binding(),
-            }],
-        });
-        let mut current_target = 0u32;
-        let mut cleared_targets = HashSet::new();
-
-        if frame.commands.is_empty() {
-            let view = self.target_view.clone();
-            self.clear_target(&mut encoder, &view, frame.clear_rgb);
-        }
-
-        for command in &frame.commands {
-            match command {
-                FrameCommand::SetBlend(blend) => self.blend = *blend,
-                FrameCommand::SetSampler(sampler) => self.sampler = *sampler,
-                FrameCommand::SetTextureEffect(effect) => self.texture_effect = *effect,
-                FrameCommand::SetScissor(scissor) => {
-                    self.scissor = if current_target == 0 {
-                        scissor.map(|rect| self.clip_surface_scissor(rect))
-                    } else {
-                        *scissor
-                    };
-                }
-                FrameCommand::SetRenderTarget(tex_id) => {
-                    current_target = *tex_id;
-                    self.scissor = None;
-                }
-                FrameCommand::DrawRgb { vertices } => {
-                    let view = self.target_view(current_target)?;
-                    let format = self.target_format(current_target);
-                    let load = self.load_op_for_target(&mut cleared_targets, current_target, frame);
-                    if current_target == 0 {
-                        let vertices = self.surface_rgb_vertices(vertices, frame);
-                        self.draw_rgb(&mut encoder, &view, format, load, &frame_bind_group, &vertices);
-                    } else {
-                        self.draw_rgb(&mut encoder, &view, format, load, &frame_bind_group, vertices);
-                    }
-                }
-                FrameCommand::DrawTex {
-                    tex_id,
-                    sample_kind,
-                    vertices,
-                } => {
-                    let view = self.target_view(current_target)?;
-                    let Some(source) = self.textures.get(tex_id) else {
-                        return Err(RenderError::MissingTexture(*tex_id));
-                    };
-                    let source_view = source.view.clone();
-                    let format = self.target_format(current_target);
-                    let load = self.load_op_for_target(&mut cleared_targets, current_target, frame);
-                    if current_target == 0 {
-                        let vertices = self.surface_tex_vertices(vertices, frame);
-                        self.draw_tex(
-                            &mut encoder,
-                            &view,
-                            format,
-                            load,
-                            &frame_bind_group,
-                            &source_view,
-                            *sample_kind,
-                            &vertices,
-                        );
-                    } else {
-                        self.draw_tex(
-                            &mut encoder,
-                            &view,
-                            format,
-                            load,
-                            &frame_bind_group,
-                            &source_view,
-                            *sample_kind,
-                            vertices,
-                        );
-                    }
-                }
-            }
-        }
-
-        self.queue.submit(Some(encoder.finish()));
-        let _ = self.device.poll(wgpu::Maintain::Wait);
+        let _ = paint_frame(textures, frame, &mut self.surfaces, self.width, self.height)?;
         Ok(())
     }
+}
 
-    fn sync_textures(&mut self, textures: &TextureRegistry) {
-        for (&tex_id, image) in textures.iter() {
-            let needs_upload = self
-                .textures
-                .get(&tex_id)
-                .map(|gpu| {
-                    gpu.revision != image.revision
-                        || gpu.width != image.width
-                        || gpu.height != image.height
-                })
-                .unwrap_or(true);
-            if needs_upload {
-                let gpu = self.create_or_upload_texture(tex_id, image);
-                self.textures.insert(tex_id, gpu);
+fn paint_frame(
+    textures: &TextureRegistry,
+    frame: &Frame,
+    surfaces: &mut HashMap<u32, CpuSurface>,
+    fallback_width: u32,
+    fallback_height: u32,
+) -> Result<CpuSurface, RenderError> {
+    let width = frame.logical_width.max(fallback_width).max(1);
+    let height = frame.logical_height.max(fallback_height).max(1);
+    let mut cleared = HashSet::new();
+    let mut state = PaintState::default();
+
+    ensure_target_surface(surfaces, textures, 0, width, height)?;
+    if frame.commands.is_empty() && frame.allow_present {
+        if let Some(target) = surfaces.get_mut(&0) {
+            target.clear(frame.clear_rgb);
+        }
+    }
+
+    for command in &frame.commands {
+        match command {
+            FrameCommand::SetBlend(blend) => state.blend = *blend,
+            FrameCommand::SetSampler(sampler) => state.sampler = *sampler,
+            FrameCommand::SetTextureEffect(effect) => state.effect = *effect,
+            FrameCommand::SetScissor(scissor) => state.scissor = *scissor,
+            FrameCommand::SetRenderTarget(tex_id) => {
+                state.target = *tex_id;
+                state.scissor = None;
+                let (target_width, target_height) = if *tex_id == 0 {
+                    (width, height)
+                } else if let Some(surface) = surfaces.get(tex_id) {
+                    (surface.width, surface.height)
+                } else if let Some((tw, th)) = textures.dimensions(*tex_id) {
+                    (tw, th)
+                } else {
+                    return Err(RenderError::InvalidTarget(*tex_id));
+                };
+                ensure_target_surface(surfaces, textures, *tex_id, target_width, target_height)?;
+            }
+            FrameCommand::DrawSolid { rects } => {
+                ensure_target_surface_for_state(surfaces, textures, state.target, width, height)?;
+                clear_target_once(surfaces, state.target, &mut cleared, frame);
+                let target = surfaces
+                    .get_mut(&state.target)
+                    .ok_or(RenderError::InvalidTarget(state.target))?;
+                for rect in rects {
+                    paint_solid_rect(target, *rect, state);
+                }
+            }
+            FrameCommand::DrawSprite {
+                tex_id,
+                sample_kind,
+                quads,
+            } => {
+                ensure_target_surface_for_state(surfaces, textures, state.target, width, height)?;
+                clear_target_once(surfaces, state.target, &mut cleared, frame);
+                let Some(source) = source_image(textures, surfaces, *tex_id) else {
+                    return Err(RenderError::MissingTexture(*tex_id));
+                };
+                let source_copy = CpuSurface {
+                    width: source.width(),
+                    height: source.height(),
+                    rgba: source.rgba().to_vec(),
+                };
+                let target = surfaces
+                    .get_mut(&state.target)
+                    .ok_or(RenderError::InvalidTarget(state.target))?;
+                for quad in quads {
+                    paint_sprite_quad(target, &source_copy, *quad, *sample_kind, state);
+                }
             }
         }
     }
 
-    fn create_or_upload_texture(&self, tex_id: u32, image: &TextureImage) -> GpuTexture {
-        let texture = self.device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("adapterlibgfx-headless-texture"),
-            size: wgpu::Extent3d {
-                width: image.width,
-                height: image.height,
-                depth_or_array_layers: 1,
-            },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::Rgba8UnormSrgb,
-            usage: wgpu::TextureUsages::TEXTURE_BINDING
-                | wgpu::TextureUsages::COPY_DST
-                | wgpu::TextureUsages::RENDER_ATTACHMENT,
-            view_formats: &[],
-        });
-        self.queue.write_texture(
-            wgpu::TexelCopyTextureInfo {
-                texture: &texture,
-                mip_level: 0,
-                origin: wgpu::Origin3d::ZERO,
-                aspect: wgpu::TextureAspect::All,
-            },
-            &image.rgba,
-            wgpu::TexelCopyBufferLayout {
-                offset: 0,
-                bytes_per_row: Some(image.width * 4),
-                rows_per_image: Some(image.height),
-            },
-            wgpu::Extent3d {
-                width: image.width,
-                height: image.height,
-                depth_or_array_layers: 1,
-            },
-        );
-        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
-        let _ = tex_id;
-        GpuTexture {
-            width: image.width,
-            height: image.height,
-            revision: image.revision,
-            _texture: texture,
-            view,
-        }
-    }
+    Ok(surfaces
+        .get(&0)
+        .cloned()
+        .unwrap_or_else(|| CpuSurface::new(width, height)))
+}
 
-    fn target_view(&self, tex_id: u32) -> Result<wgpu::TextureView, RenderError> {
-        if tex_id == 0 {
-            Ok(self.target_view.clone())
+fn ensure_target_surface_for_state(
+    surfaces: &mut HashMap<u32, CpuSurface>,
+    textures: &TextureRegistry,
+    tex_id: u32,
+    fallback_width: u32,
+    fallback_height: u32,
+) -> Result<(), RenderError> {
+    if tex_id == 0 {
+        ensure_target_surface(surfaces, textures, 0, fallback_width, fallback_height)
+    } else {
+        let (width, height) = if let Some(surface) = surfaces.get(&tex_id) {
+            (surface.width, surface.height)
         } else {
-            self.textures
-                .get(&tex_id)
-                .map(|texture| texture.view.clone())
-                .ok_or(RenderError::InvalidTarget(tex_id))
-        }
-    }
-
-    fn load_op_for_target(
-        &self,
-        cleared_targets: &mut HashSet<u32>,
-        tex_id: u32,
-        frame: &Frame,
-    ) -> wgpu::LoadOp<wgpu::Color> {
-        if frame.preserve_contents || !cleared_targets.insert(tex_id) {
-            wgpu::LoadOp::Load
-        } else {
-            wgpu::LoadOp::Clear(clear_color(frame.clear_rgb))
-        }
-    }
-
-    fn target_format(&self, tex_id: u32) -> wgpu::TextureFormat {
-        if tex_id == 0 {
-            self.format
-        } else {
-            wgpu::TextureFormat::Rgba8UnormSrgb
-        }
-    }
-
-    fn clip_surface_scissor(&self, rect: crate::command::ScissorRect) -> crate::command::ScissorRect {
-        let x = rect.x.min(self.width.saturating_sub(1));
-        let y = rect.y.min(self.height.saturating_sub(1));
-        crate::command::ScissorRect {
-            x,
-            y,
-            width: rect.width.min(self.width.saturating_sub(x)).max(1),
-            height: rect.height.min(self.height.saturating_sub(y)).max(1),
-        }
-    }
-
-    fn surface_rgb_vertices(&self, vertices: &[RgbVertex], frame: &Frame) -> Vec<RgbVertex> {
-        vertices
-            .iter()
-            .copied()
-            .map(|mut vertex| {
-                vertex.x = self.logical_clip_x_to_surface_clip(vertex.x, frame);
-                vertex.y = self.logical_clip_y_to_surface_clip(vertex.y, frame);
-                vertex
-            })
-            .collect()
-    }
-
-    fn surface_tex_vertices(&self, vertices: &[TexVertex], frame: &Frame) -> Vec<TexVertex> {
-        vertices
-            .iter()
-            .copied()
-            .map(|mut vertex| {
-                vertex.x = self.logical_clip_x_to_surface_clip(vertex.x, frame);
-                vertex.y = self.logical_clip_y_to_surface_clip(vertex.y, frame);
-                vertex
-            })
-            .collect()
-    }
-
-    fn logical_clip_x_to_surface_clip(&self, x: f32, frame: &Frame) -> f32 {
-        let logical_x = (x + 1.0) * 0.5 * frame.logical_width.max(1) as f32;
-        logical_x / self.width.max(1) as f32 * 2.0 - 1.0
-    }
-
-    fn logical_clip_y_to_surface_clip(&self, y: f32, frame: &Frame) -> f32 {
-        let logical_y = (1.0 - y) * 0.5 * frame.logical_height.max(1) as f32;
-        1.0 - logical_y / self.height.max(1) as f32 * 2.0
-    }
-
-    fn clear_target(
-        &self,
-        encoder: &mut wgpu::CommandEncoder,
-        view: &wgpu::TextureView,
-        clear_rgb: u32,
-    ) {
-        let _pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-            label: Some("adapterlibgfx-headless-clear"),
-            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                view,
-                resolve_target: None,
-                ops: wgpu::Operations {
-                    load: wgpu::LoadOp::Clear(clear_color(clear_rgb)),
-                    store: wgpu::StoreOp::Store,
-                },
-            })],
-            depth_stencil_attachment: None,
-            timestamp_writes: None,
-            occlusion_query_set: None,
-        });
-    }
-
-    fn draw_rgb(
-        &mut self,
-        encoder: &mut wgpu::CommandEncoder,
-        view: &wgpu::TextureView,
-        format: wgpu::TextureFormat,
-        load: wgpu::LoadOp<wgpu::Color>,
-        frame_bind_group: &wgpu::BindGroup,
-        vertices: &[crate::vertex::RgbVertex],
-    ) {
-        if vertices.is_empty() {
-            return;
-        }
-        let gpu_vertices = vertices
-            .iter()
-            .copied()
-            .map(GpuRgbVertex::from)
-            .collect::<Vec<_>>();
-        let vertex_buffer = self
-            .device
-            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some("adapterlibgfx-headless-rgb-vertices"),
-                contents: bytemuck::cast_slice(&gpu_vertices),
-                usage: wgpu::BufferUsages::VERTEX,
-            });
-        let pipeline = self
-            .pipeline(PipelineKind::Rgb, TextureSampleKind::Rgba, format)
-            .clone();
-        let mut pass = self.begin_draw_pass(encoder, view, load);
-        pass.set_pipeline(&pipeline);
-        pass.set_bind_group(0, frame_bind_group, &[]);
-        if let Some(scissor) = self.scissor {
-            pass.set_scissor_rect(scissor.x, scissor.y, scissor.width, scissor.height);
-        }
-        pass.set_vertex_buffer(0, vertex_buffer.slice(..));
-        pass.draw(0..gpu_vertices.len() as u32, 0..1);
-    }
-
-    fn draw_tex(
-        &mut self,
-        encoder: &mut wgpu::CommandEncoder,
-        view: &wgpu::TextureView,
-        format: wgpu::TextureFormat,
-        load: wgpu::LoadOp<wgpu::Color>,
-        frame_bind_group: &wgpu::BindGroup,
-        source_view: &wgpu::TextureView,
-        sample_kind: TextureSampleKind,
-        vertices: &[crate::vertex::TexVertex],
-    ) {
-        if vertices.is_empty() {
-            return;
-        }
-        let gpu_vertices = vertices
-            .iter()
-            .copied()
-            .map(GpuTexVertex::from)
-            .collect::<Vec<_>>();
-        let vertex_buffer = self
-            .device
-            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some("adapterlibgfx-headless-tex-vertices"),
-                contents: bytemuck::cast_slice(&gpu_vertices),
-                usage: wgpu::BufferUsages::VERTEX,
-            });
-        let sampler = self
-            .device
-            .create_sampler(&sampler_descriptor(self.sampler));
-        let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("adapterlibgfx-headless-texture-bind-group"),
-            layout: &self.texture_layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: wgpu::BindingResource::Sampler(&sampler),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: wgpu::BindingResource::TextureView(source_view),
-                },
-            ],
-        });
-        let pipeline = self
-            .pipeline(PipelineKind::Tex, sample_kind, format)
-            .clone();
-        let mut pass = self.begin_draw_pass(encoder, view, load);
-        pass.set_pipeline(&pipeline);
-        pass.set_bind_group(0, frame_bind_group, &[]);
-        pass.set_bind_group(1, &bind_group, &[]);
-        if let Some(scissor) = self.scissor {
-            pass.set_scissor_rect(scissor.x, scissor.y, scissor.width, scissor.height);
-        }
-        pass.set_vertex_buffer(0, vertex_buffer.slice(..));
-        pass.draw(0..gpu_vertices.len() as u32, 0..1);
-    }
-
-    fn begin_draw_pass<'a>(
-        &'a self,
-        encoder: &'a mut wgpu::CommandEncoder,
-        view: &'a wgpu::TextureView,
-        load: wgpu::LoadOp<wgpu::Color>,
-    ) -> wgpu::RenderPass<'a> {
-        encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-            label: Some("adapterlibgfx-headless-draw"),
-            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                view,
-                resolve_target: None,
-                ops: wgpu::Operations {
-                    load,
-                    store: wgpu::StoreOp::Store,
-                },
-            })],
-            depth_stencil_attachment: None,
-            timestamp_writes: None,
-            occlusion_query_set: None,
-        })
-    }
-
-    fn pipeline(
-        &mut self,
-        kind: PipelineKind,
-        sample_kind: TextureSampleKind,
-        format: wgpu::TextureFormat,
-    ) -> &wgpu::RenderPipeline {
-        let key = PipelineKey {
-            kind,
-            texture_effect: self.texture_effect,
-            sample_kind,
-            blend: self.blend,
-            format,
+            textures
+                .dimensions(tex_id)
+                .ok_or(RenderError::InvalidTarget(tex_id))?
         };
-        if !self.pipelines.contains_key(&key) {
-            let pipeline = self.create_pipeline(key);
-            self.pipelines.insert(key, pipeline);
-        }
-        self.pipelines.get(&key).unwrap()
-    }
-
-    fn create_pipeline(&self, key: PipelineKey) -> wgpu::RenderPipeline {
-        let (vs, fs, buffers, layout) = match key.kind {
-            PipelineKind::Rgb => (
-                "rgb_vs",
-                match key.texture_effect {
-                    TextureEffect::Plain => "rgb_fs",
-                    TextureEffect::World => "world_rgb_fs",
-                    TextureEffect::Blur => "rgb_fs",
-                },
-                vec![GpuRgbVertex::layout()],
-                self.device
-                    .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-                        label: Some("adapterlibgfx-headless-rgb-layout"),
-                        bind_group_layouts: &[&self.frame_layout],
-                        push_constant_ranges: &[],
-                    }),
-            ),
-            PipelineKind::Tex => (
-                "tex_vs",
-                match key.sample_kind {
-                    TextureSampleKind::Mask => "tex_mask_fs",
-                    TextureSampleKind::Rgba => match key.texture_effect {
-                        TextureEffect::Plain => "tex_fs",
-                        TextureEffect::World => "world_tex_fs",
-                        TextureEffect::Blur => "blur_tex_fs",
-                    },
-                },
-                vec![GpuTexVertex::layout()],
-                self.device
-                    .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-                        label: Some("adapterlibgfx-headless-tex-layout"),
-                        bind_group_layouts: &[&self.frame_layout, &self.texture_layout],
-                        push_constant_ranges: &[],
-                    }),
-            ),
-        };
-        self.device
-            .create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-                label: Some("adapterlibgfx-headless-pipeline"),
-                layout: Some(&layout),
-                vertex: wgpu::VertexState {
-                    module: &self.shader,
-                    entry_point: Some(vs),
-                    compilation_options: wgpu::PipelineCompilationOptions::default(),
-                    buffers: &buffers,
-                },
-                fragment: Some(wgpu::FragmentState {
-                    module: &self.shader,
-                    entry_point: Some(fs),
-                    compilation_options: wgpu::PipelineCompilationOptions::default(),
-                    targets: &[Some(wgpu::ColorTargetState {
-                        format: key.format,
-                        blend: blend_state_to_wgpu(key.blend),
-                        write_mask: wgpu::ColorWrites::ALL,
-                    })],
-                }),
-                primitive: wgpu::PrimitiveState {
-                    topology: wgpu::PrimitiveTopology::TriangleList,
-                    ..Default::default()
-                },
-                depth_stencil: None,
-                multisample: wgpu::MultisampleState::default(),
-                multiview: None,
-                cache: None,
-            })
+        ensure_target_surface(surfaces, textures, tex_id, width, height)
     }
 }
 
-fn create_headless_target(
-    device: &wgpu::Device,
+fn ensure_target_surface(
+    surfaces: &mut HashMap<u32, CpuSurface>,
+    textures: &TextureRegistry,
+    tex_id: u32,
     width: u32,
     height: u32,
-    format: wgpu::TextureFormat,
-) -> (wgpu::Texture, wgpu::TextureView) {
-    let target = device.create_texture(&wgpu::TextureDescriptor {
-        label: Some("adapterlibgfx-headless-target"),
-        size: wgpu::Extent3d {
-            width,
-            height,
-            depth_or_array_layers: 1,
-        },
-        mip_level_count: 1,
-        sample_count: 1,
-        dimension: wgpu::TextureDimension::D2,
-        format,
-        usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
-        view_formats: &[],
-    });
-    let target_view = target.create_view(&wgpu::TextureViewDescriptor::default());
-    (target, target_view)
+) -> Result<(), RenderError> {
+    if tex_id == 0 {
+        surfaces
+            .entry(0)
+            .or_insert_with(|| CpuSurface::new(width, height))
+            .resize(width, height);
+        return Ok(());
+    }
+    if !surfaces.contains_key(&tex_id) {
+        let image = textures
+            .image(tex_id)
+            .ok_or(RenderError::InvalidTarget(tex_id))?;
+        surfaces.insert(tex_id, CpuSurface::from_image(image));
+    }
+    Ok(())
 }
 
-fn clear_color(rgb: u32) -> wgpu::Color {
-    wgpu::Color {
-        r: ((rgb >> 16) & 0xFF) as f64 / 255.0,
-        g: ((rgb >> 8) & 0xFF) as f64 / 255.0,
-        b: (rgb & 0xFF) as f64 / 255.0,
-        a: 1.0,
+fn clear_target_once(
+    surfaces: &mut HashMap<u32, CpuSurface>,
+    tex_id: u32,
+    cleared: &mut HashSet<u32>,
+    frame: &Frame,
+) {
+    if frame.preserve_contents || !cleared.insert(tex_id) {
+        return;
+    }
+    if let Some(surface) = surfaces.get_mut(&tex_id) {
+        surface.clear(frame.clear_rgb);
     }
 }
 
-fn blend_state_to_wgpu(state: BlendState) -> Option<wgpu::BlendState> {
-    if !state.enabled {
-        return None;
-    }
-    Some(wgpu::BlendState {
-        color: wgpu::BlendComponent {
-            src_factor: blend_factor_to_wgpu(state.src_rgb),
-            dst_factor: blend_factor_to_wgpu(state.dst_rgb),
-            operation: wgpu::BlendOperation::Add,
-        },
-        alpha: wgpu::BlendComponent {
-            src_factor: blend_factor_to_wgpu(state.src_rgb),
-            dst_factor: blend_factor_to_wgpu(state.dst_rgb),
-            operation: wgpu::BlendOperation::Add,
-        },
-    })
+fn source_image<'a>(
+    textures: &'a TextureRegistry,
+    surfaces: &'a HashMap<u32, CpuSurface>,
+    tex_id: u32,
+) -> Option<SourceImage<'a>> {
+    surfaces
+        .get(&tex_id)
+        .map(SourceImage::Surface)
+        .or_else(|| textures.image(tex_id).map(SourceImage::Texture))
 }
 
-fn blend_factor_to_wgpu(factor: BlendFactor) -> wgpu::BlendFactor {
+fn paint_solid_rect(target: &mut CpuSurface, rect: SolidRect, state: PaintState) {
+    if !(rect.w > 0.0 && rect.h > 0.0) {
+        return;
+    }
+    let (x0, y0, x1, y1) = rect_bounds(rect.x, rect.y, rect.w, rect.h);
+    let clip = clipped_bounds(target, state.scissor, x0, y0, x1, y1);
+    for y in clip.1..clip.3 {
+        for x in clip.0..clip.2 {
+            put_pixel(target, x, y, rect.color, state.blend);
+        }
+    }
+}
+
+fn paint_sprite_quad(
+    target: &mut CpuSurface,
+    source: &CpuSurface,
+    quad: SpriteQuad,
+    sample_kind: TextureSampleKind,
+    state: PaintState,
+) {
+    let min_x = quad
+        .c0
+        .x
+        .min(quad.c1.x)
+        .min(quad.c2.x)
+        .min(quad.c3.x)
+        .floor() as i32;
+    let min_y = quad
+        .c0
+        .y
+        .min(quad.c1.y)
+        .min(quad.c2.y)
+        .min(quad.c3.y)
+        .floor() as i32;
+    let max_x = quad
+        .c0
+        .x
+        .max(quad.c1.x)
+        .max(quad.c2.x)
+        .max(quad.c3.x)
+        .ceil() as i32;
+    let max_y = quad
+        .c0
+        .y
+        .max(quad.c1.y)
+        .max(quad.c2.y)
+        .max(quad.c3.y)
+        .ceil() as i32;
+    let clip = clipped_bounds(target, state.scissor, min_x, min_y, max_x, max_y);
+    let ux_x = quad.c1.x - quad.c0.x;
+    let ux_y = quad.c1.y - quad.c0.y;
+    let vy_x = quad.c3.x - quad.c0.x;
+    let vy_y = quad.c3.y - quad.c0.y;
+    let det = ux_x * vy_y - ux_y * vy_x;
+    if det.abs() < 0.0001 {
+        return;
+    }
+    let inv_det = 1.0 / det;
+    for y in clip.1..clip.3 {
+        for x in clip.0..clip.2 {
+            let px = x as f32 + 0.5 - quad.c0.x;
+            let py = y as f32 + 0.5 - quad.c0.y;
+            let s = (px * vy_y - py * vy_x) * inv_det;
+            let t = (ux_x * py - ux_y * px) * inv_det;
+            if !(0.0..=1.0).contains(&s) || !(0.0..=1.0).contains(&t) {
+                continue;
+            }
+            let u = lerp2(quad.c0.u, quad.c1.u, quad.c2.u, quad.c3.u, s, t);
+            let v = lerp2(quad.c0.v, quad.c1.v, quad.c2.v, quad.c3.v, s, t);
+            let texel = sample(source, u, v, state.sampler, state.effect);
+            let color = texture_color(texel, quad.color, sample_kind);
+            if color.a == 0 {
+                continue;
+            }
+            put_pixel(target, x, y, color, state.blend);
+        }
+    }
+}
+
+fn rect_bounds(x: f32, y: f32, w: f32, h: f32) -> (i32, i32, i32, i32) {
+    (
+        x.floor() as i32,
+        y.floor() as i32,
+        (x + w).ceil() as i32,
+        (y + h).ceil() as i32,
+    )
+}
+
+fn clipped_bounds(
+    target: &CpuSurface,
+    scissor: Option<ScissorRect>,
+    x0: i32,
+    y0: i32,
+    x1: i32,
+    y1: i32,
+) -> (i32, i32, i32, i32) {
+    let mut left = x0.max(0);
+    let mut top = y0.max(0);
+    let mut right = x1.min(target.width as i32);
+    let mut bottom = y1.min(target.height as i32);
+    if let Some(scissor) = scissor {
+        left = left.max(scissor.x as i32);
+        top = top.max(scissor.y as i32);
+        right = right.min(scissor.x.saturating_add(scissor.width) as i32);
+        bottom = bottom.min(scissor.y.saturating_add(scissor.height) as i32);
+    }
+    (left, top, right.max(left), bottom.max(top))
+}
+
+fn sample(
+    source: &CpuSurface,
+    u: f32,
+    v: f32,
+    sampler: SamplerState,
+    effect: TextureEffect,
+) -> Rgba8 {
+    if source.width == 0 || source.height == 0 {
+        return Rgba8::default();
+    }
+    if matches!(effect, TextureEffect::Blur) {
+        return sample_blur(source, u, v, sampler);
+    }
+    if matches!(sampler.min_filter, SamplerFilter::Linear)
+        || matches!(sampler.mag_filter, SamplerFilter::Linear)
+    {
+        sample_linear(source, u, v, sampler)
+    } else {
+        sample_nearest(source, u, v, sampler)
+    }
+}
+
+fn sample_blur(source: &CpuSurface, u: f32, v: f32, sampler: SamplerState) -> Rgba8 {
+    let du = 1.0 / source.width.max(1) as f32;
+    let dv = 1.0 / source.height.max(1) as f32;
+    let mut sum = [0u32; 4];
+    for oy in -1..=1 {
+        for ox in -1..=1 {
+            let px = sample_nearest(source, u + ox as f32 * du, v + oy as f32 * dv, sampler);
+            sum[0] += px.r as u32;
+            sum[1] += px.g as u32;
+            sum[2] += px.b as u32;
+            sum[3] += px.a as u32;
+        }
+    }
+    Rgba8::new(
+        (sum[0] / 9) as u8,
+        (sum[1] / 9) as u8,
+        (sum[2] / 9) as u8,
+        (sum[3] / 9) as u8,
+    )
+}
+
+fn sample_nearest(source: &CpuSurface, u: f32, v: f32, sampler: SamplerState) -> Rgba8 {
+    let (u, v) = wrap_uv(u, v, sampler);
+    let x = (u * source.width as f32)
+        .floor()
+        .clamp(0.0, source.width.saturating_sub(1) as f32) as u32;
+    let y = (v * source.height as f32)
+        .floor()
+        .clamp(0.0, source.height.saturating_sub(1) as f32) as u32;
+    get_pixel(source, x, y)
+}
+
+fn sample_linear(source: &CpuSurface, u: f32, v: f32, sampler: SamplerState) -> Rgba8 {
+    let (u, v) = wrap_uv(u, v, sampler);
+    let fx = (u * source.width as f32 - 0.5).clamp(0.0, source.width.saturating_sub(1) as f32);
+    let fy = (v * source.height as f32 - 0.5).clamp(0.0, source.height.saturating_sub(1) as f32);
+    let x0 = fx.floor() as u32;
+    let y0 = fy.floor() as u32;
+    let x1 = (x0 + 1).min(source.width.saturating_sub(1));
+    let y1 = (y0 + 1).min(source.height.saturating_sub(1));
+    let tx = fx - x0 as f32;
+    let ty = fy - y0 as f32;
+    let a = get_pixel(source, x0, y0);
+    let b = get_pixel(source, x1, y0);
+    let c = get_pixel(source, x1, y1);
+    let d = get_pixel(source, x0, y1);
+    Rgba8::new(
+        lerp2(a.r as f32, b.r as f32, c.r as f32, d.r as f32, tx, ty).round() as u8,
+        lerp2(a.g as f32, b.g as f32, c.g as f32, d.g as f32, tx, ty).round() as u8,
+        lerp2(a.b as f32, b.b as f32, c.b as f32, d.b as f32, tx, ty).round() as u8,
+        lerp2(a.a as f32, b.a as f32, c.a as f32, d.a as f32, tx, ty).round() as u8,
+    )
+}
+
+fn wrap_uv(u: f32, v: f32, sampler: SamplerState) -> (f32, f32) {
+    let u = if matches!(sampler.wrap_s, crate::command::SamplerWrap::Repeat) {
+        u.rem_euclid(1.0)
+    } else {
+        u.clamp(0.0, 1.0)
+    };
+    let v = if matches!(sampler.wrap_t, crate::command::SamplerWrap::Repeat) {
+        v.rem_euclid(1.0)
+    } else {
+        v.clamp(0.0, 1.0)
+    };
+    (u, v)
+}
+
+fn texture_color(texel: Rgba8, tint: Rgba8, sample_kind: TextureSampleKind) -> Rgba8 {
+    match sample_kind {
+        TextureSampleKind::Rgba => Rgba8::new(
+            mul_u8(texel.r, tint.r),
+            mul_u8(texel.g, tint.g),
+            mul_u8(texel.b, tint.b),
+            mul_u8(texel.a, tint.a),
+        ),
+        TextureSampleKind::Mask => {
+            let mask = if texel.a < 255 { texel.a } else { texel.r };
+            Rgba8::new(tint.r, tint.g, tint.b, mul_u8(tint.a, mask))
+        }
+    }
+}
+
+fn put_pixel(target: &mut CpuSurface, x: i32, y: i32, src: Rgba8, blend: BlendState) {
+    if x < 0 || y < 0 || x >= target.width as i32 || y >= target.height as i32 {
+        return;
+    }
+    let off = ((y as u32 * target.width + x as u32) * 4) as usize;
+    if !blend.enabled {
+        target.rgba[off] = src.r;
+        target.rgba[off + 1] = src.g;
+        target.rgba[off + 2] = src.b;
+        target.rgba[off + 3] = src.a;
+        return;
+    }
+    let dst = Rgba8::new(
+        target.rgba[off],
+        target.rgba[off + 1],
+        target.rgba[off + 2],
+        target.rgba[off + 3],
+    );
+    let src_factor = blend_factor(blend.src_rgb, src, dst);
+    let dst_factor = blend_factor(blend.dst_rgb, src, dst);
+    target.rgba[off] = blend_channel(src.r, dst.r, src_factor, dst_factor);
+    target.rgba[off + 1] = blend_channel(src.g, dst.g, src_factor, dst_factor);
+    target.rgba[off + 2] = blend_channel(src.b, dst.b, src_factor, dst_factor);
+    target.rgba[off + 3] = src
+        .a
+        .saturating_add(((dst.a as u16 * (255 - src.a) as u16) / 255) as u8);
+}
+
+fn blend_factor(factor: BlendFactor, src: Rgba8, dst: Rgba8) -> u8 {
     match factor {
-        BlendFactor::Zero => wgpu::BlendFactor::Zero,
-        BlendFactor::One => wgpu::BlendFactor::One,
-        BlendFactor::DstColor => wgpu::BlendFactor::Dst,
-        BlendFactor::OneMinusDstColor => wgpu::BlendFactor::OneMinusDst,
-        BlendFactor::SrcAlpha => wgpu::BlendFactor::SrcAlpha,
-        BlendFactor::OneMinusSrcAlpha => wgpu::BlendFactor::OneMinusSrcAlpha,
-        BlendFactor::OneMinusSrcColor => wgpu::BlendFactor::OneMinusSrc,
-        BlendFactor::Other(_) => wgpu::BlendFactor::One,
+        BlendFactor::Zero => 0,
+        BlendFactor::One => 255,
+        BlendFactor::DstColor => dst.r,
+        BlendFactor::OneMinusDstColor => 255 - dst.r,
+        BlendFactor::SrcAlpha => src.a,
+        BlendFactor::OneMinusSrcAlpha => 255 - src.a,
+        BlendFactor::OneMinusSrcColor => 255 - src.r,
+        BlendFactor::Other(_) => 255,
     }
 }
 
-fn sampler_descriptor(state: SamplerState) -> wgpu::SamplerDescriptor<'static> {
-    wgpu::SamplerDescriptor {
-        label: Some("adapterlibgfx-sampler"),
-        address_mode_u: address_mode(state.wrap_s),
-        address_mode_v: address_mode(state.wrap_t),
-        address_mode_w: wgpu::AddressMode::ClampToEdge,
-        mag_filter: filter_mode(state.mag_filter),
-        min_filter: filter_mode(state.min_filter),
-        mipmap_filter: filter_mode(state.min_filter),
-        ..Default::default()
-    }
+fn blend_channel(src: u8, dst: u8, src_factor: u8, dst_factor: u8) -> u8 {
+    let value = src as u32 * src_factor as u32 + dst as u32 * dst_factor as u32;
+    (value / 255).min(255) as u8
 }
 
-fn address_mode(wrap: SamplerWrap) -> wgpu::AddressMode {
-    match wrap {
-        SamplerWrap::ClampToEdge => wgpu::AddressMode::ClampToEdge,
-        SamplerWrap::Repeat => wgpu::AddressMode::Repeat,
-    }
+fn get_pixel(source: &CpuSurface, x: u32, y: u32) -> Rgba8 {
+    let off = ((y * source.width + x) * 4) as usize;
+    Rgba8::new(
+        source.rgba[off],
+        source.rgba[off + 1],
+        source.rgba[off + 2],
+        source.rgba[off + 3],
+    )
 }
 
-fn filter_mode(filter: SamplerFilter) -> wgpu::FilterMode {
-    match filter {
-        SamplerFilter::Nearest => wgpu::FilterMode::Nearest,
-        SamplerFilter::Linear => wgpu::FilterMode::Linear,
+fn scale_surface(source: &CpuSurface, width: u32, height: u32) -> CpuSurface {
+    let width = width.max(1);
+    let height = height.max(1);
+    if source.width == width && source.height == height {
+        return source.clone();
     }
+    let mut out = CpuSurface::new(width, height);
+    for y in 0..height {
+        let sy = (y as u64 * source.height as u64 / height as u64) as u32;
+        for x in 0..width {
+            let sx = (x as u64 * source.width as u64 / width as u64) as u32;
+            let src = ((sy * source.width + sx) * 4) as usize;
+            let dst = ((y * width + x) * 4) as usize;
+            out.rgba[dst..dst + 4].copy_from_slice(&source.rgba[src..src + 4]);
+        }
+    }
+    out
+}
+
+fn lerp2(a: f32, b: f32, c: f32, d: f32, s: f32, t: f32) -> f32 {
+    let top = a + (b - a) * s;
+    let bottom = d + (c - d) * s;
+    top + (bottom - top) * t
+}
+
+fn mul_u8(a: u8, b: u8) -> u8 {
+    ((a as u16 * b as u16 + 127) / 255) as u8
+}
+
+fn byte_len(width: u32, height: u32) -> usize {
+    width as usize * height as usize * 4
 }

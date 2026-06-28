@@ -1,4 +1,4 @@
-use crate::vertex::{RgbVertex, TexVertex};
+use crate::records::{SolidRect, SpriteQuad};
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub enum BlendFactor {
@@ -155,13 +155,13 @@ pub enum FrameCommand {
     SetTextureEffect(TextureEffect),
     SetScissor(Option<ScissorRect>),
     SetRenderTarget(u32),
-    DrawRgb {
-        vertices: Vec<RgbVertex>,
+    DrawSolid {
+        rects: Vec<SolidRect>,
     },
-    DrawTex {
+    DrawSprite {
         tex_id: u32,
         sample_kind: TextureSampleKind,
-        vertices: Vec<TexVertex>,
+        quads: Vec<SpriteQuad>,
     },
 }
 

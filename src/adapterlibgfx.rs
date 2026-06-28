@@ -7,15 +7,13 @@ mod ui3_frame {
         pub(crate) use trueos::ui3::gfx::*;
     }
 
-    pub(crate) use trueos::ui3::frame::{
-        Frame as FrameWindow, FrameBounds as FrameRect, FrameId,
-    };
+    pub(crate) use trueos::ui3::frame::{Frame as FrameWindow, FrameBounds as FrameRect, FrameId};
 }
 
 #[cfg(feature = "trueos-blueprint")]
-pub mod vertex {
-    pub const RGB_VERTEX_SIZE: usize = 12;
-    pub const TEX_VERTEX_SIZE: usize = 20;
+pub mod records {
+    pub const SOLID_RECT_SIZE: usize = 20;
+    pub const SPRITE_QUAD_SIZE: usize = 68;
 
     #[repr(C)]
     #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -40,61 +38,67 @@ pub mod vertex {
 
     #[repr(C)]
     #[derive(Clone, Copy, Debug, Default, PartialEq)]
-    pub struct RgbVertex {
+    pub struct SolidRect {
         pub x: f32,
         pub y: f32,
+        pub w: f32,
+        pub h: f32,
         pub color: Rgba8,
     }
 
     #[repr(C)]
     #[derive(Clone, Copy, Debug, Default, PartialEq)]
-    pub struct TexVertex {
+    pub struct SpriteCorner {
         pub x: f32,
         pub y: f32,
         pub u: f32,
         pub v: f32,
+    }
+
+    #[repr(C)]
+    #[derive(Clone, Copy, Debug, Default, PartialEq)]
+    pub struct SpriteQuad {
+        pub c0: SpriteCorner,
+        pub c1: SpriteCorner,
+        pub c2: SpriteCorner,
+        pub c3: SpriteCorner,
         pub color: Rgba8,
     }
 
-    pub fn usable_rgb_len(len: usize) -> usize {
-        len - (len % RGB_VERTEX_SIZE)
+    pub fn usable_solid_len(len: usize) -> usize {
+        len - (len % SOLID_RECT_SIZE)
     }
 
-    pub fn usable_tex_len(len: usize) -> usize {
-        len - (len % TEX_VERTEX_SIZE)
+    pub fn usable_sprite_len(len: usize) -> usize {
+        len - (len % SPRITE_QUAD_SIZE)
     }
 
-    pub fn decode_rgb_vertices(bytes: &[u8]) -> Vec<RgbVertex> {
-        let usable = usable_rgb_len(bytes.len());
-        let mut out = Vec::with_capacity(usable / RGB_VERTEX_SIZE);
+    pub fn decode_solid_rects(bytes: &[u8]) -> Vec<SolidRect> {
+        let usable = usable_solid_len(bytes.len());
+        let mut out = Vec::with_capacity(usable / SOLID_RECT_SIZE);
         let mut off = 0usize;
-        while off + RGB_VERTEX_SIZE <= usable {
-            out.push(RgbVertex {
+        while off + SOLID_RECT_SIZE <= usable {
+            out.push(SolidRect {
                 x: f32::from_le_bytes(bytes[off..off + 4].try_into().unwrap()),
                 y: f32::from_le_bytes(bytes[off + 4..off + 8].try_into().unwrap()),
+                w: f32::from_le_bytes(bytes[off + 8..off + 12].try_into().unwrap()),
+                h: f32::from_le_bytes(bytes[off + 12..off + 16].try_into().unwrap()),
                 color: Rgba8::new(
-                    bytes[off + 8],
-                    bytes[off + 9],
-                    bytes[off + 10],
-                    bytes[off + 11],
+                    bytes[off + 16],
+                    bytes[off + 17],
+                    bytes[off + 18],
+                    bytes[off + 19],
                 ),
             });
-            off += RGB_VERTEX_SIZE;
+            off += SOLID_RECT_SIZE;
         }
         out
-    }
-
-    pub fn encode_rgb_vertices(vertices: &[RgbVertex]) -> Vec<super::ui3_frame::gfx::RgbVertex> {
-        vertices
-            .iter()
-            .map(|v| super::ui3_frame::gfx::RgbVertex::new(v.x, v.y, v.color.array()))
-            .collect()
     }
 }
 
 #[cfg(feature = "trueos-blueprint")]
 pub mod command {
-    use super::vertex::RgbVertex;
+    use super::records::SolidRect;
 
     #[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq)]
     pub enum TextureEffect {
@@ -129,8 +133,8 @@ pub mod command {
         SetTextureEffect(TextureEffect),
         SetScissor(Option<ScissorRect>),
         SetRenderTarget(u32),
-        DrawRgb { vertices: Vec<RgbVertex> },
-        DrawTex { tex_id: u32, vertices: Vec<u8> },
+        DrawSolid { rects: Vec<SolidRect> },
+        DrawSprite { tex_id: u32, quads: Vec<u8> },
     }
 
     #[derive(Clone, Debug)]
@@ -150,8 +154,8 @@ pub mod api {
     use std::collections::BTreeMap;
 
     use super::command::{Frame, FrameCommand, ScissorRect, TextureEffect};
-    use super::ui3_frame::{gfx, FrameId};
-    use super::vertex::{decode_rgb_vertices, encode_rgb_vertices, usable_rgb_len, usable_tex_len};
+    use super::records::{decode_solid_rects, usable_solid_len, usable_sprite_len};
+    use super::ui3_frame::{FrameId, gfx};
 
     const PRESERVE_RENDER_TARGET_CLEAR_RGB: u32 = u32::MAX;
     const SUPPRESS_REPAINT_WINDOW_ID: u32 = u32::MAX;
@@ -392,11 +396,11 @@ pub mod api {
             0
         }
 
-        pub fn draw_rgb_triangles_no_present(&mut self, bytes: &[u8]) -> i32 {
+        pub fn draw_solid_batch_no_present(&mut self, bytes: &[u8]) -> i32 {
             if bytes.is_empty() {
                 return 0;
             }
-            let usable = usable_rgb_len(bytes.len());
+            let usable = usable_solid_len(bytes.len());
             if usable == 0 {
                 return -2;
             }
@@ -408,20 +412,20 @@ pub mod api {
                 .stats
                 .draw_bytes
                 .saturating_add(usable.min(u32::MAX as usize) as u32);
-            self.commands.push(FrameCommand::DrawRgb {
-                vertices: decode_rgb_vertices(&bytes[..usable]),
+            self.commands.push(FrameCommand::DrawSolid {
+                rects: decode_solid_rects(&bytes[..usable]),
             });
             0
         }
 
-        pub fn draw_tex_triangles_no_present(&mut self, tex_id: u32, bytes: &[u8]) -> i32 {
+        pub fn draw_sprite_batch_no_present(&mut self, tex_id: u32, bytes: &[u8]) -> i32 {
             if tex_id == 0 {
                 return -1;
             }
             if bytes.is_empty() {
                 return 0;
             }
-            let usable = usable_tex_len(bytes.len());
+            let usable = usable_sprite_len(bytes.len());
             if usable == 0 {
                 return -3;
             }
@@ -436,9 +440,9 @@ pub mod api {
                 .stats
                 .draw_bytes
                 .saturating_add(usable.min(u32::MAX as usize) as u32);
-            self.commands.push(FrameCommand::DrawTex {
+            self.commands.push(FrameCommand::DrawSprite {
                 tex_id,
-                vertices: bytes[..usable].to_vec(),
+                quads: bytes[..usable].to_vec(),
             });
             0
         }
@@ -499,25 +503,28 @@ pub mod api {
                             break;
                         }
                     }
-                    FrameCommand::DrawRgb { vertices } => {
-                        if target_tex_id == 0 || vertices.is_empty() {
+                    FrameCommand::DrawSolid { rects } => {
+                        if target_tex_id == 0 || rects.is_empty() {
                             continue;
                         }
                         let _ = texture_effect;
-                        let vertices = encode_rgb_vertices(vertices);
-                        let rc = gfx::draw_rgb_triangles_no_present(&vertices);
+                        let rects = rects
+                            .iter()
+                            .map(|r| gfx::SolidRect::new(r.x, r.y, r.w, r.h, r.color.array()))
+                            .collect::<Vec<_>>();
+                        let rc = gfx::draw_solid_batch_no_present(&rects);
                         if rc != 0 {
                             self.mark_surface_backpressure();
                             failed = true;
                             break;
                         }
                     }
-                    FrameCommand::DrawTex { tex_id, vertices } => {
-                        if target_tex_id == 0 || vertices.is_empty() {
+                    FrameCommand::DrawSprite { tex_id, quads } => {
+                        if target_tex_id == 0 || quads.is_empty() {
                             continue;
                         }
                         let _ = texture_effect;
-                        let rc = gfx::draw_tex_triangles_no_present(*tex_id, vertices);
+                        let rc = gfx::draw_sprite_batch_no_present(*tex_id, quads);
                         if rc != 0 {
                             self.mark_surface_backpressure();
                             failed = true;
@@ -551,7 +558,7 @@ pub mod api {
             if !failed && surface_tex_id != 0 && backbuffer_tex_id != 0 {
                 let vertices = fullscreen_tex_vertices();
                 if gfx::set_render_target(surface_tex_id) != 0
-                    || gfx::draw_tex_triangles_no_present(backbuffer_tex_id, &vertices) != 0
+                    || gfx::draw_sprite_batch_no_present(backbuffer_tex_id, &vertices) != 0
                 {
                     self.mark_surface_backpressure();
                     failed = true;
@@ -649,8 +656,8 @@ pub mod api {
 #[cfg(feature = "trueos-blueprint")]
 pub mod window {
     use std::sync::{
-        atomic::{AtomicBool, Ordering},
         Arc,
+        atomic::{AtomicBool, Ordering},
     };
 
     use super::api::{Adapter, AdapterConfig};

@@ -2,7 +2,7 @@
 use crate::adapterlibgfx::WgpuHeadlessRenderer;
 use crate::adapterlibgfx::api::{Adapter, AdapterConfig};
 use crate::adapterlibgfx::command::{ScissorRect, TextureEffect};
-use crate::adapterlibgfx::vertex::{Rgba8, TexVertex};
+use crate::adapterlibgfx::records::Rgba8;
 use crate::adapterlibgfx::window::{
     FrameProducer, InputButtonState, InputEvent, InputKey, InputMouseButton,
 };
@@ -713,7 +713,7 @@ impl WindowChrome {
             corner_h,
             corner_tint,
         );
-        let _ = adapter.draw_tex_triangles_no_present(self.edge_corners.texture_id, &corners.bytes);
+        let _ = adapter.draw_sprite_batch_no_present(self.edge_corners.texture_id, &corners.bytes);
 
         let mut border = SolidBatch::new(window_width, window_height);
         outline_rect(
@@ -725,7 +725,7 @@ impl WindowChrome {
             WINDOW_CHROME_BORDER_PX,
             Rgba8::new(0, 0, 0, 255),
         );
-        let _ = adapter.draw_rgb_triangles_no_present(&border.bytes);
+        let _ = adapter.draw_solid_batch_no_present(&border.bytes);
     }
 
     fn draw_close_button(&mut self, adapter: &mut Adapter, window_width: u32, window_height: u32) {
@@ -737,7 +737,7 @@ impl WindowChrome {
         };
         let mut batch = SpriteBatch::new(window_width, window_height);
         batch.image(rect.x, rect.y, rect.w, rect.h, Rgba8::WHITE);
-        let _ = adapter.draw_tex_triangles_no_present(button.texture_id, &batch.bytes);
+        let _ = adapter.draw_sprite_batch_no_present(button.texture_id, &batch.bytes);
 
         let mut close = SpriteBatch::new(window_width, window_height);
         close.image(
@@ -747,7 +747,7 @@ impl WindowChrome {
             WINDOW_CHROME_CLOSE_ICON_SIZE,
             Rgba8::WHITE,
         );
-        let _ = adapter.draw_tex_triangles_no_present(self.close_icon.texture_id, &close.bytes);
+        let _ = adapter.draw_sprite_batch_no_present(self.close_icon.texture_id, &close.bytes);
     }
 
     fn draw_cursor(
@@ -759,8 +759,7 @@ impl WindowChrome {
     ) {
         let mut cursor = SpriteBatch::new(window_width, window_height);
         cursor.image(mouse.x, mouse.y, 28.0, 28.0, Rgba8::WHITE);
-        let _ =
-            adapter.draw_tex_triangles_no_present(self.cursor_default.texture_id, &cursor.bytes);
+        let _ = adapter.draw_sprite_batch_no_present(self.cursor_default.texture_id, &cursor.bytes);
     }
 }
 
@@ -2955,7 +2954,7 @@ impl Game {
             panel_h,
             Rgba8::new(39, 91, 93, 215),
         );
-        let _ = adapter.draw_rgb_triangles_no_present(&solid.bytes);
+        let _ = adapter.draw_solid_batch_no_present(&solid.bytes);
 
         let _ = adapter.set_scissor(Some(ScissorRect {
             x: VIEW_X as u32,
@@ -3099,12 +3098,12 @@ impl Game {
             }
         }
 
-        let _ = adapter.draw_rgb_triangles_no_present(&water.bytes);
-        let _ = adapter.draw_tex_triangles_no_present(self.terrain.texture_id, &backgrounds.bytes);
+        let _ = adapter.draw_solid_batch_no_present(&water.bytes);
+        let _ = adapter.draw_sprite_batch_no_present(self.terrain.texture_id, &backgrounds.bytes);
         self.draw_water_states(adapter);
-        let _ = adapter
-            .draw_tex_triangles_no_present(self.terrain.texture_id, &under_foregrounds.bytes);
-        let _ = adapter.draw_tex_triangles_no_present(self.terrain.texture_id, &foregrounds.bytes);
+        let _ =
+            adapter.draw_sprite_batch_no_present(self.terrain.texture_id, &under_foregrounds.bytes);
+        let _ = adapter.draw_sprite_batch_no_present(self.terrain.texture_id, &foregrounds.bytes);
         self.draw_props(adapter);
         self.draw_prop_preview(adapter);
         self.draw_buildings(adapter);
@@ -3305,8 +3304,8 @@ impl Game {
         image_batches: &mut BTreeMap<u32, SpriteBatch>,
     ) {
         if !terrain_batch.bytes.is_empty() {
-            let _ = adapter
-                .draw_tex_triangles_no_present(self.terrain.texture_id, &terrain_batch.bytes);
+            let _ =
+                adapter.draw_sprite_batch_no_present(self.terrain.texture_id, &terrain_batch.bytes);
             terrain_batch.bytes.clear();
         }
         self.draw_image_batches(adapter, std::mem::take(image_batches));
@@ -3518,7 +3517,7 @@ impl Game {
     fn draw_image_batches(&self, adapter: &mut Adapter, batches: BTreeMap<u32, SpriteBatch>) {
         for (texture_id, batch) in batches {
             if !batch.bytes.is_empty() {
-                let _ = adapter.draw_tex_triangles_no_present(texture_id, &batch.bytes);
+                let _ = adapter.draw_sprite_batch_no_present(texture_id, &batch.bytes);
             }
         }
     }
@@ -3616,7 +3615,7 @@ impl Game {
             image.height as f32 * BUILDING_SCALE,
             tint,
         );
-        let _ = adapter.draw_tex_triangles_no_present(image.texture_id, &sprite.bytes);
+        let _ = adapter.draw_sprite_batch_no_present(image.texture_id, &sprite.bytes);
     }
 
     fn draw_fog(&self, adapter: &mut Adapter) {
@@ -3640,7 +3639,7 @@ impl Game {
             }
         }
 
-        let _ = adapter.draw_tex_triangles_no_present(self.fog.texture_id, &fog.bytes);
+        let _ = adapter.draw_sprite_batch_no_present(self.fog.texture_id, &fog.bytes);
     }
 
     fn draw_world_overlay(&self, adapter: &mut Adapter) {
@@ -3656,7 +3655,7 @@ impl Game {
                         let height = ((rect.3 - rect.1 + 1) as f32) * TILE_SIZE;
                         self.draw_selection_corners(adapter, x, y, width, height);
                     }
-                    let _ = adapter.draw_rgb_triangles_no_present(&overlay.bytes);
+                    let _ = adapter.draw_solid_batch_no_present(&overlay.bytes);
                     return;
                 }
 
@@ -3667,7 +3666,7 @@ impl Game {
                     Brush::Building(kind) => {
                         let Some((x2, y2)) = self.world_half_cell_at(self.mouse.x, self.mouse.y)
                         else {
-                            let _ = adapter.draw_rgb_triangles_no_present(&overlay.bytes);
+                            let _ = adapter.draw_solid_batch_no_present(&overlay.bytes);
                             return;
                         };
                         let anchor = self.building_anchor_half_cell(kind, x2, y2);
@@ -3685,7 +3684,7 @@ impl Game {
                     Brush::Prop(kind @ PropKind::Plant(_)) => {
                         let Some((x2, y2)) = self.world_half_cell_at(self.mouse.x, self.mouse.y)
                         else {
-                            let _ = adapter.draw_rgb_triangles_no_present(&overlay.bytes);
+                            let _ = adapter.draw_solid_batch_no_present(&overlay.bytes);
                             return;
                         };
                         (
@@ -3737,7 +3736,7 @@ impl Game {
             }
         }
 
-        let _ = adapter.draw_rgb_triangles_no_present(&overlay.bytes);
+        let _ = adapter.draw_solid_batch_no_present(&overlay.bytes);
     }
 
     fn draw_selection_corners(&self, adapter: &mut Adapter, x: f32, y: f32, w: f32, h: f32) {
@@ -3783,8 +3782,7 @@ impl Game {
             Rgba8::WHITE,
         );
 
-        let _ =
-            adapter.draw_tex_triangles_no_present(self.cursor_select.texture_id, &corners.bytes);
+        let _ = adapter.draw_sprite_batch_no_present(self.cursor_select.texture_id, &corners.bytes);
     }
 
     fn draw_palette(&self, adapter: &mut Adapter) {
@@ -3805,13 +3803,13 @@ impl Game {
             PALETTE_TILE,
             Rgba8::new(19, 45, 48, 255),
         );
-        let _ = adapter.draw_rgb_triangles_no_present(&solid.bytes);
+        let _ = adapter.draw_solid_batch_no_present(&solid.bytes);
 
         let mut delete_tool = SpriteBatch::new(self.window_width, self.window_height);
         let (delete_x, delete_y) = self.palette_slot_rect(2);
         delete_tool.image(delete_x, delete_y, PALETTE_TILE, PALETTE_TILE, Rgba8::WHITE);
-        let _ = adapter
-            .draw_tex_triangles_no_present(self.cursor_delete.texture_id, &delete_tool.bytes);
+        let _ =
+            adapter.draw_sprite_batch_no_present(self.cursor_delete.texture_id, &delete_tool.bytes);
 
         let mut sprites = SpriteBatch::new(self.window_width, self.window_height);
         let (grass_x, grass_y) = self.palette_slot_rect(1);
@@ -3845,19 +3843,19 @@ impl Game {
                 Rgba8::WHITE,
             );
         }
-        let _ = adapter.draw_tex_triangles_no_present(self.terrain.texture_id, &sprites.bytes);
+        let _ = adapter.draw_sprite_batch_no_present(self.terrain.texture_id, &sprites.bytes);
 
         let mut fog_tool = SpriteBatch::new(self.window_width, self.window_height);
         let (fog_x, fog_y) = self.palette_slot_rect(5);
         fog_tool.image(fog_x, fog_y, PALETTE_TILE, PALETTE_TILE, Rgba8::WHITE);
         let _ =
-            adapter.draw_tex_triangles_no_present(self.cursor_select.texture_id, &fog_tool.bytes);
+            adapter.draw_sprite_batch_no_present(self.cursor_select.texture_id, &fog_tool.bytes);
 
         for (index, image) in self.buildings.iter().enumerate() {
             let (x, y) = self.palette_slot_rect(index + 6);
             let mut building = SpriteBatch::new(self.window_width, self.window_height);
             building.image(x, y, PALETTE_TILE, PALETTE_TILE, Rgba8::WHITE);
-            let _ = adapter.draw_tex_triangles_no_present(image.texture_id, &building.bytes);
+            let _ = adapter.draw_sprite_batch_no_present(image.texture_id, &building.bytes);
         }
 
         let mut sprites = SpriteBatch::new(self.window_width, self.window_height);
@@ -3873,7 +3871,7 @@ impl Game {
                 Rgba8::WHITE,
             );
         }
-        let _ = adapter.draw_tex_triangles_no_present(self.terrain.texture_id, &sprites.bytes);
+        let _ = adapter.draw_sprite_batch_no_present(self.terrain.texture_id, &sprites.bytes);
 
         for (slot, kind) in PlantKind::ALL.into_iter().enumerate() {
             let (x, y) = self.palette_slot_rect(slot + 6 + BUILDING_COUNT + PILLAR_TILES.len());
@@ -3893,7 +3891,7 @@ impl Game {
                 h,
                 Rgba8::WHITE,
             );
-            let _ = adapter.draw_tex_triangles_no_present(image.texture_id, &plant.bytes);
+            let _ = adapter.draw_sprite_batch_no_present(image.texture_id, &plant.bytes);
         }
 
         if let Some(image) = self.gold_props[GoldKind::Nugget.index()].first_frame() {
@@ -3912,7 +3910,7 @@ impl Game {
                 h,
                 Rgba8::WHITE,
             );
-            let _ = adapter.draw_tex_triangles_no_present(image.texture_id, &gold.bytes);
+            let _ = adapter.draw_sprite_batch_no_present(image.texture_id, &gold.bytes);
         }
 
         {
@@ -3933,7 +3931,7 @@ impl Game {
                 h,
                 Rgba8::WHITE,
             );
-            let _ = adapter.draw_tex_triangles_no_present(image.texture_id, &rock.bytes);
+            let _ = adapter.draw_sprite_batch_no_present(image.texture_id, &rock.bytes);
         }
 
         let mut sprites = SpriteBatch::new(self.window_width, self.window_height);
@@ -3956,7 +3954,7 @@ impl Game {
                 Rgba8::WHITE,
             );
         }
-        let _ = adapter.draw_tex_triangles_no_present(self.terrain.texture_id, &sprites.bytes);
+        let _ = adapter.draw_sprite_batch_no_present(self.terrain.texture_id, &sprites.bytes);
 
         let mut overlay = SolidBatch::new(self.window_width, self.window_height);
         for slot in 0..self.palette_len() {
@@ -3972,7 +3970,7 @@ impl Game {
             outline_rect(&mut overlay, x, y, PALETTE_TILE, PALETTE_TILE, 2.0, color);
         }
 
-        let _ = adapter.draw_rgb_triangles_no_present(&overlay.bytes);
+        let _ = adapter.draw_solid_batch_no_present(&overlay.bytes);
     }
 
     fn palette_len(&self) -> usize {
@@ -4065,7 +4063,7 @@ impl Game {
             28.0
         };
         cursor.image(self.mouse.x, self.mouse.y, size, size, Rgba8::WHITE);
-        let _ = adapter.draw_tex_triangles_no_present(image.texture_id, &cursor.bytes);
+        let _ = adapter.draw_sprite_batch_no_present(image.texture_id, &cursor.bytes);
     }
 
     fn draw_ui(&self, adapter: &mut Adapter) {
@@ -4086,7 +4084,7 @@ impl Game {
             Rgba8::new(245, 255, 252, 255),
         );
 
-        let _ = adapter.draw_rgb_triangles_no_present(&ui.solid_bytes);
+        let _ = adapter.draw_solid_batch_no_present(&ui.solid_bytes);
     }
 
     fn cursor_image(&self) -> &ImageAsset {
@@ -6081,12 +6079,12 @@ impl IdleWorldViewer {
             );
         }
 
-        let _ = adapter.draw_rgb_triangles_no_present(&water.bytes);
-        let _ = adapter.draw_tex_triangles_no_present(self.terrain.texture_id, &backgrounds.bytes);
+        let _ = adapter.draw_solid_batch_no_present(&water.bytes);
+        let _ = adapter.draw_sprite_batch_no_present(self.terrain.texture_id, &backgrounds.bytes);
         self.draw_idle_water_states(adapter, elapsed_ms);
-        let _ = adapter
-            .draw_tex_triangles_no_present(self.terrain.texture_id, &under_foregrounds.bytes);
-        let _ = adapter.draw_tex_triangles_no_present(self.terrain.texture_id, &foregrounds.bytes);
+        let _ =
+            adapter.draw_sprite_batch_no_present(self.terrain.texture_id, &under_foregrounds.bytes);
+        let _ = adapter.draw_sprite_batch_no_present(self.terrain.texture_id, &foregrounds.bytes);
         let _ = adapter.set_texture_effect(TextureEffect::Plain);
     }
 
@@ -6142,11 +6140,11 @@ impl IdleWorldViewer {
         }
 
         let _ = adapter.set_texture_effect(TextureEffect::World);
-        let _ = adapter.draw_rgb_triangles_no_present(&water.bytes);
-        let _ = adapter.draw_tex_triangles_no_present(self.terrain.texture_id, &backgrounds.bytes);
-        let _ = adapter
-            .draw_tex_triangles_no_present(self.terrain.texture_id, &under_foregrounds.bytes);
-        let _ = adapter.draw_tex_triangles_no_present(self.terrain.texture_id, &foregrounds.bytes);
+        let _ = adapter.draw_solid_batch_no_present(&water.bytes);
+        let _ = adapter.draw_sprite_batch_no_present(self.terrain.texture_id, &backgrounds.bytes);
+        let _ =
+            adapter.draw_sprite_batch_no_present(self.terrain.texture_id, &under_foregrounds.bytes);
+        let _ = adapter.draw_sprite_batch_no_present(self.terrain.texture_id, &foregrounds.bytes);
         let _ = adapter.set_texture_effect(TextureEffect::Plain);
     }
 
@@ -6185,7 +6183,7 @@ impl IdleWorldViewer {
         }
 
         let _ = adapter.set_texture_effect(TextureEffect::Plain);
-        let _ = adapter.draw_tex_triangles_no_present(self.retile_cover.texture_id, &batch.bytes);
+        let _ = adapter.draw_sprite_batch_no_present(self.retile_cover.texture_id, &batch.bytes);
     }
 
     fn draw_idle_retile_particles(&self, adapter: &mut Adapter) {
@@ -6249,8 +6247,7 @@ impl IdleWorldViewer {
                     angle_rad,
                     Rgba8::WHITE,
                 );
-                let _ =
-                    adapter.draw_tex_triangles_no_present(self.terrain.texture_id, &batch.bytes);
+                let _ = adapter.draw_sprite_batch_no_present(self.terrain.texture_id, &batch.bytes);
                 any_drawn = true;
             }
         }
@@ -6476,8 +6473,7 @@ impl IdleWorldViewer {
             }
         }
 
-        let _ =
-            adapter.draw_tex_triangles_no_present(self.terrain.texture_id, &terrain_batch.bytes);
+        let _ = adapter.draw_sprite_batch_no_present(self.terrain.texture_id, &terrain_batch.bytes);
         self.draw_idle_image_batches(adapter, image_batches);
     }
 
@@ -6682,7 +6678,7 @@ impl IdleWorldViewer {
                 Rgba8::new(255, 86, 86, 230)
             },
         );
-        let _ = adapter.draw_rgb_triangles_no_present(&overlay.bytes);
+        let _ = adapter.draw_solid_batch_no_present(&overlay.bytes);
 
         let mut sprite = SpriteBatch::new(self.window_width, self.window_height);
         sprite.image(
@@ -6692,7 +6688,7 @@ impl IdleWorldViewer {
             image.height as f32 * BUILDING_SCALE,
             tint,
         );
-        let _ = adapter.draw_tex_triangles_no_present(image.texture_id, &sprite.bytes);
+        let _ = adapter.draw_sprite_batch_no_present(image.texture_id, &sprite.bytes);
 
         if let Some(icon_index) = Self::idle_house_icon_index(kind) {
             let icon = &self.house_icon_inlays[icon_index];
@@ -6710,7 +6706,7 @@ impl IdleWorldViewer {
                 icon_size,
                 Rgba8::new(255, 255, 255, 191),
             );
-            let _ = adapter.draw_tex_triangles_no_present(icon.texture_id, &inlay.bytes);
+            let _ = adapter.draw_sprite_batch_no_present(icon.texture_id, &inlay.bytes);
         }
     }
 
@@ -6735,7 +6731,7 @@ impl IdleWorldViewer {
             }
         }
 
-        let _ = adapter.draw_tex_triangles_no_present(self.fog.texture_id, &fog.bytes);
+        let _ = adapter.draw_sprite_batch_no_present(self.fog.texture_id, &fog.bytes);
     }
 
     fn push_idle_bottom_aligned_image_half(
@@ -6803,7 +6799,7 @@ impl IdleWorldViewer {
     fn draw_idle_image_batches(&self, adapter: &mut Adapter, batches: BTreeMap<u32, SpriteBatch>) {
         for (texture_id, batch) in batches {
             if !batch.bytes.is_empty() {
-                let _ = adapter.draw_tex_triangles_no_present(texture_id, &batch.bytes);
+                let _ = adapter.draw_sprite_batch_no_present(texture_id, &batch.bytes);
             }
         }
     }
@@ -6853,7 +6849,7 @@ impl IdleWorldViewer {
         }
 
         for (texture_id, batch) in batches {
-            let _ = adapter.draw_tex_triangles_no_present(texture_id, &batch.bytes);
+            let _ = adapter.draw_sprite_batch_no_present(texture_id, &batch.bytes);
         }
     }
 
@@ -6904,8 +6900,7 @@ impl IdleWorldViewer {
             Rgba8::WHITE,
         );
 
-        let _ =
-            adapter.draw_tex_triangles_no_present(self.cursor_select.texture_id, &corners.bytes);
+        let _ = adapter.draw_sprite_batch_no_present(self.cursor_select.texture_id, &corners.bytes);
     }
 
     fn draw_selected_unit_ui(&self, adapter: &mut Adapter, elapsed_ms: u32) {
@@ -6931,8 +6926,8 @@ impl IdleWorldViewer {
             return;
         }
         let _ = adapter
-            .draw_tex_triangles_no_present(ts_ui::SMALL_BAR_BASE_TEXTURE, &health_bars.base_bytes);
-        let _ = adapter.draw_rgb_triangles_no_present(&health_bars.fill_solid_bytes);
+            .draw_sprite_batch_no_present(ts_ui::SMALL_BAR_BASE_TEXTURE, &health_bars.base_bytes);
+        let _ = adapter.draw_solid_batch_no_present(&health_bars.fill_solid_bytes);
     }
 
     fn selected_units_include_pawn(&self) -> bool {
@@ -6980,7 +6975,7 @@ impl IdleWorldViewer {
             64.0,
             Rgba8::new(255, 255, 255, 245),
         );
-        let _ = adapter.draw_tex_triangles_no_present(ts_ui::BANNER_TEXTURE, &banner.texture_bytes);
+        let _ = adapter.draw_sprite_batch_no_present(ts_ui::BANNER_TEXTURE, &banner.texture_bytes);
 
         let platform = slot * 0.7;
         let platform_inset = (slot - platform) * 0.5;
@@ -6998,7 +6993,7 @@ impl IdleWorldViewer {
             }
             cursor_units += span;
         }
-        let _ = adapter.draw_tex_triangles_no_present(self.banner_slots.texture_id, &slots.bytes);
+        let _ = adapter.draw_sprite_batch_no_present(self.banner_slots.texture_id, &slots.bytes);
 
         let mut cursor_units = 0_usize;
         for (index, image) in self.building_previews.iter().enumerate() {
@@ -7017,7 +7012,7 @@ impl IdleWorldViewer {
 
             let mut preview = SpriteBatch::new(self.window_width, self.window_height);
             preview.image(x, y, w, h, Rgba8::WHITE);
-            let _ = adapter.draw_tex_triangles_no_present(image.texture_id, &preview.bytes);
+            let _ = adapter.draw_sprite_batch_no_present(image.texture_id, &preview.bytes);
             cursor_units += span;
         }
     }
@@ -7030,14 +7025,14 @@ impl IdleWorldViewer {
         let rect = self.hotkey_menu_rect();
         let mut menu = ts_ui::UiBatch::new(self.window_width, self.window_height);
         menu.hotkey_menu_page("HOTKEYS", rect.x, rect.y, &IDLE_HOTKEY_ENTRIES);
-        let _ = adapter.draw_tex_triangles_no_present(ts_ui::BANNER_TEXTURE, &menu.texture_bytes);
+        let _ = adapter.draw_sprite_batch_no_present(ts_ui::BANNER_TEXTURE, &menu.texture_bytes);
         let _ =
-            adapter.draw_tex_triangles_no_present(ts_ui::BIG_RIBBONS_TEXTURE, &menu.ribbon_bytes);
-        let _ = adapter.draw_tex_triangles_no_present(
+            adapter.draw_sprite_batch_no_present(ts_ui::BIG_RIBBONS_TEXTURE, &menu.ribbon_bytes);
+        let _ = adapter.draw_sprite_batch_no_present(
             ts_ui::SMALL_BLUE_SQUARE_BUTTON_TEXTURE,
             &menu.button_bytes,
         );
-        let _ = adapter.draw_rgb_triangles_no_present(&menu.solid_bytes);
+        let _ = adapter.draw_solid_batch_no_present(&menu.solid_bytes);
     }
 
     fn draw_right_click_indicators(&self, adapter: &mut Adapter) {
@@ -7066,7 +7061,7 @@ impl IdleWorldViewer {
         }
 
         let _ = adapter
-            .draw_tex_triangles_no_present(self.right_click_indicator.texture_id, &batch.bytes);
+            .draw_sprite_batch_no_present(self.right_click_indicator.texture_id, &batch.bytes);
     }
 
     fn draw_cursor(&self, adapter: &mut Adapter, elapsed_ms: u32) {
@@ -7092,14 +7087,14 @@ impl IdleWorldViewer {
                 mirror_x,
                 Rgba8::WHITE,
             );
-            let _ = adapter.draw_tex_triangles_no_present(image.texture_id, &cursor.bytes);
+            let _ = adapter.draw_sprite_batch_no_present(image.texture_id, &cursor.bytes);
             return;
         }
 
         let image = self.cursor_image(elapsed_ms);
         let mut cursor = SpriteBatch::new(self.window_width, self.window_height);
         cursor.image(self.mouse.x, self.mouse.y, 28.0, 28.0, Rgba8::WHITE);
-        let _ = adapter.draw_tex_triangles_no_present(image.texture_id, &cursor.bytes);
+        let _ = adapter.draw_sprite_batch_no_present(image.texture_id, &cursor.bytes);
     }
 
     fn idle_cursor_tool_image(&self, tool: IdleCursorTool) -> &ImageAsset {
@@ -8600,8 +8595,8 @@ impl FrameProducer for UnitWalkViewer {
         );
         title.text("UNIT WALK", 44.0, 35.0, 2.0, Rgba8::new(32, 56, 60, 255));
         let _ =
-            adapter.draw_tex_triangles_no_present(ts_ui::BIG_RIBBONS_TEXTURE, &title.ribbon_bytes);
-        let _ = adapter.draw_rgb_triangles_no_present(&title.solid_bytes);
+            adapter.draw_sprite_batch_no_present(ts_ui::BIG_RIBBONS_TEXTURE, &title.ribbon_bytes);
+        let _ = adapter.draw_solid_batch_no_present(&title.solid_bytes);
 
         let elapsed_ms = self.started_at.elapsed().as_millis() as u32;
         let flip_x = unit_viewer_flip_x(elapsed_ms);
@@ -8648,7 +8643,7 @@ impl FrameProducer for UnitWalkViewer {
                 uv,
                 Rgba8::WHITE,
             );
-            let _ = adapter.draw_tex_triangles_no_present(frame.texture_id, &image.bytes);
+            let _ = adapter.draw_sprite_batch_no_present(frame.texture_id, &image.bytes);
 
             let bar_w = cell_w.min(42.0).max(1.0).floor();
             let bar_h = (bar_w / 5.0).clamp(2.0, 8.0).floor().max(1.0);
@@ -8677,9 +8672,9 @@ impl FrameProducer for UnitWalkViewer {
         }
 
         let _ = adapter
-            .draw_tex_triangles_no_present(ts_ui::SMALL_BAR_BASE_TEXTURE, &health_bars.base_bytes);
-        let _ = adapter.draw_rgb_triangles_no_present(&health_bars.fill_solid_bytes);
-        let _ = adapter.draw_rgb_triangles_no_present(&labels.solid_bytes);
+            .draw_sprite_batch_no_present(ts_ui::SMALL_BAR_BASE_TEXTURE, &health_bars.base_bytes);
+        let _ = adapter.draw_solid_batch_no_present(&health_bars.fill_solid_bytes);
+        let _ = adapter.draw_solid_batch_no_present(&labels.solid_bytes);
 
         let mut caption = ts_ui::UiBatch::new(self.window_width, self.window_height);
         caption.banner_panel(
@@ -8697,9 +8692,8 @@ impl FrameProducer for UnitWalkViewer {
             2.0,
             Rgba8::new(32, 56, 60, 255),
         );
-        let _ =
-            adapter.draw_tex_triangles_no_present(ts_ui::BANNER_TEXTURE, &caption.texture_bytes);
-        let _ = adapter.draw_rgb_triangles_no_present(&caption.solid_bytes);
+        let _ = adapter.draw_sprite_batch_no_present(ts_ui::BANNER_TEXTURE, &caption.texture_bytes);
+        let _ = adapter.draw_solid_batch_no_present(&caption.solid_bytes);
 
         self.chrome
             .draw(adapter, self.window_width, self.window_height);
@@ -8856,7 +8850,7 @@ impl FrameProducer for IdleWorldViewer {
                 uv,
                 Rgba8::WHITE,
             );
-            let _ = adapter.draw_tex_triangles_no_present(draw.texture_id, &image.bytes);
+            let _ = adapter.draw_sprite_batch_no_present(draw.texture_id, &image.bytes);
         }
 
         self.draw_clouds(adapter);
@@ -8966,7 +8960,7 @@ impl FrameProducer for IconViewer {
                 h.max(1.0),
                 Rgba8::WHITE,
             );
-            let _ = adapter.draw_tex_triangles_no_present(icon.image.texture_id, &sprite.bytes);
+            let _ = adapter.draw_sprite_batch_no_present(icon.image.texture_id, &sprite.bytes);
 
             let mut label = ts_ui::UiBatch::new(self.window_width, self.window_height);
             let label_w = ui_text_width(&icon.label.to_uppercase(), 1.0);
@@ -8977,7 +8971,7 @@ impl FrameProducer for IconViewer {
                 1.0,
                 Rgba8::new(220, 238, 232, 255),
             );
-            let _ = adapter.draw_rgb_triangles_no_present(&label.solid_bytes);
+            let _ = adapter.draw_solid_batch_no_present(&label.solid_bytes);
         }
 
         self.chrome
@@ -9150,8 +9144,8 @@ impl FrameProducer for EventEditor {
             );
         }
 
-        let _ = adapter.draw_rgb_triangles_no_present(&solid.bytes);
-        let _ = adapter.draw_rgb_triangles_no_present(&text.solid_bytes);
+        let _ = adapter.draw_solid_batch_no_present(&solid.bytes);
+        let _ = adapter.draw_solid_batch_no_present(&text.solid_bytes);
         self.chrome
             .draw(adapter, self.window_width, self.window_height);
         self.chrome
@@ -10497,18 +10491,12 @@ impl TextureAtlas {
 }
 
 struct SpriteBatch {
-    window_width: u32,
-    window_height: u32,
     bytes: Vec<u8>,
 }
 
 impl SpriteBatch {
-    fn new(window_width: u32, window_height: u32) -> Self {
-        Self {
-            window_width,
-            window_height,
-            bytes: Vec::new(),
-        }
+    fn new(_window_width: u32, _window_height: u32) -> Self {
+        Self { bytes: Vec::new() }
     }
 
     fn sprite(
@@ -10522,51 +10510,15 @@ impl SpriteBatch {
         color: Rgba8,
     ) {
         let [u0, v0, u1, v1] = atlas.uv(tile);
-        let (x0, y0) = self.to_clip(x, y);
-        let (x1, y1) = self.to_clip(x + w, y + h);
-
-        self.vertex(TexVertex {
-            x: x0,
-            y: y0,
-            u: u0,
-            v: v0,
+        self.quad(
+            [
+                (x, y, u0, v0),
+                (x + w, y, u1, v0),
+                (x + w, y + h, u1, v1),
+                (x, y + h, u0, v1),
+            ],
             color,
-        });
-        self.vertex(TexVertex {
-            x: x1,
-            y: y0,
-            u: u1,
-            v: v0,
-            color,
-        });
-        self.vertex(TexVertex {
-            x: x1,
-            y: y1,
-            u: u1,
-            v: v1,
-            color,
-        });
-        self.vertex(TexVertex {
-            x: x0,
-            y: y0,
-            u: u0,
-            v: v0,
-            color,
-        });
-        self.vertex(TexVertex {
-            x: x1,
-            y: y1,
-            u: u1,
-            v: v1,
-            color,
-        });
-        self.vertex(TexVertex {
-            x: x0,
-            y: y1,
-            u: u0,
-            v: v1,
-            color,
-        });
+        );
     }
 
     fn image(&mut self, x: f32, y: f32, w: f32, h: f32, color: Rgba8) {
@@ -10614,51 +10566,15 @@ impl SpriteBatch {
 
     fn image_uv(&mut self, x: f32, y: f32, w: f32, h: f32, uv: [f32; 4], color: Rgba8) {
         let [u0, v0, u1, v1] = uv;
-        let (x0, y0) = self.to_clip(x, y);
-        let (x1, y1) = self.to_clip(x + w, y + h);
-
-        self.vertex(TexVertex {
-            x: x0,
-            y: y0,
-            u: u0,
-            v: v0,
+        self.quad(
+            [
+                (x, y, u0, v0),
+                (x + w, y, u1, v0),
+                (x + w, y + h, u1, v1),
+                (x, y + h, u0, v1),
+            ],
             color,
-        });
-        self.vertex(TexVertex {
-            x: x1,
-            y: y0,
-            u: u1,
-            v: v0,
-            color,
-        });
-        self.vertex(TexVertex {
-            x: x1,
-            y: y1,
-            u: u1,
-            v: v1,
-            color,
-        });
-        self.vertex(TexVertex {
-            x: x0,
-            y: y0,
-            u: u0,
-            v: v0,
-            color,
-        });
-        self.vertex(TexVertex {
-            x: x1,
-            y: y1,
-            u: u1,
-            v: v1,
-            color,
-        });
-        self.vertex(TexVertex {
-            x: x0,
-            y: y1,
-            u: u0,
-            v: v1,
-            color,
-        });
+        );
     }
 
     fn image_uv_rotated_around(
@@ -10682,20 +10598,16 @@ impl SpriteBatch {
             (x + w, y + h, u1, v1),
             (x, y + h, u0, v1),
         ];
-        let vertices = corners.map(|(x, y, u, v)| {
+        let corners = corners.map(|(x, y, u, v)| {
             let dx = x - origin_x;
             let dy = y - origin_y;
             let (x, y) = (
                 origin_x + dx * cos - dy * sin,
                 origin_y + dx * sin + dy * cos,
             );
-            let (x, y) = self.to_clip(x, y);
-            TexVertex { x, y, u, v, color }
+            (x, y, u, v)
         });
-
-        for index in [0, 1, 2, 0, 2, 3] {
-            self.vertex(vertices[index]);
-        }
+        self.quad(corners, color);
     }
 
     fn image_rotated_mirror_x(
@@ -10719,76 +10631,41 @@ impl SpriteBatch {
             (w * 0.5, h * 0.5, u1, 1.0),
             (-w * 0.5, h * 0.5, u0, 1.0),
         ];
-        let vertices = corners.map(|(dx, dy, u, v)| {
+        let corners = corners.map(|(dx, dy, u, v)| {
             let (x, y) = (cx + dx * cos - dy * sin, cy + dx * sin + dy * cos);
-            let (x, y) = self.to_clip(x, y);
-            TexVertex { x, y, u, v, color }
+            (x, y, u, v)
         });
+        self.quad(corners, color);
+    }
 
-        for index in [0, 1, 2, 0, 2, 3] {
-            self.vertex(vertices[index]);
+    fn quad(&mut self, corners: [(f32, f32, f32, f32); 4], color: Rgba8) {
+        for (x, y, u, v) in corners {
+            push_f32(&mut self.bytes, x);
+            push_f32(&mut self.bytes, y);
+            push_f32(&mut self.bytes, u);
+            push_f32(&mut self.bytes, v);
         }
-    }
-
-    fn vertex(&mut self, vertex: TexVertex) {
-        push_f32(&mut self.bytes, vertex.x);
-        push_f32(&mut self.bytes, vertex.y);
-        push_f32(&mut self.bytes, vertex.u);
-        push_f32(&mut self.bytes, vertex.v);
-        self.bytes.extend_from_slice(&[
-            vertex.color.r,
-            vertex.color.g,
-            vertex.color.b,
-            vertex.color.a,
-        ]);
-    }
-
-    fn to_clip(&self, x: f32, y: f32) -> (f32, f32) {
-        (
-            (x / self.window_width as f32) * 2.0 - 1.0,
-            1.0 - (y / self.window_height as f32) * 2.0,
-        )
+        self.bytes
+            .extend_from_slice(&[color.r, color.g, color.b, color.a]);
     }
 }
 
 struct SolidBatch {
-    window_width: u32,
-    window_height: u32,
     bytes: Vec<u8>,
 }
 
 impl SolidBatch {
-    fn new(window_width: u32, window_height: u32) -> Self {
-        Self {
-            window_width,
-            window_height,
-            bytes: Vec::new(),
-        }
+    fn new(_window_width: u32, _window_height: u32) -> Self {
+        Self { bytes: Vec::new() }
     }
 
     fn rect(&mut self, x: f32, y: f32, w: f32, h: f32, color: Rgba8) {
-        let (x0, y0) = self.to_clip(x, y);
-        let (x1, y1) = self.to_clip(x + w, y + h);
-        self.vertex(x0, y0, color);
-        self.vertex(x1, y0, color);
-        self.vertex(x1, y1, color);
-        self.vertex(x0, y0, color);
-        self.vertex(x1, y1, color);
-        self.vertex(x0, y1, color);
-    }
-
-    fn vertex(&mut self, x: f32, y: f32, color: Rgba8) {
         push_f32(&mut self.bytes, x);
         push_f32(&mut self.bytes, y);
+        push_f32(&mut self.bytes, w);
+        push_f32(&mut self.bytes, h);
         self.bytes
             .extend_from_slice(&[color.r, color.g, color.b, color.a]);
-    }
-
-    fn to_clip(&self, x: f32, y: f32) -> (f32, f32) {
-        (
-            (x / self.window_width as f32) * 2.0 - 1.0,
-            1.0 - (y / self.window_height as f32) * 2.0,
-        )
     }
 }
 
