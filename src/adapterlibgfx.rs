@@ -155,9 +155,9 @@ pub mod api {
 
     use super::command::{Frame, FrameCommand, ScissorRect, TextureEffect};
     use super::records::{
-        decode_solid_rects, usable_solid_len, usable_sprite_len, Rgba8, SPRITE_QUAD_SIZE,
+        Rgba8, SPRITE_QUAD_SIZE, decode_solid_rects, usable_solid_len, usable_sprite_len,
     };
-    use super::ui3_frame::{gfx, FrameId};
+    use super::ui3_frame::{FrameId, gfx};
 
     const PRESERVE_RENDER_TARGET_CLEAR_RGB: u32 = u32::MAX;
     const SUPPRESS_REPAINT_WINDOW_ID: u32 = u32::MAX;
@@ -661,8 +661,8 @@ pub mod api {
 #[cfg(feature = "trueos-blueprint")]
 pub mod window {
     use std::sync::{
-        atomic::{AtomicBool, Ordering},
         Arc,
+        atomic::{AtomicBool, Ordering},
     };
 
     use super::api::{Adapter, AdapterConfig};

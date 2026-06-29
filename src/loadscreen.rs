@@ -736,7 +736,8 @@ impl LoadScreen {
     }
 
     fn update_background_backdrop(&mut self) {
-        let backdrop_index = self.started_at.elapsed().as_secs() / LOADSCREEN_BACKGROUND_RESEED_SECS;
+        let backdrop_index =
+            self.started_at.elapsed().as_secs() / LOADSCREEN_BACKGROUND_RESEED_SECS;
         if backdrop_index == self.background_backdrop_index {
             return;
         }
@@ -844,7 +845,14 @@ impl LoadScreen {
             adapter.draw_sprite_batch_no_present(self.terrain.texture_id, &under_foregrounds.bytes);
         let _ = adapter.draw_sprite_batch_no_present(self.terrain.texture_id, &foregrounds.bytes);
 
-        self.draw_background_world_assets(adapter, view_origin, start_col, start_row, end_col, end_row);
+        self.draw_background_world_assets(
+            adapter,
+            view_origin,
+            start_col,
+            start_row,
+            end_col,
+            end_row,
+        );
         self.draw_background_clouds(adapter, view_origin);
         let _ = adapter.set_texture_effect(TextureEffect::Plain);
     }

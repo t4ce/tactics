@@ -161,18 +161,19 @@ fn read_aseprite_file(path: &Path) -> Result<AsepriteFile, AsepriteLoadError> {
 #[cfg(feature = "trueos-blueprint")]
 fn blueprint_asset_path_candidates(path: &str) -> Vec<String> {
     let mut candidates = Vec::new();
-    push_unique_path_candidate(&mut candidates, path.to_string());
+    let relative_path = path.trim_start_matches('/');
 
     if let Ok(root) = trueos::env::var("TRUEOS_APP_FS_ROOT") {
         let root = root.trim_matches('/');
         if !root.is_empty() {
-            push_unique_path_candidate(&mut candidates, format!("{root}/{path}"));
-            push_unique_path_candidate(&mut candidates, format!("/{root}/{path}"));
+            push_unique_path_candidate(&mut candidates, format!("{root}/{relative_path}"));
+            push_unique_path_candidate(&mut candidates, format!("/{root}/{relative_path}"));
         }
     }
 
-    push_unique_path_candidate(&mut candidates, format!("apps/tactics/{path}"));
-    push_unique_path_candidate(&mut candidates, format!("/apps/tactics/{path}"));
+    push_unique_path_candidate(&mut candidates, format!("apps/tactics/{relative_path}"));
+    push_unique_path_candidate(&mut candidates, format!("/apps/tactics/{relative_path}"));
+    push_unique_path_candidate(&mut candidates, path.to_string());
     candidates
 }
 

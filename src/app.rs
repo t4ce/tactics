@@ -444,6 +444,11 @@ pub(crate) fn run() {
         run_headless_intel_frame();
         return;
     }
+    #[cfg(not(feature = "trueos-blueprint"))]
+    if std::env::args().any(|arg| arg == "--headless-loadscreen-frame") {
+        run_headless_loadscreen_frame();
+        return;
+    }
     ui_cli::tactics_window();
 }
 
@@ -472,7 +477,51 @@ fn run_headless_intel_frame() {
     renderer
         .render_frame(adapter.textures(), &frame)
         .expect("failed to render tactics frame on Intel");
+    eprintln!(
+        "tactics headless summary: {:?}",
+        renderer.last_surface_summary()
+    );
     eprintln!("tactics headless Intel frame submitted");
+}
+
+#[cfg(not(feature = "trueos-blueprint"))]
+fn run_headless_loadscreen_frame() {
+    let mut adapter = Adapter::new(AdapterConfig {
+        width: WINDOW_WIDTH,
+        height: WINDOW_HEIGHT,
+    });
+    let request = || Arc::new(AtomicBool::new(false));
+    let mut loadscreen = loadscreen::LoadScreen::new(
+        request(),
+        request(),
+        request(),
+        request(),
+        request(),
+        request(),
+        request(),
+    );
+    loadscreen.resize(WINDOW_WIDTH, WINDOW_HEIGHT);
+    loadscreen.build_frame(&mut adapter);
+    let frame = adapter
+        .take_last_frame()
+        .expect("headless loadscreen frame producer did not end a frame");
+    eprintln!(
+        "loadscreen headless frame: seq={} commands={} textures={} size={}x{}",
+        frame.seq,
+        frame.commands.len(),
+        adapter.textures().iter().count(),
+        frame.logical_width,
+        frame.logical_height
+    );
+    let mut renderer = WgpuHeadlessRenderer::new_intel(WINDOW_WIDTH, WINDOW_HEIGHT)
+        .expect("failed to create Intel headless renderer");
+    renderer
+        .render_frame(adapter.textures(), &frame)
+        .expect("failed to render loadscreen frame on Intel");
+    eprintln!(
+        "loadscreen headless summary: {:?}",
+        renderer.last_surface_summary()
+    );
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -10279,18 +10328,19 @@ fn write_world_json(path: &Path, json: &str) -> Result<(), String> {
 #[cfg(feature = "trueos-blueprint")]
 fn blueprint_asset_path_candidates(path: &str) -> Vec<String> {
     let mut candidates = Vec::new();
-    push_unique_path_candidate(&mut candidates, path.to_string());
+    let relative_path = path.trim_start_matches('/');
 
     if let Ok(root) = trueos::env::var("TRUEOS_APP_FS_ROOT") {
         let root = root.trim_matches('/');
         if !root.is_empty() {
-            push_unique_path_candidate(&mut candidates, format!("{root}/{path}"));
-            push_unique_path_candidate(&mut candidates, format!("/{root}/{path}"));
+            push_unique_path_candidate(&mut candidates, format!("{root}/{relative_path}"));
+            push_unique_path_candidate(&mut candidates, format!("/{root}/{relative_path}"));
         }
     }
 
-    push_unique_path_candidate(&mut candidates, format!("apps/tactics/{path}"));
-    push_unique_path_candidate(&mut candidates, format!("/apps/tactics/{path}"));
+    push_unique_path_candidate(&mut candidates, format!("apps/tactics/{relative_path}"));
+    push_unique_path_candidate(&mut candidates, format!("/apps/tactics/{relative_path}"));
+    push_unique_path_candidate(&mut candidates, path.to_string());
     candidates
 }
 

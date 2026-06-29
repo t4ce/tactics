@@ -122,6 +122,21 @@ pub struct WgpuWindowApp<P> {
     last_error: Option<RenderError>,
 }
 
+fn new_event_loop() -> Result<EventLoop<()>, winit::error::EventLoopError> {
+    let mut builder = EventLoop::builder();
+    #[cfg(target_os = "linux")]
+    {
+        let force_wayland = std::env::var("TACTICS_WINIT_BACKEND")
+            .map(|value| value.eq_ignore_ascii_case("wayland"))
+            .unwrap_or(false);
+        if !force_wayland {
+            use winit::platform::x11::EventLoopBuilderExtX11;
+            builder.with_x11();
+        }
+    }
+    builder.build()
+}
+
 pub struct WgpuTwoWindowApp<P, S> {
     primary_title: String,
     secondary_title: String,
@@ -332,7 +347,7 @@ impl<P> WgpuWindowApp<P> {
     where
         P: FrameProducer + 'static,
     {
-        let event_loop = EventLoop::new()?;
+        let event_loop = new_event_loop()?;
         event_loop.run_app(&mut self)
     }
 }
@@ -368,7 +383,7 @@ impl<P, S> WgpuTwoWindowApp<P, S> {
         P: FrameProducer + 'static,
         S: FrameProducer + 'static,
     {
-        let event_loop = EventLoop::new()?;
+        let event_loop = new_event_loop()?;
         event_loop.run_app(&mut self)
     }
 }
@@ -414,7 +429,7 @@ impl<P, S, T> WgpuThreeWindowApp<P, S, T> {
         S: FrameProducer + 'static,
         T: FrameProducer + 'static,
     {
-        let event_loop = EventLoop::new()?;
+        let event_loop = new_event_loop()?;
         event_loop.run_app(&mut self)
     }
 }
@@ -470,7 +485,7 @@ impl<P, S, T, U> WgpuFourWindowApp<P, S, T, U> {
         T: FrameProducer + 'static,
         U: FrameProducer + 'static,
     {
-        let event_loop = EventLoop::new()?;
+        let event_loop = new_event_loop()?;
         event_loop.run_app(&mut self)
     }
 }
@@ -536,7 +551,7 @@ impl<P, S, T, U, V> WgpuFiveWindowApp<P, S, T, U, V> {
         U: FrameProducer + 'static,
         V: FrameProducer + 'static,
     {
-        let event_loop = EventLoop::new()?;
+        let event_loop = new_event_loop()?;
         event_loop.run_app(&mut self)
     }
 }
@@ -612,7 +627,7 @@ impl<P, S, T, U, V, W> WgpuSixWindowApp<P, S, T, U, V, W> {
         V: FrameProducer + 'static,
         W: FrameProducer + 'static,
     {
-        let event_loop = EventLoop::new()?;
+        let event_loop = new_event_loop()?;
         event_loop.run_app(&mut self)
     }
 }
@@ -740,7 +755,7 @@ impl<P, S, T, U, V, W, X> WgpuSevenWindowApp<P, S, T, U, V, W, X> {
         W: FrameProducer + 'static,
         X: FrameProducer + 'static,
     {
-        let event_loop = EventLoop::new()?;
+        let event_loop = new_event_loop()?;
         event_loop.run_app(&mut self)
     }
 }
@@ -770,6 +785,7 @@ impl<P: FrameProducer> ApplicationHandler for WgpuWindowApp<P> {
                 self.window = Some(window);
             }
             Err(err) => {
+                eprintln!("adapterlibgfx renderer startup error: {err:?}");
                 self.last_error = Some(err);
                 event_loop.exit();
             }
@@ -809,6 +825,7 @@ impl<P: FrameProducer> ApplicationHandler for WgpuWindowApp<P> {
                     (self.renderer.as_mut(), self.adapter.take_last_frame())
                 {
                     if let Err(err) = renderer.render_frame(self.adapter.textures(), &frame) {
+                        eprintln!("adapterlibgfx render error: {err:?}");
                         self.last_error = Some(err);
                     }
                 }
@@ -2030,7 +2047,13 @@ fn create_window_renderer(
     let window = event_loop.create_window(attrs).ok()?;
     let window = Arc::new(window);
     window.set_cursor_visible(cursor_visible);
-    let renderer = WgpuRenderer::new(window.clone()).ok()?;
+    let renderer = match WgpuRenderer::new(window.clone()) {
+        Ok(renderer) => renderer,
+        Err(err) => {
+            eprintln!("adapterlibgfx renderer startup error: {err:?}");
+            return None;
+        }
+    };
     Some((window, renderer))
 }
 
@@ -2066,6 +2089,7 @@ fn handle_window_event<P: FrameProducer>(
             producer.build_frame(adapter);
             if let (Some(renderer), Some(frame)) = (renderer.as_mut(), adapter.take_last_frame()) {
                 if let Err(err) = renderer.render_frame(adapter.textures(), &frame) {
+                    eprintln!("adapterlibgfx render error: {err:?}");
                     *last_error = Some(err);
                 }
             }

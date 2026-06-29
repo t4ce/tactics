@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
@@ -97,25 +98,26 @@ enum SourceImage<'a> {
     Surface(&'a CpuSurface),
 }
 
+#[derive(Clone, Copy)]
+struct SourceView<'a> {
+    width: u32,
+    height: u32,
+    rgba: &'a [u8],
+}
+
 impl SourceImage<'_> {
-    fn width(&self) -> u32 {
+    fn view(&self) -> SourceView<'_> {
         match self {
-            Self::Texture(image) => image.width,
-            Self::Surface(surface) => surface.width,
-        }
-    }
-
-    fn height(&self) -> u32 {
-        match self {
-            Self::Texture(image) => image.height,
-            Self::Surface(surface) => surface.height,
-        }
-    }
-
-    fn rgba(&self) -> &[u8] {
-        match self {
-            Self::Texture(image) => &image.rgba,
-            Self::Surface(surface) => &surface.rgba,
+            Self::Texture(image) => SourceView {
+                width: image.width,
+                height: image.height,
+                rgba: &image.rgba,
+            },
+            Self::Surface(surface) => SourceView {
+                width: surface.width,
+                height: surface.height,
+                rgba: &surface.rgba,
+            },
         }
     }
 }
@@ -127,6 +129,7 @@ pub struct WgpuRenderer {
     queue: wgpu::Queue,
     config: wgpu::SurfaceConfiguration,
     surfaces: HashMap<u32, CpuSurface>,
+    upload_scratch: Vec<u8>,
 }
 
 pub struct WgpuHeadlessRenderer {
@@ -139,16 +142,22 @@ pub struct WgpuHeadlessRenderer {
 
 impl WgpuRenderer {
     pub fn new(window: Arc<Window>) -> Result<Self, RenderError> {
-        let instance = wgpu::Instance::default();
+        let backends = desktop_backends();
+        let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
+            backends,
+            ..Default::default()
+        });
         let surface = instance
             .create_surface(window.clone())
             .map_err(|error| RenderError::Surface(error.to_string()))?;
+        let power_preference = desktop_power_preference();
         let adapter = block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
-            power_preference: wgpu::PowerPreference::HighPerformance,
+            power_preference,
             compatible_surface: Some(&surface),
             force_fallback_adapter: false,
         }))
         .ok_or(RenderError::AdapterUnavailable)?;
+        let info = adapter.get_info();
         let (device, queue) = block_on(adapter.request_device(
             &wgpu::DeviceDescriptor {
                 label: Some("adapterlibgfx-copy-device"),
@@ -165,7 +174,14 @@ impl WgpuRenderer {
             .formats
             .iter()
             .copied()
-            .find(|format| format.is_srgb())
+            .find(|format| *format == wgpu::TextureFormat::Rgba8UnormSrgb)
+            .or_else(|| {
+                caps.formats
+                    .iter()
+                    .copied()
+                    .find(|format| *format == wgpu::TextureFormat::Rgba8Unorm)
+            })
+            .or_else(|| caps.formats.iter().copied().find(|format| format.is_srgb()))
             .or_else(|| caps.formats.first().copied())
             .ok_or(RenderError::AdapterUnavailable)?;
         let present_mode = caps
@@ -176,11 +192,13 @@ impl WgpuRenderer {
             .unwrap_or(wgpu::PresentMode::AutoVsync);
         let alpha_mode = caps
             .alpha_modes
-            .first()
+            .iter()
             .copied()
+            .find(|mode| *mode == wgpu::CompositeAlphaMode::Opaque)
+            .or_else(|| caps.alpha_modes.first().copied())
             .unwrap_or(wgpu::CompositeAlphaMode::Opaque);
         let config = wgpu::SurfaceConfiguration {
-            usage: wgpu::TextureUsages::COPY_DST,
+            usage: wgpu::TextureUsages::COPY_DST | wgpu::TextureUsages::RENDER_ATTACHMENT,
             format,
             width: size.width.max(1),
             height: size.height.max(1),
@@ -190,6 +208,21 @@ impl WgpuRenderer {
             desired_maximum_frame_latency: 2,
         };
         surface.configure(&device, &config);
+        eprintln!(
+            "adapterlibgfx desktop selected: backend={:?} requested_backends={:?} vendor=0x{:04X} device=0x{:04X} name={} power={:?} surface_format={:?} present_mode={:?} alpha_mode={:?} usage={:?} size={}x{}",
+            info.backend,
+            backends,
+            info.vendor,
+            info.device,
+            info.name,
+            power_preference,
+            config.format,
+            config.present_mode,
+            config.alpha_mode,
+            config.usage,
+            config.width,
+            config.height
+        );
         Ok(Self {
             window,
             surface,
@@ -197,6 +230,7 @@ impl WgpuRenderer {
             queue,
             config,
             surfaces: HashMap::new(),
+            upload_scratch: Vec::new(),
         })
     }
 
@@ -238,6 +272,7 @@ impl WgpuRenderer {
             Err(error) => return Err(RenderError::Surface(error.to_string())),
         };
         let present = scale_surface(&logical, self.config.width, self.config.height);
+        let upload = surface_upload_bytes(&present, self.config.format, &mut self.upload_scratch);
         self.queue.write_texture(
             wgpu::TexelCopyTextureInfo {
                 texture: &surface_frame.texture,
@@ -245,7 +280,7 @@ impl WgpuRenderer {
                 origin: wgpu::Origin3d::ZERO,
                 aspect: wgpu::TextureAspect::All,
             },
-            &present.rgba,
+            upload.as_ref(),
             wgpu::TexelCopyBufferLayout {
                 offset: 0,
                 bytes_per_row: Some(present.width * 4),
@@ -257,8 +292,49 @@ impl WgpuRenderer {
                 depth_or_array_layers: 1,
             },
         );
+        self.queue.submit(std::iter::empty());
         surface_frame.present();
         Ok(())
+    }
+}
+
+fn desktop_backends() -> wgpu::Backends {
+    if let Some(backends) = wgpu::Backends::from_env() {
+        return backends;
+    }
+    if let Ok(value) = std::env::var("TACTICS_WGPU_BACKEND") {
+        return wgpu::Backends::from_comma_list(&value);
+    }
+
+    wgpu::Backends::PRIMARY
+}
+
+fn desktop_power_preference() -> wgpu::PowerPreference {
+    if let Ok(value) = std::env::var("TACTICS_WGPU_POWER") {
+        match value.to_ascii_lowercase().as_str() {
+            "low" => return wgpu::PowerPreference::LowPower,
+            "none" => return wgpu::PowerPreference::None,
+            _ => return wgpu::PowerPreference::HighPerformance,
+        }
+    }
+    wgpu::PowerPreference::from_env().unwrap_or(wgpu::PowerPreference::HighPerformance)
+}
+
+fn surface_upload_bytes<'a>(
+    surface: &'a CpuSurface,
+    format: wgpu::TextureFormat,
+    scratch: &'a mut Vec<u8>,
+) -> Cow<'a, [u8]> {
+    match format {
+        wgpu::TextureFormat::Bgra8Unorm | wgpu::TextureFormat::Bgra8UnormSrgb => {
+            scratch.clear();
+            scratch.extend_from_slice(&surface.rgba);
+            for px in scratch.chunks_exact_mut(4) {
+                px.swap(0, 2);
+            }
+            Cow::Borrowed(scratch.as_slice())
+        }
+        _ => Cow::Borrowed(&surface.rgba),
     }
 }
 
@@ -302,6 +378,20 @@ impl WgpuHeadlessRenderer {
         let _ = paint_frame(textures, frame, &mut self.surfaces, self.width, self.height)?;
         Ok(())
     }
+
+    pub fn last_surface_summary(&self) -> Option<SurfaceSummary> {
+        surface_summary(self.surfaces.get(&0)?)
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+pub struct SurfaceSummary {
+    pub width: u32,
+    pub height: u32,
+    pub non_black_pixels: u32,
+    pub non_white_pixels: u32,
+    pub alpha_pixels: u32,
+    pub first_non_black: Option<(u32, u32, [u8; 4])>,
 }
 
 fn paint_frame(
@@ -360,19 +450,20 @@ fn paint_frame(
             } => {
                 ensure_target_surface_for_state(surfaces, textures, state.target, width, height)?;
                 clear_target_once(surfaces, state.target, &mut cleared, frame);
-                let Some(source) = source_image(textures, surfaces, *tex_id) else {
+                let source_surface = surfaces.get(tex_id).cloned();
+                let source = if let Some(surface) = source_surface.as_ref() {
+                    SourceImage::Surface(surface)
+                } else if let Some(image) = textures.image(*tex_id) {
+                    SourceImage::Texture(image)
+                } else {
                     return Err(RenderError::MissingTexture(*tex_id));
                 };
-                let source_copy = CpuSurface {
-                    width: source.width(),
-                    height: source.height(),
-                    rgba: source.rgba().to_vec(),
-                };
+                let source = source.view();
                 let target = surfaces
                     .get_mut(&state.target)
                     .ok_or(RenderError::InvalidTarget(state.target))?;
                 for quad in quads {
-                    paint_sprite_quad(target, &source_copy, *quad, *sample_kind, state);
+                    paint_sprite_quad(target, source, *quad, *sample_kind, state);
                 }
             }
         }
@@ -442,17 +533,6 @@ fn clear_target_once(
     }
 }
 
-fn source_image<'a>(
-    textures: &'a TextureRegistry,
-    surfaces: &'a HashMap<u32, CpuSurface>,
-    tex_id: u32,
-) -> Option<SourceImage<'a>> {
-    surfaces
-        .get(&tex_id)
-        .map(SourceImage::Surface)
-        .or_else(|| textures.image(tex_id).map(SourceImage::Texture))
-}
-
 fn paint_solid_rect(target: &mut CpuSurface, rect: SolidRect, state: PaintState) {
     if !(rect.w > 0.0 && rect.h > 0.0) {
         return;
@@ -468,7 +548,7 @@ fn paint_solid_rect(target: &mut CpuSurface, rect: SolidRect, state: PaintState)
 
 fn paint_sprite_quad(
     target: &mut CpuSurface,
-    source: &CpuSurface,
+    source: SourceView<'_>,
     quad: SpriteQuad,
     sample_kind: TextureSampleKind,
     state: PaintState,
@@ -563,7 +643,7 @@ fn clipped_bounds(
 }
 
 fn sample(
-    source: &CpuSurface,
+    source: SourceView<'_>,
     u: f32,
     v: f32,
     sampler: SamplerState,
@@ -584,7 +664,7 @@ fn sample(
     }
 }
 
-fn sample_blur(source: &CpuSurface, u: f32, v: f32, sampler: SamplerState) -> Rgba8 {
+fn sample_blur(source: SourceView<'_>, u: f32, v: f32, sampler: SamplerState) -> Rgba8 {
     let du = 1.0 / source.width.max(1) as f32;
     let dv = 1.0 / source.height.max(1) as f32;
     let mut sum = [0u32; 4];
@@ -605,7 +685,7 @@ fn sample_blur(source: &CpuSurface, u: f32, v: f32, sampler: SamplerState) -> Rg
     )
 }
 
-fn sample_nearest(source: &CpuSurface, u: f32, v: f32, sampler: SamplerState) -> Rgba8 {
+fn sample_nearest(source: SourceView<'_>, u: f32, v: f32, sampler: SamplerState) -> Rgba8 {
     let (u, v) = wrap_uv(u, v, sampler);
     let x = (u * source.width as f32)
         .floor()
@@ -616,7 +696,7 @@ fn sample_nearest(source: &CpuSurface, u: f32, v: f32, sampler: SamplerState) ->
     get_pixel(source, x, y)
 }
 
-fn sample_linear(source: &CpuSurface, u: f32, v: f32, sampler: SamplerState) -> Rgba8 {
+fn sample_linear(source: SourceView<'_>, u: f32, v: f32, sampler: SamplerState) -> Rgba8 {
     let (u, v) = wrap_uv(u, v, sampler);
     let fx = (u * source.width as f32 - 0.5).clamp(0.0, source.width.saturating_sub(1) as f32);
     let fy = (v * source.height as f32 - 0.5).clamp(0.0, source.height.saturating_sub(1) as f32);
@@ -713,7 +793,7 @@ fn blend_channel(src: u8, dst: u8, src_factor: u8, dst_factor: u8) -> u8 {
     (value / 255).min(255) as u8
 }
 
-fn get_pixel(source: &CpuSurface, x: u32, y: u32) -> Rgba8 {
+fn get_pixel(source: SourceView<'_>, x: u32, y: u32) -> Rgba8 {
     let off = ((y * source.width + x) * 4) as usize;
     Rgba8::new(
         source.rgba[off],
@@ -740,6 +820,35 @@ fn scale_surface(source: &CpuSurface, width: u32, height: u32) -> CpuSurface {
         }
     }
     out
+}
+
+fn surface_summary(surface: &CpuSurface) -> Option<SurfaceSummary> {
+    if surface.rgba.is_empty() {
+        return None;
+    }
+    let mut summary = SurfaceSummary {
+        width: surface.width,
+        height: surface.height,
+        ..SurfaceSummary::default()
+    };
+    for (idx, px) in surface.rgba.chunks_exact(4).enumerate() {
+        let rgba = [px[0], px[1], px[2], px[3]];
+        if rgba[0] != 0 || rgba[1] != 0 || rgba[2] != 0 {
+            summary.non_black_pixels = summary.non_black_pixels.saturating_add(1);
+            if summary.first_non_black.is_none() {
+                let x = (idx as u32) % surface.width.max(1);
+                let y = (idx as u32) / surface.width.max(1);
+                summary.first_non_black = Some((x, y, rgba));
+            }
+        }
+        if rgba[0] != 255 || rgba[1] != 255 || rgba[2] != 255 {
+            summary.non_white_pixels = summary.non_white_pixels.saturating_add(1);
+        }
+        if rgba[3] != 0 {
+            summary.alpha_pixels = summary.alpha_pixels.saturating_add(1);
+        }
+    }
+    Some(summary)
 }
 
 fn lerp2(a: f32, b: f32, c: f32, d: f32, s: f32, t: f32) -> f32 {

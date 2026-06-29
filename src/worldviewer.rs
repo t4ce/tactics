@@ -720,8 +720,12 @@ impl WorldViewer {
     }
 
     fn set_tile_scissor(&self, adapter: &mut Adapter, col: usize, row: usize) -> bool {
-        let left = (col as f32 * TILE_SIZE - self.view_origin.x).floor().max(0.0);
-        let top = (row as f32 * TILE_SIZE - self.view_origin.y).floor().max(0.0);
+        let left = (col as f32 * TILE_SIZE - self.view_origin.x)
+            .floor()
+            .max(0.0);
+        let top = (row as f32 * TILE_SIZE - self.view_origin.y)
+            .floor()
+            .max(0.0);
         let right = (col as f32 * TILE_SIZE - self.view_origin.x + TILE_SIZE)
             .ceil()
             .min(self.window_width as f32);
